@@ -3,6 +3,9 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
 const MAX_TOOL_NAME_LENGTH = 64;
+const MAX_HISTORY_TOOL_OUTPUT_CHARS = 64 * 1024;
+const MAX_IMAGE_ATTACHMENTS = 12;
+const MAX_ATTACHMENT_BASE64_CHARS = 16 * 1024 * 1024;
 const DEFAULT_REASONING_EFFORT = "low";
 const SUPPORTED_REASONING_EFFORTS = new Set([
   "none",
@@ -12,6 +15,12 @@ const SUPPORTED_REASONING_EFFORTS = new Set([
   "xhigh",
   "max",
 ]);
+
+export const bridgeContextDefaults = Object.freeze({
+  historyToolOutputChars: MAX_HISTORY_TOOL_OUTPUT_CHARS,
+  imageAttachments: MAX_IMAGE_ATTACHMENTS,
+  attachmentBase64Chars: MAX_ATTACHMENT_BASE64_CHARS,
+});
 
 function shortHash(value) {
   return createHash("sha256").update(value).digest("hex").slice(0, 10);
@@ -140,7 +149,32 @@ export function extractToolDeclarations(body) {
   };
 }
 
-function stringifyContentPiece(piece, attachments) {
+function attachDataImage(imageUrl, attachments, contextStats) {
+  const match = /^data:([^;,]+);base64,(.+)$/s.exec(imageUrl);
+  if (!match) return null;
+
+  const dataChars = match[2].length;
+  const overCount = attachments.length >= MAX_IMAGE_ATTACHMENTS;
+  const overBytes = contextStats.attachmentBase64Chars + dataChars
+    > MAX_ATTACHMENT_BASE64_CHARS;
+  if (overCount || overBytes) {
+    contextStats.omittedImageAttachments += 1;
+    return "[Image omitted by the bridge context guard.]";
+  }
+
+  const displayName = `codex-image-${attachments.length + 1}`;
+  attachments.push({
+    type: "blob",
+    mimeType: match[1],
+    data: match[2],
+    displayName,
+  });
+  contextStats.imageAttachments += 1;
+  contextStats.attachmentBase64Chars += dataChars;
+  return `[Image attached as ${displayName}]`;
+}
+
+function stringifyContentPiece(piece, attachments, contextStats) {
   if (typeof piece === "string") return piece;
   if (!piece || typeof piece !== "object") return String(piece ?? "");
 
@@ -152,16 +186,8 @@ function stringifyContentPiece(piece, attachments) {
   if (piece.type === "input_image") {
     const imageUrl = piece.image_url;
     if (typeof imageUrl === "string") {
-      const match = /^data:([^;,]+);base64,(.+)$/s.exec(imageUrl);
-      if (match) {
-        attachments.push({
-          type: "blob",
-          mimeType: match[1],
-          data: match[2],
-          displayName: `codex-image-${attachments.length + 1}`,
-        });
-        return `[Image attached as codex-image-${attachments.length}]`;
-      }
+      const attached = attachDataImage(imageUrl, attachments, contextStats);
+      if (attached) return attached;
       return `[Image URL: ${imageUrl}]`;
     }
     return `[Image reference: ${piece.file_id ?? "unknown"}]`;
@@ -174,36 +200,51 @@ function stringifyContentPiece(piece, attachments) {
   return JSON.stringify(piece);
 }
 
-function stringifyMessageContent(content, attachments) {
+function stringifyMessageContent(content, attachments, contextStats) {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return stringifyContentPiece(content, attachments);
+  if (!Array.isArray(content)) {
+    return stringifyContentPiece(content, attachments, contextStats);
+  }
   return content
-    .map((piece) => stringifyContentPiece(piece, attachments))
+    .map((piece) => stringifyContentPiece(piece, attachments, contextStats))
     .filter(Boolean)
     .join("\n");
 }
 
-function stringifyInstructions(instructions, attachments) {
+function stringifyInstructions(instructions, attachments, contextStats) {
   if (typeof instructions === "string") return instructions;
   if (!Array.isArray(instructions)) return "";
   return instructions
     .map((item) => {
       if (item?.type === "message") {
-        return stringifyMessageContent(item.content, attachments);
+        return stringifyMessageContent(item.content, attachments, contextStats);
       }
-      return stringifyContentPiece(item, attachments);
+      return stringifyContentPiece(item, attachments, contextStats);
     })
     .filter(Boolean)
     .join("\n");
 }
 
-function historyEntry(item, attachments) {
+function compactHistoryToolOutput(text, contextStats) {
+  if (text.length <= MAX_HISTORY_TOOL_OUTPUT_CHARS) return text;
+
+  const omitted = text.length - MAX_HISTORY_TOOL_OUTPUT_CHARS;
+  const marker = `\n...[bridge omitted ${omitted} chars from oversized historical tool output]...\n`;
+  const available = Math.max(0, MAX_HISTORY_TOOL_OUTPUT_CHARS - marker.length);
+  const headChars = Math.ceil(available * 0.75);
+  const tailChars = available - headChars;
+  contextStats.truncatedToolOutputs += 1;
+  contextStats.omittedToolOutputChars += omitted;
+  return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`;
+}
+
+function historyEntry(item, attachments, contextStats) {
   if (!item || typeof item !== "object") return null;
 
   if (item.type === "message") {
     return {
       role: item.role ?? "unknown",
-      content: stringifyMessageContent(item.content, attachments),
+      content: stringifyMessageContent(item.content, attachments, contextStats),
     };
   }
 
@@ -234,7 +275,10 @@ function historyEntry(item, attachments) {
       role: "tool",
       tool_type: item.type,
       call_id: item.call_id,
-      output: item.output,
+      output: compactHistoryToolOutput(
+        contentOutputToText(item.output, attachments, contextStats),
+        contextStats,
+      ),
       success: item.success,
     };
   }
@@ -262,15 +306,28 @@ function decodeBasicXml(value) {
 
 export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()) {
   const attachments = [];
+  const contextStats = {
+    imageAttachments: 0,
+    omittedImageAttachments: 0,
+    attachmentBase64Chars: 0,
+    truncatedToolOutputs: 0,
+    omittedToolOutputChars: 0,
+    promptChars: 0,
+    systemChars: 0,
+  };
   const developerInstructions = [];
   const transcript = [];
 
-  const rootInstructions = stringifyInstructions(body?.instructions, attachments);
+  const rootInstructions = stringifyInstructions(
+    body?.instructions,
+    attachments,
+    contextStats,
+  );
   if (rootInstructions) developerInstructions.push(rootInstructions);
 
   for (const item of Array.isArray(body?.input) ? body.input : []) {
     if (item?.type === "additional_tools") continue;
-    const entry = historyEntry(item, attachments);
+    const entry = historyEntry(item, attachments, contextStats);
     if (!entry) continue;
     if (["developer", "system"].includes(entry.role)) {
       developerInstructions.push(entry.content);
@@ -313,13 +370,41 @@ export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()
     JSON.stringify(transcript),
     "Continue the conversation as the assistant. Do not reproduce the JSON wrapper or role labels.",
   ].join("\n\n");
+  contextStats.promptChars = prompt.length;
+  contextStats.systemChars = systemContent.length;
 
   return {
     systemContent,
     prompt,
     attachments,
+    contextStats,
     workingDirectory,
   };
+}
+
+export function assertSerializedContextWithinLimit(
+  sessionInput,
+  sdkTools,
+  maxSerializedTextChars,
+) {
+  const measurement = {
+    promptChars: String(sessionInput?.prompt ?? "").length,
+    systemChars: String(sessionInput?.systemContent ?? "").length,
+    toolDefinitionChars: JSON.stringify(Array.isArray(sdkTools) ? sdkTools : []).length,
+    serializedTextChars: 0,
+    maxSerializedTextChars,
+  };
+  measurement.serializedTextChars = measurement.promptChars
+    + measurement.systemChars
+    + measurement.toolDefinitionChars;
+
+  if (measurement.serializedTextChars > maxSerializedTextChars) {
+    throw new Error(
+      `Bridge context guard rejected ${measurement.serializedTextChars} serialized text characters; limit is ${maxSerializedTextChars}. `
+      + "Start a fresh Codex task or remove unusually large text/tool history.",
+    );
+  }
+  return measurement;
 }
 
 export function normalizeReasoningEffort(value) {
@@ -354,14 +439,19 @@ export function extractToolOutputs(body) {
   return outputs;
 }
 
-function contentOutputToText(output) {
+function contentOutputToText(output, attachments = null, contextStats = null) {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return JSON.stringify(output ?? null);
   return output.map((piece) => {
     if (typeof piece === "string") return piece;
     if (!piece || typeof piece !== "object") return String(piece ?? "");
     if (["input_text", "output_text"].includes(piece.type)) return String(piece.text ?? "");
-    if (piece.type === "input_image") return "[Tool returned an image to the outer harness.]";
+    if (piece.type === "input_image") {
+      if (attachments && contextStats) {
+        return stringifyContentPiece(piece, attachments, contextStats);
+      }
+      return "[Tool returned an image to the outer harness.]";
+    }
     if (piece.type === "input_file") return "[Tool returned a file to the outer harness.]";
     return JSON.stringify(piece);
   }).join("\n");
@@ -447,6 +537,30 @@ export function makeResponseObject({ responseId, model, output, usage }) {
     output,
     usage: normalizedUsage,
   };
+}
+
+export function makeFailedResponseObject({ responseId, model, code, message }) {
+  return {
+    id: responseId,
+    object: "response",
+    created_at: Math.floor(Date.now() / 1000),
+    status: "failed",
+    error: {
+      code: String(code ?? "server_error"),
+      message: String(message ?? "The bridge could not complete the response."),
+    },
+    incomplete_details: null,
+    model,
+    output: [],
+    usage: null,
+  };
+}
+
+export function classifyResponseFailureCode(message) {
+  return /prompt token count|context.*(?:limit|large)|too many tokens/i
+    .test(String(message ?? ""))
+    ? "invalid_prompt"
+    : "server_error";
 }
 
 export function makeResponseId() {

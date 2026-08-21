@@ -60,6 +60,12 @@ function Write-GatewayEvent {
             'blank_completion.retry' {
                 Write-Host "$time  AUTO RETRY  attempt=$($event.attempt) id=$($event.responseId)" -ForegroundColor Yellow
             }
+            'context.compacted' {
+                Write-Host "$time  CONTEXT OK  images=$($event.imageAttachments) clippedTools=$($event.truncatedToolOutputs) id=$($event.responseId)" -ForegroundColor Yellow
+            }
+            'response.failed' {
+                Write-Host "$time  FAILED      $($event.code): $($event.message) id=$($event.responseId)" -ForegroundColor Red
+            }
             'exchange.error' {
                 Write-Host "$time  ERROR       $($event.code): $($event.message)" -ForegroundColor Red
             }

@@ -45,6 +45,9 @@ Protocol or product changes can require updates to the relay.
 - Streaming and non-streaming Responses output
 - Automatic recovery from empty Copilot completions with a bounded per-turn retry limit
 - Sliding activity timeout and SSE heartbeat for long-running tasks
+- Historical tool images travel as image attachments instead of base64 prompt text
+- Oversized historical text tool results are bounded with head and tail context preserved
+- Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
 - Local dashboard with sanitized request, replay, latency, and tool metadata
 - Visible Windows Terminal event stream
@@ -148,6 +151,12 @@ npm run probe:tools-relay -- --steps 4 --model gpt-5.6-sol
 The two live probes consume Copilot allowance. Unit and configuration tests do
 not make model calls. The tool-relay probe verifies a multi-turn tool chain and
 fails if the relay returns an empty final answer.
+
+The context guard keeps up to 12 historical image attachments (16 MiB of
+base64 data in total), limits each historical text tool result to 64 KiB, and
+rejects more than 1,000,000 serialized text characters before an upstream model
+retry loop. The dashboard and terminal report `CONTEXT OK` whenever image
+conversion or clipping is applied.
 
 ## Security model
 

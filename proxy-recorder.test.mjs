@@ -17,7 +17,17 @@ test("records bounded sanitized input, Copilot replay, and output data", () => {
       body: {
         model: "gpt-5.6-luna",
         headers: { Authorization: "Bearer do-not-store-this" },
-        input: [{ type: "message", role: "user", content: "ghp_1234567890SECRET" }],
+        input: [
+          { type: "message", role: "user", content: "ghp_1234567890SECRET" },
+          {
+            type: "custom_tool_call_output",
+            call_id: "call-image",
+            output: [{
+              type: "input_image",
+              image_url: `data:image/png;base64,${"A".repeat(10 * 1024)}`,
+            }],
+          },
+        ],
       },
     });
     recorder.replay(record, {
@@ -42,7 +52,9 @@ test("records bounded sanitized input, Copilot replay, and output data", () => {
     const persisted = fs.readFileSync(filePath, "utf8");
     assert.doesNotMatch(persisted, /do-not-store-this/);
     assert.doesNotMatch(persisted, /ghp_1234567890SECRET/);
+    assert.doesNotMatch(persisted, /A{100}/);
     assert.match(persisted, /REDACTED/);
+    assert.match(persisted, /data URL omitted: image\/png/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

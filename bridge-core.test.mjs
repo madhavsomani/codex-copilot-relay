@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertSerializedContextWithinLimit,
   buildSessionInput,
+  classifyResponseFailureCode,
   externalToolRequestToResponseItem,
   extractToolDeclarations,
   extractToolOutputs,
+  makeFailedResponseObject,
   normalizeReasoningEffort,
   normalizeToolOutput,
 } from "./bridge-core.mjs";
@@ -72,6 +75,63 @@ test("builds role-preserving session input", () => {
   assert.doesNotMatch(sessionInput.prompt, /Run orchestration code/);
 });
 
+test("moves historical tool images out of the text prompt", () => {
+  const imageData = Buffer.alloc(256 * 1024, 0x5a).toString("base64");
+  const body = {
+    input: [
+      {
+        type: "custom_tool_call_output",
+        call_id: "call-image",
+        output: [
+          { type: "input_text", text: "Frame inspected." },
+          {
+            type: "input_image",
+            image_url: `data:image/png;base64,${imageData}`,
+            detail: "original",
+          },
+        ],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Continue." }],
+      },
+    ],
+  };
+
+  const sessionInput = buildSessionInput(body, process.cwd());
+  assert.equal(sessionInput.attachments.length, 1);
+  assert.equal(sessionInput.attachments[0].mimeType, "image/png");
+  assert.doesNotMatch(sessionInput.prompt, /data:image\/png;base64/);
+  assert.match(sessionInput.prompt, /Image attached as codex-image-1/);
+  assert.equal(sessionInput.contextStats.imageAttachments, 1);
+  assert.equal(sessionInput.contextStats.omittedImageAttachments, 0);
+});
+
+test("bounds oversized historical text tool outputs", () => {
+  const body = {
+    input: [
+      {
+        type: "function_call_output",
+        call_id: "call-large-text",
+        output: `BEGIN-${"x".repeat(160 * 1024)}-END`,
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Continue." }],
+      },
+    ],
+  };
+
+  const sessionInput = buildSessionInput(body, process.cwd());
+  assert.ok(sessionInput.prompt.length < 70 * 1024);
+  assert.match(sessionInput.prompt, /BEGIN-/);
+  assert.match(sessionInput.prompt, /-END/);
+  assert.equal(sessionInput.contextStats.truncatedToolOutputs, 1);
+  assert.ok(sessionInput.contextStats.omittedToolOutputChars > 0);
+});
+
 test("maps custom and function requests back to Responses items", () => {
   const declarations = extractToolDeclarations(sampleBody);
   const custom = declarations.metadata.find((item) => item.kind === "custom");
@@ -116,4 +176,52 @@ test("normalizes reasoning efforts for Copilot", () => {
   assert.equal(normalizeReasoningEffort("minimal"), "none");
   assert.equal(normalizeReasoningEffort("xhigh"), "xhigh");
   assert.equal(normalizeReasoningEffort("unknown"), "low");
+});
+
+test("builds a terminal Responses failure object", () => {
+  const response = makeFailedResponseObject({
+    responseId: "resp-failed",
+    model: "gpt-5.6-sol",
+    code: "invalid_prompt",
+    message: "Context is too large.",
+  });
+
+  assert.equal(response.id, "resp-failed");
+  assert.equal(response.status, "failed");
+  assert.equal(response.error.code, "invalid_prompt");
+  assert.equal(response.error.message, "Context is too large.");
+  assert.deepEqual(response.output, []);
+});
+
+test("rejects serialized model context above the configured guard", () => {
+  const sessionInput = {
+    systemContent: "system",
+    prompt: "x".repeat(2_000),
+  };
+
+  assert.throws(
+    () => assertSerializedContextWithinLimit(sessionInput, [], 1_000),
+    /Bridge context guard rejected 2008 serialized text characters; limit is 1000/,
+  );
+
+  assert.deepEqual(
+    assertSerializedContextWithinLimit(sessionInput, [], 3_000),
+    {
+      promptChars: 2_000,
+      systemChars: 6,
+      toolDefinitionChars: 2,
+      serializedTextChars: 2_008,
+      maxSerializedTextChars: 3_000,
+    },
+  );
+});
+
+test("classifies context failures as invalid prompts", () => {
+  assert.equal(
+    classifyResponseFailureCode(
+      "Bridge context guard rejected 1100940 serialized text characters; limit is 1000000.",
+    ),
+    "invalid_prompt",
+  );
+  assert.equal(classifyResponseFailureCode("Socket closed unexpectedly."), "server_error");
 });

@@ -11,11 +11,15 @@ import {
 } from "./exchange-lifecycle.mjs";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
 import {
+  assertSerializedContextWithinLimit,
+  bridgeContextDefaults,
   buildSessionInput,
+  classifyResponseFailureCode,
   externalToolRequestToResponseItem,
   extractToolDeclarations,
   extractToolOutputs,
   makeAssistantMessageItem,
+  makeFailedResponseObject,
   makeResponseId,
   makeResponseObject,
   normalizeReasoningEffort,
@@ -51,6 +55,12 @@ const sseHeartbeatIntervalMs = environmentInteger(
   15_000,
   1_000,
   60_000,
+);
+const maxSerializedContextChars = environmentInteger(
+  "BRIDGE_MAX_SERIALIZED_CONTEXT_CHARS",
+  1_000_000,
+  256_000,
+  4_000_000,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
 const recorder = new ProxyRecorder({
@@ -188,17 +198,29 @@ class ResponseSink {
     this.closed = true;
     this.stopHeartbeat();
     const payload = errorPayload(error, code);
+    const responseErrorCode = classifyResponseFailureCode(payload.error.message);
+    const failedResponse = makeFailedResponseObject({
+      responseId: this.responseId,
+      model: this.model,
+      code: responseErrorCode,
+      message: payload.error.message,
+    });
     recorder.finish(this.record, {
       status: "failed",
       selectedModel: this.model,
       error: payload.error,
     });
+    log("response.failed", {
+      responseId: this.responseId,
+      model: this.model,
+      code: responseErrorCode,
+      message: payload.error.message,
+    });
     if (this.streaming) {
       writeSseEvent(this.response, {
-        type: "error",
-        code,
-        message: payload.error.message,
-        param: null,
+        type: "response.failed",
+        sequence_number: 1,
+        response: failedResponse,
       });
       this.response.end();
     } else {
@@ -458,6 +480,8 @@ class Exchange {
     this.done = true;
     this.deadline.stop();
     log("exchange.error", {
+      responseId: this.sink?.responseId ?? null,
+      model: this.model,
       code,
       message: error instanceof Error ? error.message : String(error),
     });
@@ -518,6 +542,14 @@ function resolveModel(requestedModel) {
 async function startExchange(body, sink) {
   const declarations = extractToolDeclarations(body);
   const sessionInput = buildSessionInput(body, fallbackWorkingDirectory);
+  Object.assign(
+    sessionInput.contextStats,
+    assertSerializedContextWithinLimit(
+      sessionInput,
+      declarations.sdkTools,
+      maxSerializedContextChars,
+    ),
+  );
   const reasoningEffort = normalizeReasoningEffort(body?.reasoning?.effort);
   const model = resolveModel(body?.model);
   sink.setModel(model);
@@ -568,9 +600,22 @@ async function startExchange(body, sink) {
     workingDirectory: sessionInput.workingDirectory,
     prompt: sessionInput.prompt,
     systemContent: sessionInput.systemContent,
-    attachments: sessionInput.attachments,
+    attachments: {
+      count: sessionInput.attachments.length,
+      base64Chars: sessionInput.contextStats.attachmentBase64Chars,
+      mimeTypes: [...new Set(sessionInput.attachments.map((item) => item.mimeType))],
+    },
+    contextStats: sessionInput.contextStats,
     toolCount: declarations.sdkTools.length,
   });
+  if (sessionInput.contextStats.imageAttachments > 0
+    || sessionInput.contextStats.omittedImageAttachments > 0
+    || sessionInput.contextStats.truncatedToolOutputs > 0) {
+    log("context.compacted", {
+      responseId: sink.responseId,
+      ...sessionInput.contextStats,
+    });
+  }
   log("request.started", {
     responseId: sink.responseId,
     model,
@@ -643,6 +688,8 @@ const server = http.createServer(async (request, response) => {
         exchangeTimeoutMs,
         exchangeTimeoutMode: "sliding",
         sseHeartbeatIntervalMs,
+        contextGuard: bridgeContextDefaults,
+        maxSerializedContextChars,
       },
       metering: "GitHub Copilot allowance applies",
     });

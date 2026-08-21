@@ -13,6 +13,11 @@ function clipString(value, maxChars) {
 }
 
 function scrubString(value, maxChars) {
+  const dataUrl = /^data:([^;,]+);base64,(.+)$/s.exec(value);
+  if (dataUrl) {
+    const mimeType = dataUrl[1].replace(/[^A-Za-z0-9.+/-]/g, "");
+    return `[data URL omitted: ${mimeType}; ${dataUrl[2].length} base64 chars]`;
+  }
   return clipString(value.replace(SECRET_VALUE, (match) => {
     if (/^Bearer\s/i.test(match)) return "Bearer [REDACTED]";
     return "[REDACTED]";
