@@ -6,6 +6,7 @@
   "scripts": {
     "probe": "node probe-sdk.mjs",
     "probe:tools": "node probe-tools.mjs",
+    "probe:tools-relay": "node probe-relay-tools.mjs",
     "probe:concurrency": "node probe-concurrency.mjs",
     "start": "node server.mjs",
     "test": "node --test"

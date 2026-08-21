@@ -3,6 +3,12 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import { DASHBOARD_HTML } from "./dashboard.mjs";
+import {
+  BlankCompletionGuard,
+  SlidingDeadline,
+  resolveAssistantContent,
+  startSseHeartbeat,
+} from "./exchange-lifecycle.mjs";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
 import {
   buildSessionInput,
@@ -21,9 +27,30 @@ const port = Number.parseInt(process.env.BRIDGE_PORT ?? "4141", 10);
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
 const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-5.6-sol";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
-const exchangeTimeoutMs = Number.parseInt(
-  process.env.BRIDGE_EXCHANGE_TIMEOUT_MS ?? String(15 * 60 * 1000),
-  10,
+
+function environmentInteger(name, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+const exchangeTimeoutMs = environmentInteger(
+  "BRIDGE_EXCHANGE_TIMEOUT_MS",
+  15 * 60 * 1000,
+  30_000,
+  24 * 60 * 60 * 1000,
+);
+const maxBlankCompletionRetries = environmentInteger(
+  "BRIDGE_MAX_BLANK_COMPLETION_RETRIES",
+  2,
+  0,
+  5,
+);
+const sseHeartbeatIntervalMs = environmentInteger(
+  "BRIDGE_SSE_HEARTBEAT_INTERVAL_MS",
+  15_000,
+  1_000,
+  60_000,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
 const recorder = new ProxyRecorder({
@@ -99,6 +126,7 @@ class ResponseSink {
     this.model = requestBody.model ?? "gpt-5.6-sol";
     this.streaming = requestBody.stream !== false;
     this.closed = false;
+    this.stopHeartbeat = () => {};
 
     if (this.streaming) {
       response.writeHead(200, {
@@ -109,6 +137,9 @@ class ResponseSink {
       writeSseEvent(response, {
         type: "response.created",
         response: { id: this.responseId },
+      });
+      this.stopHeartbeat = startSseHeartbeat(response, {
+        intervalMs: sseHeartbeatIntervalMs,
       });
     }
   }
@@ -121,6 +152,7 @@ class ResponseSink {
   complete(output, usage) {
     if (this.closed) return;
     this.closed = true;
+    this.stopHeartbeat();
     const responseObject = makeResponseObject({
       responseId: this.responseId,
       model: this.model,
@@ -154,6 +186,7 @@ class ResponseSink {
   fail(error, code = "bridge_error") {
     if (this.closed) return;
     this.closed = true;
+    this.stopHeartbeat();
     const payload = errorPayload(error, code);
     recorder.finish(this.record, {
       status: "failed",
@@ -184,12 +217,19 @@ class Exchange {
     this.record = null;
     this.pendingCalls = new Map();
     this.lastToolMessage = null;
+    this.streamedContent = "";
+    this.blankGuard = new BlankCompletionGuard({
+      maxRetries: maxBlankCompletionRetries,
+    });
     this.done = false;
     this.disconnecting = false;
-    this.timeout = setTimeout(() => {
-      this.fail(new Error("Copilot tool exchange timed out."), "exchange_timeout");
-    }, exchangeTimeoutMs);
-    this.timeout.unref?.();
+    this.deadline = new SlidingDeadline({
+      timeoutMs: exchangeTimeoutMs,
+      onTimeout: () => {
+        this.fail(new Error("Copilot tool exchange became inactive and timed out."), "exchange_timeout");
+      },
+    });
+    this.deadline.touch();
 
     session.on((event) => {
       Promise.resolve(this.handleEvent(event)).catch((error) => this.fail(error));
@@ -202,32 +242,65 @@ class Exchange {
     }
     this.sink = sink;
     this.record = sink.record;
+    this.deadline.touch();
+  }
+
+  beginTurn({ resetBlankRetries = true } = {}) {
+    this.streamedContent = "";
+    this.blankGuard.expectResponse({ resetRetries: resetBlankRetries });
+    this.deadline.touch();
   }
 
   async handleEvent(event) {
     if (this.done) return;
+    this.deadline.touch();
+
+    if (event.type === "assistant.turn_start") {
+      this.streamedContent = "";
+      return;
+    }
+
+    if (event.type === "assistant.message_delta") {
+      const delta = event.data?.deltaContent;
+      if (typeof delta === "string") this.streamedContent += delta;
+      return;
+    }
 
     if (event.type === "assistant.message") {
-      const toolRequests = Array.isArray(event.data?.toolRequests)
-        ? event.data.toolRequests
-        : [];
-      if (toolRequests.length > 0) {
-        this.lastToolMessage = event.data;
+      const decision = this.blankGuard.observeAssistantMessage(
+        event.data,
+        this.streamedContent,
+      );
+      this.streamedContent = "";
+
+      if (decision.kind === "tool_calls") {
+        this.lastToolMessage = {
+          ...event.data,
+          content: decision.content,
+          toolRequests: decision.toolRequests,
+        };
         this.maybeCompleteToolTurn();
+        return;
+      }
+
+      if (decision.kind === "await_idle") {
+        log("blank_completion.detected", {
+          responseId: this.sink?.responseId ?? null,
+          model: this.model,
+          retriesUsed: this.blankGuard.retryCount,
+        });
         return;
       }
 
       if (!this.sink) {
         throw new Error("Copilot produced a final answer without an active Codex request.");
       }
-      const text = event.data?.content ?? "";
-      const output = [makeAssistantMessageItem(text)];
-      const usage = this.usageFromEvent(event.data);
-      const responseId = this.sink.responseId;
-      this.sink.complete(output, usage);
-      log("response.completed", { responseId, kind: "message", model: this.model });
-      this.done = true;
-      await this.disconnect();
+      await this.completeFinalMessage(decision.content, event.data);
+      return;
+    }
+
+    if (event.type === "session.idle") {
+      await this.handleSessionIdle(event.data);
       return;
     }
 
@@ -263,6 +336,59 @@ class Exchange {
     }
   }
 
+  async completeFinalMessage(text, eventData = {}) {
+    if (!this.sink || this.sink.closed) return;
+    const output = [makeAssistantMessageItem(text)];
+    const usage = this.usageFromEvent(eventData);
+    const responseId = this.sink.responseId;
+    this.sink.complete(output, usage);
+    log("response.completed", { responseId, kind: "message", model: this.model });
+    this.done = true;
+    await this.disconnect();
+  }
+
+  async handleSessionIdle() {
+    if (!this.sink || this.sink.closed) {
+      this.blankGuard.clearPending();
+      this.streamedContent = "";
+      return;
+    }
+
+    const streamedFallback = resolveAssistantContent({}, this.streamedContent);
+    if (streamedFallback) {
+      this.streamedContent = "";
+      await this.completeFinalMessage(streamedFallback);
+      return;
+    }
+
+    const decision = this.blankGuard.onSessionIdle();
+    if (decision.kind === "ignore") return;
+    if (decision.kind === "fail") {
+      this.fail(
+        new Error("GitHub Copilot returned an empty final answer after recovery retries."),
+        decision.code,
+      );
+      return;
+    }
+
+    recorder.replay(this.record, {
+      phase: "blank_completion_retry",
+      model: this.model,
+      attempt: decision.attempt,
+    });
+    log("blank_completion.retry", {
+      responseId: this.sink.responseId,
+      model: this.model,
+      attempt: decision.attempt,
+    });
+    this.beginTurn({ resetBlankRetries: false });
+    try {
+      await this.session.send({ prompt: decision.prompt });
+    } catch (error) {
+      this.fail(error, "blank_completion_retry_failed");
+    }
+  }
+
   usageFromEvent(data) {
     const outputTokens = Number.isFinite(data?.outputTokens) ? data.outputTokens : 0;
     return {
@@ -293,6 +419,7 @@ class Exchange {
     exchangesByResponseId.set(responseId, this);
     this.sink = null;
     this.lastToolMessage = null;
+    this.streamedContent = "";
     log("response.completed", {
       responseId,
       kind: "tool_calls",
@@ -302,6 +429,7 @@ class Exchange {
   }
 
   async resolve(outputs) {
+    this.deadline.touch();
     for (const output of outputs) {
       const call = this.pendingCalls.get(output.call_id);
       if (!call) continue;
@@ -310,6 +438,7 @@ class Exchange {
         ? { requestId: call.requestId, error: normalized.text || "Outer Codex tool failed." }
         : { requestId: call.requestId, result: normalized.text };
       await this.session.rpc.tools.handlePendingToolCall(payload);
+      this.deadline.touch();
       this.pendingCalls.delete(output.call_id);
       exchangesByCallId.delete(output.call_id);
       log("tool.resolved", {
@@ -327,6 +456,7 @@ class Exchange {
   fail(error, code = "bridge_error") {
     if (this.done) return;
     this.done = true;
+    this.deadline.stop();
     log("exchange.error", {
       code,
       message: error instanceof Error ? error.message : String(error),
@@ -339,7 +469,7 @@ class Exchange {
   async disconnect() {
     if (this.disconnecting) return;
     this.disconnecting = true;
-    clearTimeout(this.timeout);
+    this.deadline.stop();
     for (const callId of this.pendingCalls.keys()) exchangesByCallId.delete(callId);
     for (const [responseId, exchange] of exchangesByResponseId) {
       if (exchange === this) exchangesByResponseId.delete(responseId);
@@ -450,6 +580,7 @@ async function startExchange(body, sink) {
   });
 
   try {
+    exchange.beginTurn();
     await session.send({
       prompt: sessionInput.prompt,
       attachments: sessionInput.attachments.length ? sessionInput.attachments : undefined,
@@ -490,6 +621,7 @@ async function continueExchange(body, sink, toolOutputs) {
     toolOutputs: toolOutputs.length,
   });
   try {
+    exchange.beginTurn();
     await exchange.resolve(toolOutputs);
   } catch (error) {
     exchange.fail(error, "tool_result_forward_failed");
@@ -506,6 +638,12 @@ const server = http.createServer(async (request, response) => {
       model: defaultModel,
       models: availableOpenAiModels,
       activeExchanges: exchanges.size,
+      reliability: {
+        blankCompletionRetriesPerTurn: maxBlankCompletionRetries,
+        exchangeTimeoutMs,
+        exchangeTimeoutMode: "sliding",
+        sseHeartbeatIntervalMs,
+      },
       metering: "GitHub Copilot allowance applies",
     });
   }

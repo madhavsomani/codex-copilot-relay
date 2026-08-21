@@ -43,6 +43,8 @@ Protocol or product changes can require updates to the relay.
 - Independent SDK session per request for overlapping Codex agents
 - Tool-call and tool-result continuation
 - Streaming and non-streaming Responses output
+- Automatic recovery from empty Copilot completions with a bounded per-turn retry limit
+- Sliding activity timeout and SSE heartbeat for long-running tasks
 - Loopback-only listener on `127.0.0.1`
 - Local dashboard with sanitized request, replay, latency, and tool metadata
 - Visible Windows Terminal event stream
@@ -140,10 +142,12 @@ session.
 npm test
 .\proxy-config.test.ps1
 npm run probe:concurrency -- --count 3 --model gpt-5.6-sol
+npm run probe:tools-relay -- --steps 4 --model gpt-5.6-sol
 ```
 
-The live concurrency probe consumes Copilot allowance. Unit and configuration
-tests do not make model calls.
+The two live probes consume Copilot allowance. Unit and configuration tests do
+not make model calls. The tool-relay probe verifies a multi-turn tool chain and
+fails if the relay returns an empty final answer.
 
 ## Security model
 

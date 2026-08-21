@@ -54,6 +54,12 @@ function Write-GatewayEvent {
             'tool.resolved' {
                 Write-Host "$time  TOOL DONE   failed=$($event.failed) id=$($event.callId)" -ForegroundColor Magenta
             }
+            'blank_completion.detected' {
+                Write-Host "$time  BLANK SEEN  model=$($event.model) id=$($event.responseId)" -ForegroundColor Yellow
+            }
+            'blank_completion.retry' {
+                Write-Host "$time  AUTO RETRY  attempt=$($event.attempt) id=$($event.responseId)" -ForegroundColor Yellow
+            }
             'exchange.error' {
                 Write-Host "$time  ERROR       $($event.code): $($event.message)" -ForegroundColor Red
             }
