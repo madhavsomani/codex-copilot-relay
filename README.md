@@ -15,10 +15,14 @@ Codex Copilot Relay (127.0.0.1 only)
 GitHub Copilot model entitlement
 ```
 
-The relay translates request, response, and tool-call envelopes. Codex keeps
-ownership of local tool execution, sandboxing, and approvals. When a model asks
-for a tool, the relay returns that request to Codex; Codex runs the tool locally
-and sends the result back through the relay.
+The relay translates request, response, streaming-event, and tool-call
+envelopes. At the OpenAI Responses protocol boundary, it is designed to be a
+transparent Codex provider: the desktop app and CLI keep their normal tool,
+approval, multi-agent, and continuation behavior while the model inference is
+served by GitHub Copilot. Codex keeps ownership of local tool execution,
+sandboxing, and approvals. When a model asks for a tool, the relay returns that
+request to Codex; Codex runs the tool locally and sends the result back through
+the same open exchange.
 
 > [!IMPORTANT]
 > This is not an unlimited-token route, an authentication bypass, or an
@@ -41,10 +45,16 @@ Protocol or product changes can require updates to the relay.
 - OpenAI Responses-compatible `/v1/responses` endpoint
 - Official `@github/copilot-sdk` backend
 - Independent SDK session per request for overlapping Codex agents
+- Codex child-agent delegation adapter, including OpenAI-only encrypted-schema hints
 - Tool-call and tool-result continuation
-- Streaming and non-streaming Responses output
+- Full streaming Responses lifecycle with ordered sequence numbers and terminal
+  `response.completed` or `response.failed` events
 - Automatic recovery from empty Copilot completions with a bounded per-turn retry limit
-- Sliding activity timeout and SSE heartbeat for long-running tasks
+- Automatic recovery when a model emits only a future-tense progress update
+  instead of taking the next available tool action
+- Separate sliding model timeout and 13-hour outer-tool result window, plus SSE
+  heartbeats, for all-day Codex runs
+- Copilot SDK session idling disabled and automatic context compaction enabled
 - Historical tool images travel as image attachments instead of base64 prompt text
 - Oversized historical text tool results are bounded with head and tail context preserved
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
@@ -144,13 +154,25 @@ session.
 ```powershell
 npm test
 .\proxy-config.test.ps1
-npm run probe:concurrency -- --count 3 --model gpt-5.6-sol
-npm run probe:tools-relay -- --steps 4 --model gpt-5.6-sol
+npm run probe:stream -- --url http://127.0.0.1:4144/v1
+npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gpt-5.6-sol
+npm run probe:tools-relay -- --url http://127.0.0.1:4144/v1 --steps 6 --model gpt-5.6-sol
+npm run probe:premature-recovery -- --url http://127.0.0.1:4144/v1
+npm run probe:delayed-tool -- --url http://127.0.0.1:4144/v1 --delay-ms 31000
+npm run probe:failure-stream -- --url http://127.0.0.1:4144/v1
 ```
 
-The two live probes consume Copilot allowance. Unit and configuration tests do
-not make model calls. The tool-relay probe verifies a multi-turn tool chain and
-fails if the relay returns an empty final answer.
+The live probes consume Copilot allowance. Unit and configuration tests do not
+make model calls. Together, the probes verify ordered Responses streaming,
+parallel requests, a multi-turn tool chain, progress-only recovery, delayed
+outer-tool continuation, and a well-formed terminal failure.
+
+The default 13-hour outer-tool result window lets a single Codex exchange wait
+through a 12-hour local render, browser operation, or child-agent task. It does
+not create artificial follow-up turns after Codex has genuinely completed a
+task, and it cannot override GitHub account limits, model limits, outages, or
+service policy. Override it with `BRIDGE_TOOL_RESULT_TIMEOUT_MS` if a different
+local ceiling is required.
 
 The context guard keeps up to 12 historical image attachments (16 MiB of
 base64 data in total), limits each historical text tool result to 64 KiB, and
@@ -166,6 +188,10 @@ conversion or clipping is applied.
 - Persistent mode intentionally has no bearer token because it is local-only.
 - Any local process running as the user may submit a request while the relay is
   enabled and consume Copilot allowance.
+- For child-agent compatibility, the relay removes the OpenAI-provider-specific
+  `encrypted` annotation from the tool schema sent to Copilot and transports
+  the delegation message as ordinary text on loopback. Do not expose the relay
+  outside the local machine.
 - `runtime/`, `node_modules/`, logs, PIDs, event history, and config backups are
   ignored and must never be committed.
 - Disable the relay when it is not needed.

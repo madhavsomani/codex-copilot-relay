@@ -15,6 +15,8 @@ const SUPPORTED_REASONING_EFFORTS = new Set([
   "xhigh",
   "max",
 ]);
+const ACTION_REQUEST = /\b(?:cont\w*|resume|proceed|keep\s+(?:going|working)|finish|complete|fix|debug|investigate|test|run|execute|create|build|make|edit|render|generate|open|check|verify|deploy|implement|cut|produce|restore|start|take|use|show|do\s+it|go\s+ahead)\b/i;
+const MAX_LATEST_USER_ECHO_CHARS = 16 * 1024;
 
 export const bridgeContextDefaults = Object.freeze({
   historyToolOutputChars: MAX_HISTORY_TOOL_OUTPUT_CHARS,
@@ -69,6 +71,21 @@ function describeOuterTool(tool, namespace) {
   return [prefix, tool.description ?? ""].filter(Boolean).join("\n\n");
 }
 
+function portableToolSchema(value) {
+  if (Array.isArray(value)) return value.map((item) => portableToolSchema(item));
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    // `encrypted: true` is an OpenAI-provider extension used for opaque
+    // inter-agent payloads. Copilot can create the ciphertext but a later
+    // Copilot-backed child request cannot decrypt OpenAI's provider envelope.
+    // Keep the local Codex tool boundary and carry the task as ordinary text.
+    if (key === "encrypted") continue;
+    result[key] = portableToolSchema(item);
+  }
+  return result;
+}
+
 function visitTool(tool, namespace, declarations) {
   if (!tool || typeof tool !== "object") return;
 
@@ -104,7 +121,7 @@ function visitTool(tool, namespace, declarations) {
       description: describeOuterTool(tool, metadata.namespace),
       parameters: tool.type === "custom"
         ? customToolSchema(tool)
-        : tool.parameters ?? { type: "object", properties: {} },
+        : portableToolSchema(tool.parameters ?? { type: "object", properties: {} }),
       overridesBuiltInTool: true,
       // These declarations never execute inside Copilot. Codex remains the
       // approval and execution boundary, so a duplicate Copilot prompt is not useful.
@@ -181,6 +198,9 @@ function stringifyContentPiece(piece, attachments, contextStats) {
   if (["input_text", "output_text", "summary_text", "reasoning_text"].includes(piece.type)) {
     return String(piece.text ?? "");
   }
+  if (piece.type === "encrypted_content") {
+    return "[Provider-encrypted content is unavailable to the Copilot relay.]";
+  }
   if (piece.type === "refusal") return String(piece.refusal ?? "");
 
   if (piece.type === "input_image") {
@@ -244,6 +264,16 @@ function historyEntry(item, attachments, contextStats) {
   if (item.type === "message") {
     return {
       role: item.role ?? "unknown",
+      content: stringifyMessageContent(item.content, attachments, contextStats),
+    };
+  }
+
+  if (item.type === "agent_message") {
+    return {
+      role: "user",
+      source: "agent_message",
+      author: item.author ?? null,
+      recipient: item.recipient ?? null,
       content: stringifyMessageContent(item.content, attachments, contextStats),
     };
   }
@@ -349,6 +379,15 @@ export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()
   const workingDirectory = cwdFromRequest
     ?? validWorkingDirectory(fallbackWorkingDirectory)
     ?? process.cwd();
+  const latestUserEntry = [...transcript]
+    .reverse()
+    .find((entry) => entry.role === "user" && typeof entry.content === "string");
+  const latestUserText = latestUserEntry?.content ?? "";
+  const latestUserEcho = latestUserText.length <= MAX_LATEST_USER_ECHO_CHARS
+    ? latestUserText
+    : `${latestUserText.slice(0, MAX_LATEST_USER_ECHO_CHARS)}\n...[latest user request clipped by bridge]`;
+  const toolCount = extractToolDeclarations(body).sdkTools.length;
+  const requiresAction = toolCount > 0 && ACTION_REQUEST.test(latestUserText);
 
   const bridgeInstructions = [
     "You are the language model inside an outer Codex coding harness.",
@@ -368,7 +407,13 @@ export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()
   const prompt = [
     "The outer harness supplied the following conversation history as JSON. Preserve the roles represented by each entry.",
     JSON.stringify(transcript),
-    "Continue the conversation as the assistant. Do not reproduce the JSON wrapper or role labels.",
+    `Latest outer user request (repeat for salience):\n${latestUserEcho || "[No plain-text user message was supplied.]"}`,
+    [
+      "Continue the conversation as the assistant. Do not reproduce the JSON wrapper or role labels.",
+      "A progress update by itself is not completion when requested work remains.",
+      "If the latest request asks you to perform, resume, or continue work and an outer tool can advance it, include any concise progress note and request the next necessary outer tool in this same turn.",
+      "Return text without a tool request only when the requested work is actually complete, the question is fully answered, or progress genuinely requires user input or approval.",
+    ].join("\n"),
   ].join("\n\n");
   contextStats.promptChars = prompt.length;
   contextStats.systemChars = systemContent.length;
@@ -379,6 +424,8 @@ export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()
     attachments,
     contextStats,
     workingDirectory,
+    latestUserText,
+    requiresAction,
   };
 }
 
@@ -518,7 +565,14 @@ export function makeAssistantMessageItem(text) {
   };
 }
 
-export function makeResponseObject({ responseId, model, output, usage }) {
+export function makeResponseObject({
+  responseId,
+  model,
+  output,
+  usage,
+  requestBody = {},
+  status = "completed",
+}) {
   const normalizedUsage = usage ?? {
     input_tokens: 0,
     input_tokens_details: null,
@@ -526,17 +580,32 @@ export function makeResponseObject({ responseId, model, output, usage }) {
     output_tokens_details: null,
     total_tokens: 0,
   };
-  return {
+  const response = {
     id: responseId,
     object: "response",
     created_at: Math.floor(Date.now() / 1000),
-    status: "completed",
+    status,
     error: null,
     incomplete_details: null,
+    instructions: requestBody.instructions ?? null,
+    max_output_tokens: requestBody.max_output_tokens ?? null,
     model,
     output,
-    usage: normalizedUsage,
+    parallel_tool_calls: requestBody.parallel_tool_calls ?? true,
+    previous_response_id: requestBody.previous_response_id ?? null,
+    reasoning: requestBody.reasoning ?? { effort: null, summary: null },
+    store: requestBody.store ?? false,
+    temperature: requestBody.temperature ?? null,
+    text: requestBody.text ?? { format: { type: "text" } },
+    tool_choice: requestBody.tool_choice ?? "auto",
+    tools: Array.isArray(requestBody.tools) ? requestBody.tools : [],
+    top_p: requestBody.top_p ?? null,
+    truncation: requestBody.truncation ?? "disabled",
+    usage: status === "completed" ? normalizedUsage : null,
+    metadata: requestBody.metadata ?? {},
   };
+  if (status === "completed") response.completed_at = Math.floor(Date.now() / 1000);
+  return response;
 }
 
 export function makeFailedResponseObject({ responseId, model, code, message }) {

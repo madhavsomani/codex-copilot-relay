@@ -67,12 +67,99 @@ test("extracts namespaced function and custom tools", () => {
   assert.equal(declarations.sdkTools[1].parameters.properties.cell_id.type, "string");
 });
 
+test("removes provider-specific encrypted tool arguments for child-agent portability", () => {
+  const body = {
+    tools: [{
+      type: "namespace",
+      name: "collaboration",
+      tools: [{
+        type: "function",
+        name: "spawn_agent",
+        parameters: {
+          type: "object",
+          properties: {
+            task_name: { type: "string" },
+            message: { type: "string", encrypted: true },
+          },
+          required: ["task_name", "message"],
+        },
+      }],
+    }],
+  };
+
+  const declaration = extractToolDeclarations(body).sdkTools[0];
+  assert.equal(declaration.parameters.properties.message.type, "string");
+  assert.equal("encrypted" in declaration.parameters.properties.message, false);
+});
+
 test("builds role-preserving session input", () => {
   const sessionInput = buildSessionInput(sampleBody, process.cwd());
   assert.match(sessionInput.systemContent, /Developer rule\./);
   assert.match(sessionInput.prompt, /"role":"user"/);
   assert.match(sessionInput.prompt, /Hello\./);
+  assert.match(sessionInput.prompt, /Latest outer user request/);
+  assert.match(sessionInput.prompt, /A progress update by itself is not completion/);
+  assert.equal(sessionInput.requiresAction, false);
   assert.doesNotMatch(sessionInput.prompt, /Run orchestration code/);
+});
+
+test("marks continuation requests as requiring real tool progress", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        name: "render_clip",
+        description: "Render the selected clip.",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+    input: [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "I will start rendering next." }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Yes, continue. Why are we stopping?" }],
+      },
+    ],
+  };
+
+  const sessionInput = buildSessionInput(body, process.cwd());
+  assert.equal(sessionInput.requiresAction, true);
+  assert.equal(sessionInput.latestUserText, "Yes, continue. Why are we stopping?");
+  assert.match(sessionInput.prompt, /request the next necessary outer tool in this same turn/i);
+});
+
+test("treats the latest child-agent message as the active request", () => {
+  const body = {
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Spawn two child agents." }],
+      },
+      {
+        type: "agent_message",
+        author: "/root",
+        recipient: "/root/child_one",
+        content: [
+          { type: "input_text", text: "Message Type: NEW_TASK" },
+          { type: "input_text", text: "Reply exactly CHILD_ONE_OK." },
+        ],
+      },
+    ],
+  };
+
+  const sessionInput = buildSessionInput(body, process.cwd());
+  assert.equal(
+    sessionInput.latestUserText,
+    "Message Type: NEW_TASK\nReply exactly CHILD_ONE_OK.",
+  );
+  assert.match(sessionInput.prompt, /"source":"agent_message"/);
+  assert.match(sessionInput.prompt, /Latest outer user request[\s\S]*CHILD_ONE_OK/);
 });
 
 test("moves historical tool images out of the text prompt", () => {

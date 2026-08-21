@@ -3,7 +3,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codex Copilot Proxy</title>
+  <title>Codex Copilot Relay</title>
   <style>
     :root { color-scheme: dark; --bg: #0b1020; --panel: #121a2d; --panel2: #17223a; --line: #263653; --text: #edf4ff; --muted: #8ea1bf; --accent: #77b7ff; --good: #68d391; --bad: #ff8d9f; --warn: #ffd27d; }
     * { box-sizing: border-box; }
@@ -51,12 +51,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 <body>
   <header>
     <div class="topline">
-      <div><h1>Codex → GitHub Copilot proxy</h1><p class="subtitle">Local observability for intercepted Responses calls and Copilot replays</p></div>
+      <div><h1>Codex Copilot Relay</h1><p class="subtitle">Transparent localhost Responses gateway with Copilot-backed inference</p></div>
       <button id="clear">Clear local history</button>
     </div>
   </header>
   <main>
-    <div class="notice"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong id="provider">github-copilot-sdk</strong></span><span class="pill">history: sanitized and capped at <strong id="limit">200</strong> calls</span><span class="pill" id="updated">waiting for bridge…</span></div>
+    <div class="notice"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong id="provider">github-copilot-sdk</strong></span><span class="pill">Responses: full lifecycle · 13h tool wait</span><span class="pill">history: sanitized and capped at <strong id="limit">200</strong> calls</span><span class="pill" id="updated">waiting for bridge…</span></div>
     <section class="stats">
       <div class="stat"><div class="stat-label">Calls received</div><div class="stat-value accent" id="received">0</div></div>
       <div class="stat"><div class="stat-label">Replayed to Copilot</div><div class="stat-value accent" id="replayed">0</div></div>

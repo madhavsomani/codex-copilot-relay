@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BlankCompletionGuard,
+  PrematureCompletionGuard,
   SlidingDeadline,
   resolveAssistantContent,
   startSseHeartbeat,
@@ -95,15 +96,64 @@ test("sliding deadline is refreshed by activity", () => {
   });
 
   deadline.touch();
-  deadline.touch();
+  deadline.touch(12 * 60 * 60 * 1000);
   assert.equal(scheduled.length, 2);
   assert.equal(cleared.length, 1);
-  assert.equal(scheduled[1].timeoutMs, 900_000);
+  assert.equal(scheduled[1].timeoutMs, 12 * 60 * 60 * 1000);
 
   scheduled[1].callback();
   assert.equal(expired, 1);
   deadline.stop();
   assert.equal(cleared.length, 1);
+});
+
+test("progress-only final messages are recovered for actionable tool work", () => {
+  const guard = new PrematureCompletionGuard({ maxRetries: 2 });
+
+  const first = guard.observe({
+    content: "I’m moving straight into production and opening the editor now.",
+    requiresAction: true,
+    toolCount: 9,
+  });
+  assert.equal(first.kind, "retry");
+  assert.equal(first.attempt, 1);
+  assert.match(first.prompt, /request the next necessary outer tool now/i);
+
+  assert.deepEqual(
+    guard.observe({
+      content: "The final clip is rendered and saved to C:\\output.mp4.",
+      requiresAction: true,
+      toolCount: 9,
+    }),
+    { kind: "complete" },
+  );
+});
+
+test("premature completion recovery is bounded and does not affect answers", () => {
+  const guard = new PrematureCompletionGuard({ maxRetries: 1 });
+
+  assert.deepEqual(
+    guard.observe({
+      content: "Here is the explanation you requested.",
+      requiresAction: false,
+      toolCount: 9,
+    }),
+    { kind: "complete" },
+  );
+
+  assert.equal(guard.observe({
+    content: "I’ll start the requested edit now.",
+    requiresAction: true,
+    toolCount: 2,
+  }).kind, "retry");
+  assert.deepEqual(
+    guard.observe({
+      content: "I’ll try the requested edit again now.",
+      requiresAction: true,
+      toolCount: 2,
+    }),
+    { kind: "complete", exhausted: true },
+  );
 });
 
 test("SSE heartbeat keeps a quiet streaming response active", () => {

@@ -14,5 +14,8 @@ DASHBOARD
 http://127.0.0.1:4144/dashboard
 
 The watchdog automatically restarts the bridge and visible gateway terminal.
+The relay keeps Codex's normal Responses streaming, tools, parallel agents, and
+child-agent continuation while model inference is routed through Copilot.
+Outer tool calls may remain open for up to 13 hours by default.
 Use the Restore shortcut before renaming, moving, or deleting this folder.
 After Start or Restore, reopen the Codex task once so it reloads config.toml.

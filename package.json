@@ -8,6 +8,10 @@
     "probe:tools": "node probe-tools.mjs",
     "probe:tools-relay": "node probe-relay-tools.mjs",
     "probe:concurrency": "node probe-concurrency.mjs",
+    "probe:stream": "node probe-responses-stream.mjs",
+    "probe:premature-recovery": "node probe-premature-recovery.mjs",
+    "probe:delayed-tool": "node probe-delayed-tool.mjs",
+    "probe:failure-stream": "node probe-failure-stream.mjs",
     "start": "node server.mjs",
     "test": "node --test"
   },

@@ -19,6 +19,13 @@ along with environment files, logs, backups, and installed dependencies.
 The relay does not intentionally copy GitHub Copilot OAuth credentials into its
 own files. Authentication is handled by the official GitHub Copilot SDK/CLI.
 
+Codex child-agent tool declarations can include an `encrypted` annotation that
+is specific to the OpenAI provider. Copilot cannot decrypt that provider
+envelope, so the relay removes the annotation from the schema sent upstream and
+passes the delegation task as ordinary text over loopback. Codex still owns the
+tool boundary and approval checks. This compatibility behavior is another
+reason the listener must never be exposed to a LAN, public tunnel, or proxy.
+
 ## Reporting an issue
 
 Do not paste secrets, private prompts, config backups, or raw runtime logs into
