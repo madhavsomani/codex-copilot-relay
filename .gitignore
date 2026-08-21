@@ -1,0 +1,14 @@
+node_modules/
+runtime/
+captures/
+.copilot-runtime/
+codex-home/
+*.log
+*.pid
+*.bak
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

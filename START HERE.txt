@@ -1,0 +1,18 @@
+CODEX COPILOT RELAY - QUICK START
+
+This folder contains the self-contained localhost compatibility relay.
+
+START OR REPAIR
+Double-click this Desktop shortcut:
+  Start or Repair Codex Copilot Bridge
+
+RESTORE NORMAL CODEX AND STOP THE BRIDGE
+Double-click this Desktop shortcut:
+  Restore Normal Codex (Disable Copilot Bridge)
+
+DASHBOARD
+http://127.0.0.1:4144/dashboard
+
+The watchdog automatically restarts the bridge and visible gateway terminal.
+Use the Restore shortcut before renaming, moving, or deleting this folder.
+After Start or Restore, reopen the Codex task once so it reloads config.toml.
