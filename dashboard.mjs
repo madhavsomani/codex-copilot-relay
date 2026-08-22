@@ -63,7 +63,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </div>
   </header>
   <main>
-    <div class="notice"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong id="provider">github-copilot-sdk</strong></span><span class="pill">Responses: full lifecycle · 13h tool wait</span><span class="pill">context: automatic bounded compaction</span><span class="pill">history: sanitized and capped at <strong id="limit">200</strong> calls</span><span class="pill" id="updated">waiting for bridge…</span></div>
+    <div class="notice"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong id="provider">github-copilot-sdk</strong></span><span class="pill">Responses: full lifecycle · 13h tool wait</span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: sanitized and capped at <strong id="limit">200</strong> calls</span><span class="pill" id="updated">waiting for bridge…</span></div>
     <section class="stats">
       <div class="stat"><div class="stat-label">Calls received</div><div class="stat-value accent" id="received">0</div></div>
       <div class="stat"><div class="stat-label">Replayed to Copilot</div><div class="stat-value accent" id="replayed">0</div></div>

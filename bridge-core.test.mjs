@@ -10,6 +10,7 @@ import {
   makeFailedResponseObject,
   normalizeReasoningEffort,
   normalizeToolOutput,
+  resolveModelCompatibility,
 } from "./bridge-core.mjs";
 
 const sampleBody = {
@@ -227,6 +228,44 @@ test("retains image attachments referenced by outer instructions", () => {
   assert.equal(sessionInput.contextStats.omittedImageAttachments, 0);
 });
 
+test("prioritizes the newest retained image when the selected model accepts one image", () => {
+  const olderImage = Buffer.from("older-history-image").toString("base64");
+  const currentImage = Buffer.from("current-user-image").toString("base64");
+  const body = {
+    input: [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{
+          type: "input_image",
+          image_url: `data:image/png;base64,${olderImage}`,
+        }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Inspect the current image." },
+          {
+            type: "input_image",
+            image_url: `data:image/png;base64,${currentImage}`,
+          },
+        ],
+      },
+    ],
+  };
+
+  const sessionInput = buildSessionInput(body, process.cwd(), {
+    maxImageAttachments: 1,
+    maxAttachmentBase64Chars: 1024,
+  });
+
+  assert.equal(sessionInput.attachments.length, 1);
+  assert.equal(sessionInput.attachments[0].data, currentImage);
+  assert.equal(sessionInput.contextStats.omittedImageAttachments, 1);
+  assert.match(sessionInput.prompt, /current-user-image|codex-image-2/);
+});
+
 test("bounds oversized historical text tool outputs", () => {
   const body = {
     input: [
@@ -353,7 +392,8 @@ test("compacts aggregate older history while preserving instructions and the new
   assert.match(compacted.prompt, /LATEST_TOOL_REQUEST_MUST_SURVIVE/);
   assert.match(compacted.prompt, /LATEST_TOOL_RESULT_MUST_SURVIVE/);
   assert.match(compacted.prompt, /bridge_context_compaction/);
-  assert.doesNotMatch(compacted.prompt, /OLD_RESULT_0_BEGIN/);
+  assert.match(compacted.prompt, /OLD_RESULT_0_BEGIN/);
+  assert.doesNotMatch(compacted.prompt, /"output":"OLD_RESULT_0_BEGIN/);
   assert.equal(compacted.contextStats.historyCompacted, true);
   assert.equal(compacted.attachments.length, 0);
   assert.equal(compacted.contextStats.omittedImageAttachments, 1);
@@ -366,6 +406,56 @@ test("compacts aggregate older history while preserving instructions and the new
   )?.[1];
   assert.ok(transcriptJson);
   assert.doesNotThrow(() => JSON.parse(transcriptJson));
+});
+
+test("compaction ledger preserves mid-task user rules and useful tool-result excerpts", () => {
+  const input = [
+    {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "INITIAL_STATE_" + "a".repeat(4_000) }],
+    },
+    {
+      type: "function_call_output",
+      call_id: "critical-artifact",
+      success: true,
+      output: `CRITICAL_ASSET_PATH=C:\\deliverables\\approved-final.mp4 ${"b".repeat(4_000)}`,
+    },
+  ];
+  for (let index = 0; index < 20; index += 1) {
+    input.push({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: `EARLY_${index}_${"c".repeat(4_000)}` }],
+    });
+  }
+  input.push({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: "MID_TASK_RULE_BUFFER_MUST_REMAIN_DRAFT_ONLY" }],
+  });
+  for (let index = 0; index < 100; index += 1) {
+    input.push({
+      type: "custom_tool_call_output",
+      call_id: `later-${index}`,
+      success: true,
+      output: `LATER_RESULT_${index}_${"d".repeat(4_000)}`,
+    });
+  }
+  input.push({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: "Continue from the saved state." }],
+  });
+
+  const sessionInput = buildSessionInput({ input }, process.cwd(), {
+    maxSerializedTextChars: 100_000,
+    toolDefinitionChars: 2,
+  });
+
+  assert.equal(sessionInput.contextStats.historyCompacted, true);
+  assert.match(sessionInput.prompt, /MID_TASK_RULE_BUFFER_MUST_REMAIN_DRAFT_ONLY/);
+  assert.match(sessionInput.prompt, /CRITICAL_ASSET_PATH=C:\\\\deliverables\\\\approved-final\.mp4/);
 });
 
 test("maps custom and function requests back to Responses items", () => {
@@ -412,6 +502,35 @@ test("normalizes reasoning efforts for Copilot", () => {
   assert.equal(normalizeReasoningEffort("minimal"), "none");
   assert.equal(normalizeReasoningEffort("xhigh"), "xhigh");
   assert.equal(normalizeReasoningEffort("unknown"), "low");
+});
+
+test("derives long-context and image limits from Copilot model capabilities", () => {
+  const compatibility = resolveModelCompatibility({
+    capabilities: {
+      limits: {
+        max_context_window_tokens: 1_050_000,
+        max_prompt_tokens: 922_000,
+        vision: {
+          max_prompt_image_size: 3_145_728,
+          max_prompt_images: 1,
+          supported_media_types: ["image/png"],
+        },
+      },
+      supports: { vision: true },
+    },
+    billing: {
+      tokenPrices: {
+        maxPromptTokens: 272_000,
+        longContext: { maxPromptTokens: 922_000 },
+      },
+    },
+  });
+
+  assert.equal(compatibility.contextTier, "long_context");
+  assert.equal(compatibility.maxPromptTokens, 922_000);
+  assert.equal(compatibility.maxImageAttachments, 1);
+  assert.equal(compatibility.maxAttachmentBase64Chars, 4_194_304);
+  assert.deepEqual(compatibility.supportedMediaTypes, ["image/png"]);
 });
 
 test("builds a terminal Responses failure object", () => {

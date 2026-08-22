@@ -7,6 +7,7 @@
     "probe": "node probe-sdk.mjs",
     "probe:tools": "node probe-tools.mjs",
     "probe:tools-relay": "node probe-relay-tools.mjs",
+    "probe:compatibility": "node probe-compatibility.mjs",
     "probe:concurrency": "node probe-concurrency.mjs",
     "probe:stream": "node probe-responses-stream.mjs",
     "probe:premature-recovery": "node probe-premature-recovery.mjs",

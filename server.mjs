@@ -28,6 +28,7 @@ import {
   makeResponseObject,
   normalizeReasoningEffort,
   normalizeToolOutput,
+  resolveModelCompatibility,
 } from "./bridge-core.mjs";
 
 const host = "127.0.0.1";
@@ -685,11 +686,13 @@ const client = new CopilotClient({
 await client.start();
 const models = await client.listModels();
 const availableModelIds = new Set(models.map((model) => model.id));
+const modelsById = new Map(models.map((model) => [model.id, model]));
 if (!availableModelIds.has(requestedDefaultModel)) {
   await client.stop();
   throw new Error(`The authenticated GitHub Copilot account does not expose ${requestedDefaultModel}.`);
 }
 const defaultModel = requestedDefaultModel;
+const defaultModelCompatibility = resolveModelCompatibility(modelsById.get(defaultModel));
 const availableOpenAiModels = [...availableModelIds]
   .filter((model) => model.startsWith("gpt-"))
   .sort();
@@ -706,9 +709,16 @@ function resolveModel(requestedModel) {
 async function startExchange(body, sink) {
   const declarations = extractToolDeclarations(body);
   const toolDefinitionChars = JSON.stringify(declarations.sdkTools).length;
+  const reasoningEffort = normalizeReasoningEffort(body?.reasoning?.effort);
+  const model = resolveModel(body?.model);
+  const modelCompatibility = resolveModelCompatibility(modelsById.get(model));
   const sessionInput = buildSessionInput(body, fallbackWorkingDirectory, {
     maxSerializedTextChars: maxSerializedContextChars,
     toolDefinitionChars,
+    maxImageAttachments: modelCompatibility.maxImageAttachments,
+    maxAttachmentBase64Chars: modelCompatibility.maxAttachmentBase64Chars,
+    maxSingleAttachmentBase64Chars:
+      modelCompatibility.maxSingleAttachmentBase64Chars,
   });
   Object.assign(
     sessionInput.contextStats,
@@ -718,13 +728,12 @@ async function startExchange(body, sink) {
       maxSerializedContextChars,
     ),
   );
-  const reasoningEffort = normalizeReasoningEffort(body?.reasoning?.effort);
-  const model = resolveModel(body?.model);
   sink.setModel(model);
 
   const session = await client.createSession({
     clientName: "codex-copilot-responses-bridge",
     model,
+    contextTier: modelCompatibility.contextTier,
     reasoningEffort,
     reasoningSummary: "none",
     streaming: true,
@@ -784,6 +793,7 @@ async function startExchange(body, sink) {
       mimeTypes: [...new Set(sessionInput.attachments.map((item) => item.mimeType))],
     },
     contextStats: sessionInput.contextStats,
+    compatibility: modelCompatibility,
     toolCount: declarations.sdkTools.length,
   });
   if (sessionInput.contextStats.historyCompacted
@@ -862,6 +872,19 @@ const server = http.createServer(async (request, response) => {
       model: defaultModel,
       models: availableOpenAiModels,
       activeExchanges: exchanges.size,
+      compatibility: {
+        contextTier: defaultModelCompatibility.contextTier,
+        maxPromptTokens: defaultModelCompatibility.maxPromptTokens,
+        maxContextWindowTokens: defaultModelCompatibility.maxContextWindowTokens,
+        maxPromptImages: defaultModelCompatibility.maxImageAttachments,
+        maxPromptImageBase64Chars:
+          defaultModelCompatibility.maxSingleAttachmentBase64Chars,
+        outerCodexInstructions: "forwarded",
+        outerCodexTools: "declaration-only; execution remains in Codex",
+        outerCodexMemory: "forwarded through request instructions",
+        copilotNativeMemory: false,
+        copilotBuiltInTools: false,
+      },
       reliability: {
         blankCompletionRetriesPerTurn: maxBlankCompletionRetries,
         prematureCompletionRetriesPerTurn: maxPrematureCompletionRetries,
@@ -874,7 +897,14 @@ const server = http.createServer(async (request, response) => {
         responsesStreamingLifecycle: "full",
         sdkSystemMessageMode: "replace",
         sdkAutomaticContextCompaction: true,
-        contextGuard: bridgeContextDefaults,
+        contextGuard: {
+          ...bridgeContextDefaults,
+          imageAttachments: defaultModelCompatibility.maxImageAttachments,
+          attachmentBase64Chars:
+            defaultModelCompatibility.maxAttachmentBase64Chars,
+          singleAttachmentBase64Chars:
+            defaultModelCompatibility.maxSingleAttachmentBase64Chars,
+        },
         maxRequestBodyBytes,
         maxSerializedContextChars,
       },

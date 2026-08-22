@@ -172,18 +172,9 @@ export function extractToolDeclarations(body) {
   };
 }
 
-function attachDataImage(imageUrl, attachments, contextStats) {
+function attachDataImage(imageUrl, attachments, attachmentContext = {}) {
   const match = /^data:([^;,]+);base64,(.+)$/s.exec(imageUrl);
   if (!match) return null;
-
-  const dataChars = match[2].length;
-  const overCount = attachments.length >= MAX_IMAGE_ATTACHMENTS;
-  const overBytes = contextStats.attachmentBase64Chars + dataChars
-    > MAX_ATTACHMENT_BASE64_CHARS;
-  if (overCount || overBytes) {
-    contextStats.omittedImageAttachments += 1;
-    return "[Image omitted by the bridge context guard.]";
-  }
 
   const displayName = `codex-image-${attachments.length + 1}`;
   attachments.push({
@@ -191,13 +182,17 @@ function attachDataImage(imageUrl, attachments, contextStats) {
     mimeType: match[1],
     data: match[2],
     displayName,
+    _bridgeSourceRole: attachmentContext.role ?? "unknown",
+    _bridgeSourceIndex: Number.isFinite(attachmentContext.sourceIndex)
+      ? attachmentContext.sourceIndex
+      : -1,
+    _bridgeInstruction: Boolean(attachmentContext.instruction),
+    _bridgeCandidateIndex: attachments.length,
   });
-  contextStats.imageAttachments += 1;
-  contextStats.attachmentBase64Chars += dataChars;
   return `[Image attached as ${displayName}]`;
 }
 
-function stringifyContentPiece(piece, attachments, contextStats) {
+function stringifyContentPiece(piece, attachments, contextStats, attachmentContext = {}) {
   if (typeof piece === "string") return piece;
   if (!piece || typeof piece !== "object") return String(piece ?? "");
 
@@ -212,7 +207,7 @@ function stringifyContentPiece(piece, attachments, contextStats) {
   if (piece.type === "input_image") {
     const imageUrl = piece.image_url;
     if (typeof imageUrl === "string") {
-      const attached = attachDataImage(imageUrl, attachments, contextStats);
+      const attached = attachDataImage(imageUrl, attachments, attachmentContext);
       if (attached) return attached;
       return `[Image URL: ${imageUrl}]`;
     }
@@ -226,13 +221,18 @@ function stringifyContentPiece(piece, attachments, contextStats) {
   return JSON.stringify(piece);
 }
 
-function stringifyMessageContent(content, attachments, contextStats) {
+function stringifyMessageContent(content, attachments, contextStats, attachmentContext = {}) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) {
-    return stringifyContentPiece(content, attachments, contextStats);
+    return stringifyContentPiece(content, attachments, contextStats, attachmentContext);
   }
   return content
-    .map((piece) => stringifyContentPiece(piece, attachments, contextStats))
+    .map((piece) => stringifyContentPiece(
+      piece,
+      attachments,
+      contextStats,
+      attachmentContext,
+    ))
     .filter(Boolean)
     .join("\n");
 }
@@ -243,9 +243,17 @@ function stringifyInstructions(instructions, attachments, contextStats) {
   return instructions
     .map((item) => {
       if (item?.type === "message") {
-        return stringifyMessageContent(item.content, attachments, contextStats);
+        return stringifyMessageContent(item.content, attachments, contextStats, {
+          role: item.role ?? "developer",
+          sourceIndex: -1,
+          instruction: true,
+        });
       }
-      return stringifyContentPiece(item, attachments, contextStats);
+      return stringifyContentPiece(item, attachments, contextStats, {
+        role: "developer",
+        sourceIndex: -1,
+        instruction: true,
+      });
     })
     .filter(Boolean)
     .join("\n");
@@ -264,13 +272,17 @@ function compactHistoryToolOutput(text, contextStats) {
   return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`;
 }
 
-function historyEntry(item, attachments, contextStats) {
+function historyEntry(item, attachments, contextStats, sourceIndex = -1) {
   if (!item || typeof item !== "object") return null;
 
   if (item.type === "message") {
     return {
       role: item.role ?? "unknown",
-      content: stringifyMessageContent(item.content, attachments, contextStats),
+      content: stringifyMessageContent(item.content, attachments, contextStats, {
+        role: item.role ?? "unknown",
+        sourceIndex,
+        instruction: ["developer", "system"].includes(item.role),
+      }),
     };
   }
 
@@ -280,7 +292,10 @@ function historyEntry(item, attachments, contextStats) {
       source: "agent_message",
       author: item.author ?? null,
       recipient: item.recipient ?? null,
-      content: stringifyMessageContent(item.content, attachments, contextStats),
+      content: stringifyMessageContent(item.content, attachments, contextStats, {
+        role: "user",
+        sourceIndex,
+      }),
     };
   }
 
@@ -312,7 +327,10 @@ function historyEntry(item, attachments, contextStats) {
       tool_type: item.type,
       call_id: item.call_id,
       output: compactHistoryToolOutput(
-        contentOutputToText(item.output, attachments, contextStats),
+        contentOutputToText(item.output, attachments, contextStats, {
+          role: "tool",
+          sourceIndex,
+        }),
         contextStats,
       ),
       success: item.success,
@@ -359,12 +377,19 @@ function summarizeHistoryEntry(entry) {
     };
   }
   if (entry.role === "assistant_tool_call") {
-    return {
+    const summary = {
       role: entry.role,
       namespace: entry.namespace ?? null,
       name: entry.name ?? null,
       call_id: entry.call_id ?? null,
     };
+    if (entry.arguments !== undefined) {
+      summary.arguments_excerpt = compactLedgerText(entry.arguments, 512);
+    }
+    if (entry.input !== undefined) {
+      summary.input_excerpt = compactLedgerText(entry.input, 512);
+    }
+    return summary;
   }
   if (entry.role === "tool") {
     return {
@@ -372,6 +397,7 @@ function summarizeHistoryEntry(entry) {
       call_id: entry.call_id ?? null,
       success: entry.success ?? null,
       output_chars: String(entry.output ?? "").length,
+      output_excerpt: compactLedgerText(entry.output, 768),
     };
   }
   return null;
@@ -390,21 +416,112 @@ function makeHistoryCompactionEntry(omittedEntries, maxChars) {
   const summaries = omittedEntries
     .map((entry, index) => ({ index, summary: summarizeHistoryEntry(entry) }))
     .filter((item) => item.summary);
-  const selectedIndices = new Set([
-    ...summaries.slice(0, 4).map((item) => item.index),
-    ...summaries.slice(-48).map((item) => item.index),
-  ]);
+  const priorityCandidates = [];
+  const queuedIndices = new Set();
+  const queue = (items) => {
+    for (const item of items) {
+      if (queuedIndices.has(item.index)) continue;
+      queuedIndices.add(item.index);
+      priorityCandidates.push(item);
+    }
+  };
 
-  for (const item of summaries) {
-    if (!selectedIndices.has(item.index)) continue;
+  // User corrections and constraints carry more continuity value than a long
+  // tail of routine successful tool results. Queue every omitted user turn
+  // first, followed by failures, the opening state, the recent tail, and a few
+  // evenly spaced checkpoints from the middle of a long run.
+  queue(summaries.filter((item) => item.summary.role === "user"));
+  queue(summaries.filter((item) =>
+    item.summary.role === "tool" && item.summary.success === false));
+  queue(summaries.slice(0, 4));
+  queue(summaries.slice(-24));
+  if (summaries.length > 0) {
+    const sampleCount = Math.min(16, summaries.length);
+    const sampled = [];
+    for (let index = 0; index < sampleCount; index += 1) {
+      sampled.push(summaries[Math.floor(index * (summaries.length - 1)
+        / Math.max(1, sampleCount - 1))]);
+    }
+    queue(sampled);
+  }
+
+  for (const item of priorityCandidates) {
+    const milestone = { original_index: item.index, ...item.summary };
+    const milestones = [...base.milestones, milestone]
+      .sort((left, right) => left.original_index - right.original_index);
     const candidate = {
       ...base,
-      milestones: [...base.milestones, { original_index: item.index, ...item.summary }],
+      milestones,
     };
-    if (JSON.stringify(candidate).length > maxChars) break;
-    base.milestones.push({ original_index: item.index, ...item.summary });
+    if (JSON.stringify(candidate).length > maxChars) continue;
+    base.milestones = milestones;
   }
   return base;
+}
+
+function finalizeImageAttachments({
+  attachments,
+  systemContent,
+  prompt,
+  contextStats,
+  maxImageAttachments,
+  maxAttachmentBase64Chars,
+  maxSingleAttachmentBase64Chars,
+}) {
+  const serializedContext = `${systemContent}\n${prompt}`;
+  const referenced = attachments.filter((attachment) =>
+    serializedContext.includes(`[Image attached as ${attachment.displayName}]`));
+  const latestUserImageSource = referenced
+    .filter((attachment) => attachment._bridgeSourceRole === "user")
+    .reduce((latest, attachment) => Math.max(latest, attachment._bridgeSourceIndex), -1);
+  const priority = (attachment) => {
+    if (attachment._bridgeSourceRole === "user"
+      && attachment._bridgeSourceIndex === latestUserImageSource) return 4;
+    if (attachment._bridgeInstruction) return 3;
+    if (attachment._bridgeSourceRole === "user") return 2;
+    return 1;
+  };
+  const ranked = [...referenced].sort((left, right) =>
+    priority(right) - priority(left)
+      || right._bridgeSourceIndex - left._bridgeSourceIndex
+      || right._bridgeCandidateIndex - left._bridgeCandidateIndex);
+  const selected = [];
+  let base64Chars = 0;
+  for (const attachment of ranked) {
+    if (selected.length >= maxImageAttachments) continue;
+    const dataChars = String(attachment.data ?? "").length;
+    if (dataChars > maxSingleAttachmentBase64Chars) continue;
+    if (base64Chars + dataChars > maxAttachmentBase64Chars) continue;
+    selected.push(attachment);
+    base64Chars += dataChars;
+  }
+  selected.sort((left, right) => left._bridgeCandidateIndex - right._bridgeCandidateIndex);
+  const selectedNames = new Set(selected.map((attachment) => attachment.displayName));
+  const omitted = attachments.filter((attachment) => !selectedNames.has(attachment.displayName));
+  const omissionReason = maxImageAttachments > 0
+    ? `[Image omitted by bridge compatibility policy; the selected model accepts at most ${maxImageAttachments} prompt image(s).]`
+    : "[Image omitted because the selected model does not accept prompt images.]";
+  let adjustedSystemContent = systemContent;
+  let adjustedPrompt = prompt;
+  for (const attachment of omitted) {
+    const marker = `[Image attached as ${attachment.displayName}]`;
+    adjustedSystemContent = adjustedSystemContent.replaceAll(marker, omissionReason);
+    adjustedPrompt = adjustedPrompt.replaceAll(marker, omissionReason);
+  }
+  const portableSelected = selected.map((attachment) => ({
+    type: attachment.type,
+    mimeType: attachment.mimeType,
+    data: attachment.data,
+    displayName: attachment.displayName,
+  }));
+  attachments.splice(0, attachments.length, ...portableSelected);
+  contextStats.imageAttachments = portableSelected.length;
+  contextStats.omittedImageAttachments = omitted.length;
+  contextStats.attachmentBase64Chars = base64Chars;
+  contextStats.maxImageAttachments = maxImageAttachments;
+  contextStats.maxAttachmentBase64Chars = maxAttachmentBase64Chars;
+  contextStats.maxSingleAttachmentBase64Chars = maxSingleAttachmentBase64Chars;
+  return { systemContent: adjustedSystemContent, prompt: adjustedPrompt };
 }
 
 function buildConversationPrompt(transcript, latestUserEcho) {
@@ -547,9 +664,11 @@ export function buildSessionInput(
   );
   if (rootInstructions) developerInstructions.push(rootInstructions);
 
-  for (const item of Array.isArray(body?.input) ? body.input : []) {
+  const inputItems = Array.isArray(body?.input) ? body.input : [];
+  for (let sourceIndex = 0; sourceIndex < inputItems.length; sourceIndex += 1) {
+    const item = inputItems[sourceIndex];
     if (item?.type === "additional_tools") continue;
-    const entry = historyEntry(item, attachments, contextStats);
+    const entry = historyEntry(item, attachments, contextStats, sourceIndex);
     if (!entry) continue;
     if (["developer", "system"].includes(entry.role)) {
       developerInstructions.push(entry.content);
@@ -590,13 +709,13 @@ export function buildSessionInput(
     "Follow the outer developer instructions below, subject to GitHub Copilot service policies and the SDK safety rules that remain enabled.",
   ].join("\n");
 
-  const systemContent = [
+  let systemContent = [
     bridgeInstructions,
     ...developerInstructions.map((instruction, index) =>
       `\n--- Outer developer instruction ${index + 1} ---\n${instruction}`),
   ].join("\n");
 
-  const prompt = compactTranscriptWithinBudget({
+  let prompt = compactTranscriptWithinBudget({
     transcript,
     latestUserEcho,
     systemContent,
@@ -604,16 +723,26 @@ export function buildSessionInput(
     maxSerializedTextChars: contextBudget.maxSerializedTextChars,
     toolDefinitionChars: contextBudget.toolDefinitionChars,
   });
-  const serializedContext = `${systemContent}\n${prompt}`;
-  const referencedAttachments = attachments.filter((attachment) =>
-    serializedContext.includes(`[Image attached as ${attachment.displayName}]`));
-  if (referencedAttachments.length < attachments.length) {
-    contextStats.omittedImageAttachments += attachments.length - referencedAttachments.length;
-    contextStats.imageAttachments = referencedAttachments.length;
-    contextStats.attachmentBase64Chars = referencedAttachments
-      .reduce((total, attachment) => total + String(attachment.data ?? "").length, 0);
-    attachments.splice(0, attachments.length, ...referencedAttachments);
-  }
+  const maxImageAttachments = Math.max(0, Number.isFinite(Number(
+    contextBudget.maxImageAttachments,
+  )) ? Number(contextBudget.maxImageAttachments) : MAX_IMAGE_ATTACHMENTS);
+  const maxAttachmentBase64Chars = Math.max(0, Number.isFinite(Number(
+    contextBudget.maxAttachmentBase64Chars,
+  )) ? Number(contextBudget.maxAttachmentBase64Chars) : MAX_ATTACHMENT_BASE64_CHARS);
+  const maxSingleAttachmentBase64Chars = Math.max(0, Number.isFinite(Number(
+    contextBudget.maxSingleAttachmentBase64Chars,
+  ))
+    ? Number(contextBudget.maxSingleAttachmentBase64Chars)
+    : maxAttachmentBase64Chars);
+  ({ systemContent, prompt } = finalizeImageAttachments({
+    attachments,
+    systemContent,
+    prompt,
+    contextStats,
+    maxImageAttachments,
+    maxAttachmentBase64Chars,
+    maxSingleAttachmentBase64Chars,
+  }));
   contextStats.promptChars = prompt.length;
   contextStats.systemChars = systemContent.length;
 
@@ -662,6 +791,54 @@ export function normalizeReasoningEffort(value) {
     : DEFAULT_REASONING_EFFORT;
 }
 
+export function resolveModelCompatibility(model) {
+  const limits = model?.capabilities?.limits ?? {};
+  const vision = limits.vision ?? {};
+  const tokenPrices = model?.billing?.tokenPrices ?? {};
+  const longContext = tokenPrices.longContext;
+  const basePromptTokens = Number(tokenPrices.maxPromptTokens);
+  const longPromptTokens = Number(longContext?.maxPromptTokens);
+  const hasLongContext = Number.isFinite(longPromptTokens)
+    && longPromptTokens > 0
+    && (!Number.isFinite(basePromptTokens) || longPromptTokens > basePromptTokens);
+  const capabilityPromptTokens = Number(limits.max_prompt_tokens);
+  const maxPromptTokens = hasLongContext
+    ? longPromptTokens
+    : (Number.isFinite(capabilityPromptTokens)
+        ? capabilityPromptTokens
+        : (Number.isFinite(basePromptTokens) ? basePromptTokens : null));
+  const supportsVision = model?.capabilities?.supports?.vision !== false;
+  const advertisedImageCount = Number(vision.max_prompt_images);
+  const maxImageAttachments = supportsVision
+    ? (Number.isFinite(advertisedImageCount)
+        ? Math.max(0, Math.floor(advertisedImageCount))
+        : MAX_IMAGE_ATTACHMENTS)
+    : 0;
+  const advertisedImageBytes = Number(vision.max_prompt_image_size);
+  const maxSingleAttachmentBase64Chars = Number.isFinite(advertisedImageBytes)
+    && advertisedImageBytes > 0
+    ? 4 * Math.ceil(advertisedImageBytes / 3)
+    : MAX_ATTACHMENT_BASE64_CHARS;
+  const maxAttachmentBase64Chars = Math.min(
+    MAX_ATTACHMENT_BASE64_CHARS,
+    maxImageAttachments * maxSingleAttachmentBase64Chars,
+  );
+
+  return {
+    contextTier: hasLongContext ? "long_context" : "default",
+    maxPromptTokens,
+    maxContextWindowTokens: Number.isFinite(Number(limits.max_context_window_tokens))
+      ? Number(limits.max_context_window_tokens)
+      : null,
+    maxImageAttachments,
+    maxAttachmentBase64Chars,
+    maxSingleAttachmentBase64Chars,
+    supportedMediaTypes: Array.isArray(vision.supported_media_types)
+      ? [...vision.supported_media_types]
+      : [],
+  };
+}
+
 function collectToolOutputs(value, results) {
   if (Array.isArray(value)) {
     for (const child of value) collectToolOutputs(child, results);
@@ -685,7 +862,12 @@ export function extractToolOutputs(body) {
   return outputs;
 }
 
-function contentOutputToText(output, attachments = null, contextStats = null) {
+function contentOutputToText(
+  output,
+  attachments = null,
+  contextStats = null,
+  attachmentContext = {},
+) {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return JSON.stringify(output ?? null);
   return output.map((piece) => {
@@ -694,7 +876,12 @@ function contentOutputToText(output, attachments = null, contextStats = null) {
     if (["input_text", "output_text"].includes(piece.type)) return String(piece.text ?? "");
     if (piece.type === "input_image") {
       if (attachments && contextStats) {
-        return stringifyContentPiece(piece, attachments, contextStats);
+        return stringifyContentPiece(
+          piece,
+          attachments,
+          contextStats,
+          attachmentContext,
+        );
       }
       return "[Tool returned an image to the outer harness.]";
     }
