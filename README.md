@@ -329,6 +329,10 @@ This project is not affiliated with, endorsed by, or supported by GitHub,
 Microsoft, or OpenAI. GitHub, GitHub Copilot, OpenAI, and Codex are trademarks
 of their respective owners.
 
+## Author
+
+Created by [Madhav Somani](https://www.linkedin.com/in/madhavsomani).
+
 ## License
 
 Codex Copilot Relay is released under the [MIT License](LICENSE).

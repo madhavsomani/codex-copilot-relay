@@ -24,7 +24,10 @@
     "openai-responses",
     "localhost-bridge"
   ],
-  "author": "",
+  "author": {
+    "name": "Madhav Somani",
+    "url": "https://www.linkedin.com/in/madhavsomani"
+  },
   "license": "MIT",
   "type": "module",
   "dependencies": {

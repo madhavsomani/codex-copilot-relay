@@ -13,8 +13,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     h1, h2, h3, p { margin: 0; }
     h1 { font-size: 24px; letter-spacing: -.03em; }
     h2 { font-size: 15px; }
-    .subtitle, .muted { color: var(--muted); }
+    .subtitle, .byline, .muted { color: var(--muted); }
     .subtitle { margin-top: 5px; }
+    .byline { display: flex; align-items: center; gap: 5px; margin-top: 7px; font-size: 12px; }
+    .byline a { color: var(--accent); font-weight: 650; text-decoration: none; }
+    .byline a:hover, .byline a:focus-visible { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
     button { border: 1px solid #3d5a85; border-radius: 8px; color: var(--text); background: #1a2a48; padding: 9px 13px; cursor: pointer; }
     button:hover { background: #243d65; }
     main { max-width: 1500px; margin: 0 auto; padding: 22px 32px 42px; }
@@ -51,7 +54,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 <body>
   <header>
     <div class="topline">
-      <div><h1>Codex Copilot Relay</h1><p class="subtitle">Transparent localhost Responses gateway with Copilot-backed inference</p></div>
+      <div>
+        <h1>Codex Copilot Relay</h1>
+        <p class="subtitle">Transparent localhost Responses gateway with Copilot-backed inference</p>
+        <p class="byline">Created by <a href="https://www.linkedin.com/in/madhavsomani" target="_blank" rel="noopener noreferrer" aria-label="Madhav Somani on LinkedIn">Madhav Somani</a><span aria-hidden="true">↗</span></p>
+      </div>
       <button id="clear">Clear local history</button>
     </div>
   </header>
