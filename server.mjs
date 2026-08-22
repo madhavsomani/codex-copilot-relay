@@ -12,6 +12,7 @@ import {
   startSseHeartbeat,
 } from "./exchange-lifecycle.mjs";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
+import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import {
   assertSerializedContextWithinLimit,
@@ -83,6 +84,12 @@ const maxSerializedContextChars = environmentInteger(
   256_000,
   4_000_000,
 );
+const maxRequestBodyBytes = environmentInteger(
+  "BRIDGE_MAX_REQUEST_BODY_BYTES",
+  128 * 1024 * 1024,
+  1024 * 1024,
+  512 * 1024 * 1024,
+);
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
 const recorder = new ProxyRecorder({
   filePath: path.join(runtimeDirectory, "proxy-events.jsonl"),
@@ -100,9 +107,9 @@ function log(type, fields = {}) {
   })}\n`);
 }
 
-function sendJson(response, status, body) {
+function sendJson(response, status, body, headers = {}) {
   if (response.writableEnded) return;
-  response.writeHead(status, { "content-type": "application/json" });
+  response.writeHead(status, { "content-type": "application/json", ...headers });
   response.end(`${JSON.stringify(body)}\n`);
 }
 
@@ -130,22 +137,6 @@ function authorized(request) {
   const supplied = Buffer.from(authorization.slice(prefix.length));
   const expected = Buffer.from(expectedToken);
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-}
-
-async function readJsonBody(request, maxBytes = 32 * 1024 * 1024) {
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of request) {
-    total += chunk.length;
-    if (total > maxBytes) throw new Error("Request body is too large.");
-    chunks.push(chunk);
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
-  try {
-    return { body: JSON.parse(text), bytes: total };
-  } catch {
-    throw new Error("Request body is not valid JSON.");
-  }
 }
 
 class ResponseSink {
@@ -884,6 +875,7 @@ const server = http.createServer(async (request, response) => {
         sdkSystemMessageMode: "replace",
         sdkAutomaticContextCompaction: true,
         contextGuard: bridgeContextDefaults,
+        maxRequestBodyBytes,
         maxSerializedContextChars,
       },
       metering: "GitHub Copilot allowance applies",
@@ -931,9 +923,22 @@ const server = http.createServer(async (request, response) => {
 
   let parsedBody;
   try {
-    parsedBody = await readJsonBody(request);
+    parsedBody = await readJsonBody(request, { maxBytes: maxRequestBodyBytes });
   } catch (error) {
-    return sendJson(response, 400, errorPayload(error, "invalid_json"));
+    const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
+    const code = typeof error?.code === "string" ? error.code : "invalid_json";
+    log("bridge.request_rejected", {
+      statusCode,
+      code,
+      receivedBytes: error?.receivedBytes ?? null,
+      limitBytes: error?.limitBytes ?? maxRequestBodyBytes,
+    });
+    return sendJson(
+      response,
+      statusCode,
+      errorPayload(error, code),
+      statusCode === 413 ? { connection: "close" } : {},
+    );
   }
 
   const body = parsedBody.body;
@@ -966,6 +971,7 @@ server.listen(port, host, () => {
     model: defaultModel,
     models: availableOpenAiModels,
     authenticated: Boolean(expectedToken),
+    maxRequestBodyBytes,
   });
 });
 

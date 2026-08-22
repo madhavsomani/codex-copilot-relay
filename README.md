@@ -59,6 +59,8 @@ Protocol or product changes can require updates to the relay.
 - Oversized historical text tool results are bounded with head and tail context preserved
 - Aggregate history is compacted into a bounded continuity ledger before it can
   overflow the configured model-context guard
+- A bounded 128 MiB request envelope lets media-heavy Codex history reach the
+  compactor instead of failing at the old 32 MiB HTTP-reader ceiling
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
 - Local dashboard with sanitized request, replay, latency, and tool metadata
@@ -324,6 +326,19 @@ compaction occurs.
 The hard rejection remains as a last resort when fixed instructions/tool schemas
 or the mandatory current request and newest tool chain cannot fit under the
 ceiling. Raising the limit does not increase the upstream model's context window.
+
+Codex resends its full task envelope before the relay can compact it. Drive,
+browser, and image tools can place large base64 results in that local history, so
+the relay accepts up to 128 MiB by default and then applies the separate
+1,000,000-character model-context guard described above. The raw envelope is
+never forwarded unchanged to Copilot. The effective limit is reported by
+`/health` as `reliability.maxRequestBodyBytes`.
+
+For an unusual workload, set `BRIDGE_MAX_REQUEST_BODY_BYTES` before starting the
+relay. Values are clamped between 1 MiB and 512 MiB; the limit is deliberately
+bounded because concurrent requests occupy local memory while JSON is parsed.
+Prefer connector calls that omit unneeded base64 media, and start a fresh Codex
+task if even the bounded envelope is exhausted.
 
 ## Security model
 
