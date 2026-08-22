@@ -8,8 +8,11 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: windows-latest
+  node:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,10 +21,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - name: PowerShell configuration safety tests
+      - run: npm run probe:codex-heartbeat
+      - if: runner.os == 'Windows'
+        name: PowerShell configuration safety tests
         shell: powershell
         run: .\proxy-config.test.ps1
-      - name: Parse every PowerShell script
+      - if: runner.os == 'Windows'
+        name: Parse every PowerShell script
         shell: powershell
         run: |
           $failed = $false

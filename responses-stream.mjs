@@ -30,10 +30,8 @@ export class ResponsesEventStream {
     this.sequenceNumber += 1;
   }
 
-  start() {
-    if (this.started) return;
-    this.started = true;
-    const response = makeResponseObject({
+  makeInProgressResponse() {
+    return makeResponseObject({
       responseId: this.responseId,
       model: this.model,
       output: [],
@@ -41,8 +39,26 @@ export class ResponsesEventStream {
       requestBody: this.requestBody,
       status: "in_progress",
     });
+  }
+
+  start() {
+    if (this.started) return;
+    this.started = true;
+    const response = this.makeInProgressResponse();
     this.emit({ type: "response.created", response });
     this.emit({ type: "response.in_progress", response });
+  }
+
+  heartbeat() {
+    if (!this.started || this.closed) return;
+    this.emit({
+      type: "response.in_progress",
+      response: this.makeInProgressResponse(),
+    });
+  }
+
+  close() {
+    this.closed = true;
   }
 
   ensureTextItem() {

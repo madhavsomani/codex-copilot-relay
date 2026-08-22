@@ -151,15 +151,18 @@ export class SlidingDeadline {
 
 export function startSseHeartbeat(response, {
   intervalMs = DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
+  emitHeartbeat,
   setIntervalFn = setInterval,
   clearIntervalFn = clearInterval,
 } = {}) {
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return () => {};
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0 || typeof emitHeartbeat !== "function") {
+    return () => {};
+  }
 
   let stopped = false;
   const timer = setIntervalFn(() => {
     if (stopped || response.writableEnded || response.destroyed) return;
-    response.write(": keep-alive\n\n");
+    emitHeartbeat();
   }, intervalMs);
   timer?.unref?.();
 
@@ -170,4 +173,24 @@ export function startSseHeartbeat(response, {
   };
   response.once?.("close", stop);
   return stop;
+}
+
+export function observeClientDisconnect(response, { isClosed, onDisconnect }) {
+  if (typeof isClosed !== "function" || typeof onDisconnect !== "function") {
+    throw new TypeError("Client disconnect observation requires isClosed and onDisconnect callbacks.");
+  }
+
+  let stopped = false;
+  const handleClose = () => {
+    if (stopped || isClosed()) return;
+    stopped = true;
+    onDisconnect();
+  };
+  response.once?.("close", handleClose);
+
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    response.off?.("close", handleClose);
+  };
 }

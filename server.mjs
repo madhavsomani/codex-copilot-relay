@@ -7,6 +7,7 @@ import {
   BlankCompletionGuard,
   PrematureCompletionGuard,
   SlidingDeadline,
+  observeClientDisconnect,
   resolveAssistantContent,
   startSseHeartbeat,
 } from "./exchange-lifecycle.mjs";
@@ -157,7 +158,15 @@ class ResponseSink {
     this.streaming = requestBody.stream !== false;
     this.closed = false;
     this.stopHeartbeat = () => {};
+    this.stopDisconnectObserver = () => {};
+    this.disconnectHandler = null;
+    this.disconnectError = null;
     this.eventStream = null;
+
+    this.stopDisconnectObserver = observeClientDisconnect(response, {
+      isClosed: () => this.closed,
+      onDisconnect: () => this.handleClientDisconnect(),
+    });
 
     if (this.streaming) {
       response.writeHead(200, {
@@ -175,8 +184,32 @@ class ResponseSink {
       this.eventStream.start();
       this.stopHeartbeat = startSseHeartbeat(response, {
         intervalMs: sseHeartbeatIntervalMs,
+        emitHeartbeat: () => this.eventStream.heartbeat(),
       });
     }
+  }
+
+  setClientDisconnectHandler(handler) {
+    this.disconnectHandler = handler;
+    if (this.disconnectError) handler(this.disconnectError);
+  }
+
+  handleClientDisconnect() {
+    if (this.closed) return;
+    this.closed = true;
+    this.stopHeartbeat();
+    this.eventStream?.close();
+    this.disconnectError = new Error("Codex client disconnected before the Responses stream completed.");
+    recorder.finish(this.record, {
+      status: "failed",
+      selectedModel: this.model,
+      error: this.disconnectError,
+    });
+    log("response.client_disconnected", {
+      responseId: this.responseId,
+      model: this.model,
+    });
+    this.disconnectHandler?.(this.disconnectError);
   }
 
   setModel(model) {
@@ -204,6 +237,7 @@ class ResponseSink {
     if (this.closed) return;
     this.closed = true;
     this.stopHeartbeat();
+    this.stopDisconnectObserver();
     const responseObject = this.streaming
       ? this.eventStream.complete(output, usage)
       : makeResponseObject({
@@ -231,6 +265,7 @@ class ResponseSink {
     if (this.closed) return;
     this.closed = true;
     this.stopHeartbeat();
+    this.stopDisconnectObserver();
     const payload = errorPayload(error, code);
     const responseErrorCode = classifyResponseFailureCode(payload.error.message);
     const failedResponse = makeFailedResponseObject({
@@ -311,6 +346,23 @@ class Exchange {
     this.pendingFinalMessage = null;
     this.prematureGuard.reset();
     this.armModelDeadline();
+    sink.setClientDisconnectHandler((error) => this.clientDisconnected(sink, error));
+    return !this.done;
+  }
+
+  clientDisconnected(sink, error) {
+    if (this.done || this.sink !== sink) return;
+    this.done = true;
+    this.deadline.stop();
+    this.sink = null;
+    log("exchange.error", {
+      responseId: sink.responseId,
+      model: this.model,
+      code: "client_disconnected",
+      message: error.message,
+    });
+    void this.session.abort().catch(() => {});
+    void this.disconnect();
   }
 
   armModelDeadline() {
@@ -723,7 +775,7 @@ async function startExchange(body, sink) {
     },
   );
   exchanges.add(exchange);
-  exchange.attachSink(sink);
+  if (!exchange.attachSink(sink)) return;
   recorder.replay(sink.record, {
     phase: "initial",
     model,
@@ -783,7 +835,7 @@ async function continueExchange(body, sink, toolOutputs) {
   }
 
   sink.setModel(exchange.model);
-  exchange.attachSink(sink);
+  if (!exchange.attachSink(sink)) return;
   exchangesByResponseId.set(sink.responseId, exchange);
   sink.record.continuedFrom = body.previous_response_id ?? null;
   recorder.replay(sink.record, {
@@ -822,6 +874,7 @@ const server = http.createServer(async (request, response) => {
         outerToolTimeoutMs: toolResultTimeoutMs,
         copilotSessionIdleTimeoutSeconds,
         sseHeartbeatIntervalMs,
+        sseHeartbeatFormat: "response.in_progress",
         responsesStreamingLifecycle: "full",
         sdkSystemMessageMode: "replace",
         sdkAutomaticContextCompaction: true,

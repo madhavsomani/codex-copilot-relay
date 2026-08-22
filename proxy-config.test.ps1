@@ -22,6 +22,12 @@ try {
     if ($missingProvider -or $missingBaseUrl) {
         throw 'The managed provider block was not written.'
     }
+    if ($enabledText -notmatch '(?m)^stream_max_retries = 3\r?$') {
+        throw 'The managed provider did not enable bounded stream retries.'
+    }
+    if ($enabledText -notmatch '(?m)^stream_idle_timeout_ms = 900000\r?$') {
+        throw 'The managed provider did not install the resilient stream idle safety net.'
+    }
 
     $embeddedState = Get-CodexCopilotEmbeddedState -ConfigPath $configPath
     if (-not $embeddedState -or $embeddedState.OriginalModelLine -ne 'model = "gpt-5.6-luna"') {

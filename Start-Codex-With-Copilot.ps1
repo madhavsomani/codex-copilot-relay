@@ -146,8 +146,8 @@ try {
         "wire_api='responses',",
         'requires_openai_auth=false,',
         'request_max_retries=0,',
-        'stream_max_retries=0,',
-        'stream_idle_timeout_ms=120000',
+        'stream_max_retries=3,',
+        'stream_idle_timeout_ms=900000',
         '}'
     ) -join ''
 

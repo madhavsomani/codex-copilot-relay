@@ -4,6 +4,7 @@ import {
   BlankCompletionGuard,
   PrematureCompletionGuard,
   SlidingDeadline,
+  observeClientDisconnect,
   resolveAssistantContent,
   startSseHeartbeat,
 } from "./exchange-lifecycle.mjs";
@@ -157,19 +158,19 @@ test("premature completion recovery is bounded and does not affect answers", () 
 });
 
 test("SSE heartbeat keeps a quiet streaming response active", () => {
-  const writes = [];
+  let heartbeats = 0;
   const listeners = new Map();
   let tick;
   let cleared = false;
   const response = {
     writableEnded: false,
     destroyed: false,
-    write: (value) => writes.push(value),
     once: (event, callback) => listeners.set(event, callback),
   };
 
   const stop = startSseHeartbeat(response, {
     intervalMs: 15_000,
+    emitHeartbeat: () => { heartbeats += 1; },
     setIntervalFn: (callback) => {
       tick = callback;
       return { unref() {} };
@@ -178,8 +179,41 @@ test("SSE heartbeat keeps a quiet streaming response active", () => {
   });
 
   tick();
-  assert.deepEqual(writes, [": keep-alive\n\n"]);
+  assert.equal(heartbeats, 1);
   listeners.get("close")();
   assert.equal(cleared, true);
   stop();
+});
+
+test("client disconnect observer distinguishes an abandoned stream from a normal close", () => {
+  const listeners = new Map();
+  let closedNormally = false;
+  let abandoned = 0;
+  const response = {
+    once: (event, callback) => listeners.set(event, callback),
+    off: (event, callback) => {
+      if (listeners.get(event) === callback) listeners.delete(event);
+    },
+  };
+
+  const stop = observeClientDisconnect(response, {
+    isClosed: () => closedNormally,
+    onDisconnect: () => { abandoned += 1; },
+  });
+  listeners.get("close")();
+  assert.equal(abandoned, 1);
+  stop();
+
+  const normalListeners = new Map();
+  const normalResponse = {
+    once: (event, callback) => normalListeners.set(event, callback),
+    off: () => {},
+  };
+  observeClientDisconnect(normalResponse, {
+    isClosed: () => closedNormally,
+    onDisconnect: () => { abandoned += 1; },
+  });
+  closedNormally = true;
+  normalListeners.get("close")();
+  assert.equal(abandoned, 1);
 });

@@ -67,15 +67,41 @@ Protocol or product changes can require updates to the relay.
 
 ## Requirements
 
-- Windows 10 or 11
-- Node.js 20.19+ or 22.12+
-- A GitHub account with an active Copilot entitlement
-- A model made available to that account by GitHub Copilot
+- [Node.js](https://nodejs.org/en/download) 20.19+ or 22.12+ (Node 22 LTS is recommended)
+- Git
+- A GitHub account with a Copilot plan; organization-managed accounts also need
+  the Copilot CLI policy enabled
+- A GPT model exposed to that account by GitHub Copilot
 - Codex desktop or CLI with custom Responses-provider support
 
-## Install
+The durable shortcuts, watchdog, automatic `config.toml` backup, and exact
+restore are Windows 10/11 features. The Node relay itself can be started
+manually on macOS or Linux; see [Manual cross-platform setup](#manual-cross-platform-setup).
 
-Clone the repository and install the pinned dependencies:
+## Windows: complete setup
+
+### 1. Install and authenticate GitHub Copilot CLI
+
+GitHub's current cross-platform installation requires Node.js 22 or later:
+
+```powershell
+npm install -g @github/copilot
+copilot login
+copilot --version
+```
+
+Follow the browser device-login flow. The OAuth credential is stored by
+Copilot CLI in Windows Credential Manager; this project does not copy it into
+the relay folder. GitHub CLI authentication (`gh auth login`) is also supported
+as a lower-priority fallback.
+
+Official references:
+
+- [Install and start GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started)
+- [Authenticate GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)
+- [How Copilot SDK authentication works](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate)
+
+### 2. Clone and install the relay
 
 ```powershell
 git clone https://github.com/madhavsomani/codex-copilot-relay.git
@@ -83,15 +109,26 @@ cd codex-copilot-relay
 npm ci
 ```
 
-Authenticate GitHub Copilot CLI if the SDK cannot find an existing sign-in.
-The Node.js SDK bundles the Copilot CLI runtime, but a valid Copilot identity is
-still required.
+The official Node SDK bundles its compatible Copilot CLI runtime. Installing the
+global CLI above gives users the supported login command and writes the shared
+signed-in identity that the SDK uses.
 
-## Persistent desktop setup
-
-From PowerShell:
+### 3. Verify authentication and model access
 
 ```powershell
+npm run probe -- --model gpt-5.6-sol
+```
+
+The command prints model metadata and exits successfully when the signed-in
+account exposes that model. If it reports a list of other GPT models, use one
+of those model IDs consistently in the commands below.
+
+### 4. Enable the durable gateway
+
+Open PowerShell in the cloned folder. Administrator privileges are not needed.
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
 .\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-5.6-sol
 ```
 
@@ -105,8 +142,33 @@ This command:
 6. Installs **Start or Repair Codex Copilot Bridge** and
    **Restore Normal Codex (Disable Copilot Bridge)** on the Desktop.
 
-Reopen the Codex task after switching providers so the app server reloads
-`config.toml`.
+The managed provider includes these reliability controls:
+
+```toml
+request_max_retries = 0
+stream_max_retries = 3
+stream_idle_timeout_ms = 900000
+```
+
+The relay emits a valid sequenced `response.in_progress` SSE event every 15
+seconds during quiet model work. The 15-minute Codex idle timeout is a safety
+net, not the normal keepalive mechanism. Bounded stream retries handle a
+dropped loopback stream without creating an unbounded retry loop.
+
+### 5. Reopen Codex and verify routing
+
+Close and reopen the Codex task after switching providers so the app server
+reloads `config.toml`, then run:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:4144/health
+npm run probe:stream -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
+npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gpt-5.6-sol
+```
+
+Open <http://127.0.0.1:4144/dashboard> to inspect sanitized local request and
+tool-call activity. A healthy relay reports `sseHeartbeatFormat` as
+`response.in_progress` and accepts concurrent exchanges.
 
 ## Restore normal Codex
 
@@ -122,6 +184,49 @@ verifies the saved backup hash, and restores the complete pre-enable
 
 Because restoration is exact, deliberate changes made to `config.toml` while
 the relay is enabled are replaced by the saved baseline.
+
+The Start/Repair shortcut can enable the relay again later. Closing only the
+visible terminal does not disable it: the watchdog reopens the terminal and
+keeps the relay available. The Restore shortcut is the intentional off switch.
+
+## Manual cross-platform setup
+
+Windows users should prefer the automated flow above. On macOS or Linux, or
+when you do not want the Windows watchdog, use this manual flow.
+
+1. Install/authenticate Copilot CLI, clone the repository, run `npm ci`, and
+   verify the selected model with `npm run probe -- --model MODEL_ID`.
+2. Back up `~/.codex/config.toml` somewhere private.
+3. Start the relay and keep that terminal open:
+
+   ```bash
+   BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-5.6-sol node server.mjs
+   ```
+
+4. Update the existing top-level `model` and `model_provider` values in
+   `~/.codex/config.toml`, then add the provider block once:
+
+   ```toml
+   model = "gpt-5.6-sol"
+   model_provider = "github_copilot_bridge"
+
+   [model_providers.github_copilot_bridge]
+   name = "GitHub Copilot local bridge"
+   base_url = "http://127.0.0.1:4144/v1"
+   wire_api = "responses"
+   requires_openai_auth = false
+   request_max_retries = 0
+   stream_max_retries = 3
+   stream_idle_timeout_ms = 900000
+   ```
+
+5. Reopen the Codex task and run the health and streaming probes shown above.
+6. To stop, terminate `node server.mjs` and restore the private config backup.
+
+The provider fields are defined by Codex's official
+[configuration schema](https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json).
+The manual flow has no crash watchdog and cannot restore configuration
+automatically.
 
 ## Dashboard and health
 
@@ -154,6 +259,8 @@ session.
 ```powershell
 npm test
 .\proxy-config.test.ps1
+npm run probe:codex-heartbeat
+npm run probe:client-disconnect -- --url http://127.0.0.1:4144 --model gpt-5.6-sol
 npm run probe:stream -- --url http://127.0.0.1:4144/v1
 npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gpt-5.6-sol
 npm run probe:tools-relay -- --url http://127.0.0.1:4144/v1 --steps 6 --model gpt-5.6-sol
@@ -162,10 +269,14 @@ npm run probe:delayed-tool -- --url http://127.0.0.1:4144/v1 --delay-ms 31000
 npm run probe:failure-stream -- --url http://127.0.0.1:4144/v1
 ```
 
-The live probes consume Copilot allowance. Unit and configuration tests do not
-make model calls. Together, the probes verify ordered Responses streaming,
-parallel requests, a multi-turn tool chain, progress-only recovery, delayed
-outer-tool continuation, and a well-formed terminal failure.
+The live probes consume Copilot allowance. Unit, configuration, and
+`probe:codex-heartbeat` tests do not make Copilot model calls. The heartbeat
+probe runs a real Codex client against a deterministic local Responses server:
+Codex has a 1-second idle timeout, receives no model text for 4 seconds, and
+must remain connected through parsed heartbeat events. Together, the probes
+verify ordered streaming, abandoned-client cleanup, parallel requests, a
+multi-turn tool chain, progress-only recovery, delayed outer-tool continuation,
+and a well-formed terminal failure.
 
 The default 13-hour outer-tool result window lets a single Codex exchange wait
 through a 12-hour local render, browser operation, or child-agent task. It does
@@ -173,6 +284,12 @@ not create artificial follow-up turns after Codex has genuinely completed a
 task, and it cannot override GitHub account limits, model limits, outages, or
 service policy. Override it with `BRIDGE_TOOL_RESULT_TIMEOUT_MS` if a different
 local ceiling is required.
+
+The watchdog recovers the gateway for new calls after a process or terminal
+failure. In-memory exchanges cannot survive a relay process crash, machine
+sleep/network loss, an upstream Copilot outage, quota exhaustion, or a model
+context limit. Long-running work should still produce checkpoints and durable
+artifacts so Codex can resume safely after any external interruption.
 
 The context guard keeps up to 12 historical image attachments (16 MiB of
 base64 data in total), limits each historical text tool result to 64 KiB, and

@@ -12,6 +12,8 @@
     "probe:premature-recovery": "node probe-premature-recovery.mjs",
     "probe:delayed-tool": "node probe-delayed-tool.mjs",
     "probe:failure-stream": "node probe-failure-stream.mjs",
+    "probe:codex-heartbeat": "node probe-codex-heartbeat.mjs",
+    "probe:client-disconnect": "node probe-client-disconnect.mjs",
     "start": "node server.mjs",
     "test": "node --test"
   },

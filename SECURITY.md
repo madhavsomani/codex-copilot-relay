@@ -18,6 +18,9 @@ along with environment files, logs, backups, and installed dependencies.
 
 The relay does not intentionally copy GitHub Copilot OAuth credentials into its
 own files. Authentication is handled by the official GitHub Copilot SDK/CLI.
+Interactive Copilot OAuth credentials should remain in the operating system
+keychain. Do not add tokens to `.env`, scripts, command history, issue reports,
+or Codex `config.toml`; the normal personal setup does not require one.
 
 Codex child-agent tool declarations can include an `encrypted` annotation that
 is specific to the OpenAI provider. Copilot cannot decrypt that provider
@@ -31,3 +34,20 @@ reason the listener must never be exposed to a LAN, public tunnel, or proxy.
 Do not paste secrets, private prompts, config backups, or raw runtime logs into
 a public issue. Provide a minimal reproduction with sensitive data removed.
 If a credential was exposed, revoke or rotate it before reporting the issue.
+
+For a vulnerability that should not be public, use the repository's **Security**
+tab and **Report a vulnerability** to open a private security advisory. Include
+only the minimum sanitized reproduction needed to investigate it.
+
+## Maintainer release checks
+
+Before a public release:
+
+1. Run `npm ci`, `npm test`, `npm run probe:codex-heartbeat`, and
+   `./proxy-config.test.ps1` on Windows.
+2. Run a secret scanner against both the working tree and all reachable Git
+   history, with findings redacted.
+3. Confirm `git ls-files` contains no `runtime/`, `.env`, logs, config backup,
+   PID file, installed dependency, or captured prompt data.
+4. Run `npm audit --omit=dev` and review dependency changes.
+5. Verify the listener still binds only to `127.0.0.1`.

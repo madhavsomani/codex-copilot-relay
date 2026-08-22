@@ -39,6 +39,30 @@ test("emits the standard Responses text streaming lifecycle in order", () => {
   assert.equal(completed.id, "resp-test");
 });
 
+test("emits a harmless sequenced Responses event as an application heartbeat", () => {
+  const events = [];
+  const stream = new ResponsesEventStream({
+    responseId: "resp-heartbeat",
+    model: "gpt-5.6-sol",
+    requestBody: { model: "gpt-5.6-sol", stream: true },
+    emit: (event) => events.push(event),
+  });
+
+  stream.start();
+  stream.heartbeat();
+  stream.heartbeat();
+
+  assert.deepEqual(events.map((event) => event.type), [
+    "response.created",
+    "response.in_progress",
+    "response.in_progress",
+    "response.in_progress",
+  ]);
+  assert.deepEqual(events.map((event) => event.sequence_number), [0, 1, 2, 3]);
+  assert.equal(events.at(-1).response.id, "resp-heartbeat");
+  assert.equal(events.at(-1).response.status, "in_progress");
+});
+
 test("emits tool items before the terminal completed event", () => {
   const events = [];
   const stream = new ResponsesEventStream({
