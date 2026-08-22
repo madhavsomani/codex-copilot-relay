@@ -17,11 +17,17 @@ const SUPPORTED_REASONING_EFFORTS = new Set([
 ]);
 const ACTION_REQUEST = /\b(?:cont\w*|resume|proceed|keep\s+(?:going|working)|finish|complete|fix|debug|investigate|test|run|execute|create|build|make|edit|render|generate|open|check|verify|deploy|implement|cut|produce|restore|start|take|use|show|do\s+it|go\s+ahead)\b/i;
 const MAX_LATEST_USER_ECHO_CHARS = 16 * 1024;
+const HISTORY_COMPACTION_TARGET_RATIO = 0.9;
+const MAX_HISTORY_COMPACTION_LEDGER_CHARS = 48 * 1024;
+const MIN_RECENT_HISTORY_ENTRIES = 3;
 
 export const bridgeContextDefaults = Object.freeze({
   historyToolOutputChars: MAX_HISTORY_TOOL_OUTPUT_CHARS,
   imageAttachments: MAX_IMAGE_ATTACHMENTS,
   attachmentBase64Chars: MAX_ATTACHMENT_BASE64_CHARS,
+  aggregateTargetRatio: HISTORY_COMPACTION_TARGET_RATIO,
+  compactionLedgerChars: MAX_HISTORY_COMPACTION_LEDGER_CHARS,
+  minimumRecentEntries: MIN_RECENT_HISTORY_ENTRIES,
 });
 
 function shortHash(value) {
@@ -334,7 +340,188 @@ function decodeBasicXml(value) {
     .replaceAll("&#39;", "'");
 }
 
-export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()) {
+function compactLedgerText(value, maxChars = 768) {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  if (text.length <= maxChars) return text;
+  const marker = `...[${text.length - maxChars} chars omitted]...`;
+  const available = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(available * 0.7);
+  const tailChars = available - headChars;
+  return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`;
+}
+
+function summarizeHistoryEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  if (["user", "assistant"].includes(entry.role) && typeof entry.content === "string") {
+    return {
+      role: entry.role,
+      content: compactLedgerText(entry.content),
+    };
+  }
+  if (entry.role === "assistant_tool_call") {
+    return {
+      role: entry.role,
+      namespace: entry.namespace ?? null,
+      name: entry.name ?? null,
+      call_id: entry.call_id ?? null,
+    };
+  }
+  if (entry.role === "tool") {
+    return {
+      role: entry.role,
+      call_id: entry.call_id ?? null,
+      success: entry.success ?? null,
+      output_chars: String(entry.output ?? "").length,
+    };
+  }
+  return null;
+}
+
+function makeHistoryCompactionEntry(omittedEntries, maxChars) {
+  const serializedLengths = omittedEntries.map((entry) => JSON.stringify(entry).length);
+  const base = {
+    role: "system",
+    source: "bridge_context_compaction",
+    omitted_entries: omittedEntries.length,
+    omitted_chars: serializedLengths.reduce((total, value) => total + value, 0),
+    content: "The bridge compacted older transport history to stay within the model context ceiling. Preserve the latest user request and retained recent tool chain. Inspect durable artifacts or request focused evidence before repeating omitted work.",
+    milestones: [],
+  };
+  const summaries = omittedEntries
+    .map((entry, index) => ({ index, summary: summarizeHistoryEntry(entry) }))
+    .filter((item) => item.summary);
+  const selectedIndices = new Set([
+    ...summaries.slice(0, 4).map((item) => item.index),
+    ...summaries.slice(-48).map((item) => item.index),
+  ]);
+
+  for (const item of summaries) {
+    if (!selectedIndices.has(item.index)) continue;
+    const candidate = {
+      ...base,
+      milestones: [...base.milestones, { original_index: item.index, ...item.summary }],
+    };
+    if (JSON.stringify(candidate).length > maxChars) break;
+    base.milestones.push({ original_index: item.index, ...item.summary });
+  }
+  return base;
+}
+
+function buildConversationPrompt(transcript, latestUserEcho) {
+  return [
+    "The outer harness supplied the following conversation history as JSON. Preserve the roles represented by each entry.",
+    JSON.stringify(transcript),
+    `Latest outer user request (repeat for salience):\n${latestUserEcho || "[No plain-text user message was supplied.]"}`,
+    [
+      "Continue the conversation as the assistant. Do not reproduce the JSON wrapper or role labels.",
+      "A progress update by itself is not completion when requested work remains.",
+      "If the latest request asks you to perform, resume, or continue work and an outer tool can advance it, include any concise progress note and request the next necessary outer tool in this same turn.",
+      "Return text without a tool request only when the requested work is actually complete, the question is fully answered, or progress genuinely requires user input or approval.",
+    ].join("\n"),
+  ].join("\n\n");
+}
+
+function compactTranscriptWithinBudget({
+  transcript,
+  latestUserEcho,
+  systemContent,
+  contextStats,
+  maxSerializedTextChars,
+  toolDefinitionChars,
+}) {
+  const fullPrompt = buildConversationPrompt(transcript, latestUserEcho);
+  contextStats.retainedHistoryEntries = transcript.length;
+  const maxChars = Number(maxSerializedTextChars);
+  const schemaChars = Number.isFinite(Number(toolDefinitionChars))
+    ? Math.max(0, Number(toolDefinitionChars))
+    : 2;
+  if (!Number.isFinite(maxChars) || maxChars <= 0) return fullPrompt;
+
+  const targetSerializedTextChars = Math.floor(
+    maxChars * HISTORY_COMPACTION_TARGET_RATIO,
+  );
+  const targetPromptChars = targetSerializedTextChars
+    - systemContent.length
+    - schemaChars;
+  contextStats.preCompactionPromptChars = fullPrompt.length;
+  contextStats.targetSerializedTextChars = targetSerializedTextChars;
+  if (fullPrompt.length <= targetPromptChars) return fullPrompt;
+  if (transcript.length === 0 || targetPromptChars <= 0) {
+    contextStats.compactionBlockedReason = "fixed_overhead";
+    return fullPrompt;
+  }
+
+  const mandatoryIndices = new Set();
+  const latestUserIndex = transcript.findLastIndex((entry) =>
+    entry.role === "user" && typeof entry.content === "string");
+  if (latestUserIndex >= 0) mandatoryIndices.add(latestUserIndex);
+  for (
+    let index = Math.max(0, transcript.length - MIN_RECENT_HISTORY_ENTRIES);
+    index < transcript.length;
+    index += 1
+  ) {
+    mandatoryIndices.add(index);
+  }
+
+  let ledgerLimit = Math.min(
+    MAX_HISTORY_COMPACTION_LEDGER_CHARS,
+    Math.max(2_048, Math.floor(targetPromptChars * 0.08)),
+  );
+  const makeCandidate = (retainedIndices) => {
+    const retained = [];
+    const omitted = [];
+    for (let index = 0; index < transcript.length; index += 1) {
+      (retainedIndices.has(index) ? retained : omitted).push(transcript[index]);
+    }
+    const ledger = omitted.length
+      ? makeHistoryCompactionEntry(omitted, ledgerLimit)
+      : null;
+    const candidateTranscript = ledger ? [ledger, ...retained] : retained;
+    return {
+      ledger,
+      omitted,
+      prompt: buildConversationPrompt(candidateTranscript, latestUserEcho),
+      retained,
+    };
+  };
+
+  let retainedIndices = new Set(mandatoryIndices);
+  let candidate = makeCandidate(retainedIndices);
+  while (candidate.prompt.length > targetPromptChars && ledgerLimit > 2_048) {
+    ledgerLimit = Math.max(2_048, Math.floor(ledgerLimit / 2));
+    candidate = makeCandidate(retainedIndices);
+  }
+
+  if (candidate.prompt.length <= targetPromptChars) {
+    for (let index = transcript.length - 1; index >= 0; index -= 1) {
+      if (retainedIndices.has(index)) continue;
+      const trialIndices = new Set(retainedIndices);
+      trialIndices.add(index);
+      const trial = makeCandidate(trialIndices);
+      if (trial.prompt.length > targetPromptChars) break;
+      retainedIndices = trialIndices;
+      candidate = trial;
+    }
+  }
+
+  if (candidate.omitted.length === 0) return fullPrompt;
+  contextStats.historyCompacted = true;
+  contextStats.omittedHistoryEntries = candidate.omitted.length;
+  contextStats.omittedHistoryChars = candidate.omitted
+    .reduce((total, entry) => total + JSON.stringify(entry).length, 0);
+  contextStats.retainedHistoryEntries = candidate.retained.length;
+  contextStats.compactionLedgerChars = JSON.stringify(candidate.ledger).length;
+  if (candidate.prompt.length > targetPromptChars) {
+    contextStats.compactionBlockedReason = "mandatory_recent_history";
+  }
+  return candidate.prompt;
+}
+
+export function buildSessionInput(
+  body,
+  fallbackWorkingDirectory = process.cwd(),
+  contextBudget = {},
+) {
   const attachments = [];
   const contextStats = {
     imageAttachments: 0,
@@ -342,6 +529,11 @@ export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()
     attachmentBase64Chars: 0,
     truncatedToolOutputs: 0,
     omittedToolOutputChars: 0,
+    historyCompacted: false,
+    omittedHistoryEntries: 0,
+    omittedHistoryChars: 0,
+    retainedHistoryEntries: 0,
+    compactionLedgerChars: 0,
     promptChars: 0,
     systemChars: 0,
   };
@@ -404,17 +596,24 @@ export function buildSessionInput(body, fallbackWorkingDirectory = process.cwd()
       `\n--- Outer developer instruction ${index + 1} ---\n${instruction}`),
   ].join("\n");
 
-  const prompt = [
-    "The outer harness supplied the following conversation history as JSON. Preserve the roles represented by each entry.",
-    JSON.stringify(transcript),
-    `Latest outer user request (repeat for salience):\n${latestUserEcho || "[No plain-text user message was supplied.]"}`,
-    [
-      "Continue the conversation as the assistant. Do not reproduce the JSON wrapper or role labels.",
-      "A progress update by itself is not completion when requested work remains.",
-      "If the latest request asks you to perform, resume, or continue work and an outer tool can advance it, include any concise progress note and request the next necessary outer tool in this same turn.",
-      "Return text without a tool request only when the requested work is actually complete, the question is fully answered, or progress genuinely requires user input or approval.",
-    ].join("\n"),
-  ].join("\n\n");
+  const prompt = compactTranscriptWithinBudget({
+    transcript,
+    latestUserEcho,
+    systemContent,
+    contextStats,
+    maxSerializedTextChars: contextBudget.maxSerializedTextChars,
+    toolDefinitionChars: contextBudget.toolDefinitionChars,
+  });
+  const serializedContext = `${systemContent}\n${prompt}`;
+  const referencedAttachments = attachments.filter((attachment) =>
+    serializedContext.includes(`[Image attached as ${attachment.displayName}]`));
+  if (referencedAttachments.length < attachments.length) {
+    contextStats.omittedImageAttachments += attachments.length - referencedAttachments.length;
+    contextStats.imageAttachments = referencedAttachments.length;
+    contextStats.attachmentBase64Chars = referencedAttachments
+      .reduce((total, attachment) => total + String(attachment.data ?? "").length, 0);
+    attachments.splice(0, attachments.length, ...referencedAttachments);
+  }
   contextStats.promptChars = prompt.length;
   contextStats.systemChars = systemContent.length;
 

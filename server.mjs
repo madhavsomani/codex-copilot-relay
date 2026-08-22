@@ -714,7 +714,11 @@ function resolveModel(requestedModel) {
 
 async function startExchange(body, sink) {
   const declarations = extractToolDeclarations(body);
-  const sessionInput = buildSessionInput(body, fallbackWorkingDirectory);
+  const toolDefinitionChars = JSON.stringify(declarations.sdkTools).length;
+  const sessionInput = buildSessionInput(body, fallbackWorkingDirectory, {
+    maxSerializedTextChars: maxSerializedContextChars,
+    toolDefinitionChars,
+  });
   Object.assign(
     sessionInput.contextStats,
     assertSerializedContextWithinLimit(
@@ -791,7 +795,8 @@ async function startExchange(body, sink) {
     contextStats: sessionInput.contextStats,
     toolCount: declarations.sdkTools.length,
   });
-  if (sessionInput.contextStats.imageAttachments > 0
+  if (sessionInput.contextStats.historyCompacted
+    || sessionInput.contextStats.imageAttachments > 0
     || sessionInput.contextStats.omittedImageAttachments > 0
     || sessionInput.contextStats.truncatedToolOutputs > 0) {
     log("context.compacted", {

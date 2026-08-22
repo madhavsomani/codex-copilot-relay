@@ -11,4 +11,5 @@ test("dashboard visibly credits Madhav Somani and links to his LinkedIn profile"
   );
   assert.match(DASHBOARD_HTML, /target="_blank"/);
   assert.match(DASHBOARD_HTML, /rel="noopener noreferrer"/);
+  assert.match(DASHBOARD_HTML, /context: automatic bounded compaction/);
 });

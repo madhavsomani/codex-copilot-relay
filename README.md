@@ -57,6 +57,8 @@ Protocol or product changes can require updates to the relay.
 - Copilot SDK session idling disabled and automatic context compaction enabled
 - Historical tool images travel as image attachments instead of base64 prompt text
 - Oversized historical text tool results are bounded with head and tail context preserved
+- Aggregate history is compacted into a bounded continuity ledger before it can
+  overflow the configured model-context guard
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
 - Local dashboard with sanitized request, replay, latency, and tool metadata
@@ -169,6 +171,24 @@ npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gp
 Open <http://127.0.0.1:4144/dashboard> to inspect sanitized local request and
 tool-call activity. A healthy relay reports `sseHeartbeatFormat` as
 `response.in_progress` and accepts concurrent exchanges.
+
+### Local-only and mobile access
+
+Both the relay and dashboard bind to `127.0.0.1`, so they are reachable only
+from the Windows computer running the bridge. A phone cannot open that
+localhost address, and ordinary mobile Chat/Work does not read the desktop
+Codex `config.toml` custom-provider setting.
+
+If the ChatGPT mobile app shows **Remote** and this Windows Codex host is paired,
+you can steer a [supported desktop Codex task](https://help.openai.com/en/articles/20001275/)
+from the phone while the computer stays awake, online, and running Codex. The
+task still executes on the Windows host, where this local relay and provider
+configuration remain in effect. This is indirect remote control, not direct
+mobile access to the relay or dashboard.
+
+Do not port-forward the persistent relay: it intentionally has no bearer token
+in local-only mode. The source repository can be viewed from a phone after it
+is made public, but that alone does not route mobile ChatGPT through Copilot.
 
 ## Restore normal Codex
 
@@ -292,10 +312,18 @@ context limit. Long-running work should still produce checkpoints and durable
 artifacts so Codex can resume safely after any external interruption.
 
 The context guard keeps up to 12 historical image attachments (16 MiB of
-base64 data in total), limits each historical text tool result to 64 KiB, and
-rejects more than 1,000,000 serialized text characters before an upstream model
-retry loop. The dashboard and terminal report `CONTEXT OK` whenever image
-conversion or clipping is applied.
+base64 data in total) and limits each historical text tool result to 64 KiB.
+When instructions, tool schemas, and accumulated history approach 90% of the
+configured serialized-text ceiling, the relay preserves every outer instruction,
+the latest user request, and the newest tool chain while replacing older history
+with a bounded continuity ledger. Image attachments referenced only by omitted
+history are dropped. The selected dashboard record exposes retained/omitted
+entry and character counts, and the terminal reports `CONTEXT OK` when this
+compaction occurs.
+
+The hard rejection remains as a last resort when fixed instructions/tool schemas
+or the mandatory current request and newest tool chain cannot fit under the
+ceiling. Raising the limit does not increase the upstream model's context window.
 
 ## Security model
 

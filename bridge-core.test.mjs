@@ -195,6 +195,38 @@ test("moves historical tool images out of the text prompt", () => {
   assert.equal(sessionInput.contextStats.omittedImageAttachments, 0);
 });
 
+test("retains image attachments referenced by outer instructions", () => {
+  const body = {
+    instructions: [
+      {
+        type: "message",
+        content: [
+          { type: "input_text", text: "Use this reference." },
+          {
+            type: "input_image",
+            image_url: `data:image/png;base64,${"a".repeat(1_024)}`,
+          },
+        ],
+      },
+    ],
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Continue." }],
+      },
+    ],
+  };
+
+  const sessionInput = buildSessionInput(body, process.cwd(), {
+    maxSerializedTextChars: 100_000,
+    toolDefinitionChars: 2,
+  });
+  assert.equal(sessionInput.attachments.length, 1);
+  assert.match(sessionInput.systemContent, /Image attached as codex-image-1/);
+  assert.equal(sessionInput.contextStats.omittedImageAttachments, 0);
+});
+
 test("bounds oversized historical text tool outputs", () => {
   const body = {
     input: [
@@ -217,6 +249,123 @@ test("bounds oversized historical text tool outputs", () => {
   assert.match(sessionInput.prompt, /-END/);
   assert.equal(sessionInput.contextStats.truncatedToolOutputs, 1);
   assert.ok(sessionInput.contextStats.omittedToolOutputChars > 0);
+});
+
+test("compacts aggregate older history while preserving instructions and the newest tool chain", () => {
+  const input = [
+    {
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "DEV_POLICY_MUST_SURVIVE" }],
+    },
+    {
+      type: "message",
+      role: "assistant",
+      content: [
+        { type: "output_text", text: "a".repeat(2_000) },
+        {
+          type: "input_image",
+          image_url: `data:image/png;base64,${"a".repeat(1_024)}`,
+        },
+        { type: "output_text", text: "b".repeat(2_000) },
+      ],
+    },
+  ];
+  for (let index = 0; index < 27; index += 1) {
+    input.push(
+      {
+        type: "message",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: `older-user-${index}-${"u".repeat(2_000)}`,
+        }],
+      },
+      {
+        type: "custom_tool_call",
+        call_id: `old-call-${index}`,
+        namespace: "functions",
+        name: "exec",
+        input: `text('${"i".repeat(2_000)}')`,
+      },
+      {
+        type: "custom_tool_call_output",
+        call_id: `old-call-${index}`,
+        output: `OLD_RESULT_${index}_BEGIN-${"x".repeat(70_000)}-OLD_RESULT_${index}_END`,
+      },
+    );
+  }
+  input.push(
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "LATEST_USER_MUST_SURVIVE" }],
+    },
+    {
+      type: "custom_tool_call",
+      call_id: "latest-call",
+      namespace: "functions",
+      name: "exec",
+      input: "text('LATEST_TOOL_REQUEST_MUST_SURVIVE')",
+    },
+    {
+      type: "custom_tool_call_output",
+      call_id: "latest-call",
+      output: "LATEST_TOOL_RESULT_MUST_SURVIVE",
+    },
+  );
+  const body = {
+    instructions: "ROOT_POLICY_MUST_SURVIVE",
+    input,
+  };
+  const sdkTools = [{
+    name: "codex__functions__exec",
+    description: "tool-schema-".repeat(5_000),
+  }];
+  const toolDefinitionChars = JSON.stringify(sdkTools).length;
+  const maxSerializedTextChars = 1_000_000;
+
+  const unbounded = buildSessionInput(body, process.cwd());
+  assert.equal(unbounded.attachments.length, 1);
+  assert.throws(
+    () => assertSerializedContextWithinLimit(
+      unbounded,
+      sdkTools,
+      maxSerializedTextChars,
+    ),
+    /Bridge context guard rejected/,
+  );
+
+  const compacted = buildSessionInput(body, process.cwd(), {
+    maxSerializedTextChars,
+    toolDefinitionChars,
+  });
+  const measurement = assertSerializedContextWithinLimit(
+    compacted,
+    sdkTools,
+    maxSerializedTextChars,
+  );
+
+  assert.ok(measurement.serializedTextChars <= maxSerializedTextChars * 0.9);
+  assert.match(compacted.systemContent, /ROOT_POLICY_MUST_SURVIVE/);
+  assert.match(compacted.systemContent, /DEV_POLICY_MUST_SURVIVE/);
+  assert.match(compacted.prompt, /LATEST_USER_MUST_SURVIVE/);
+  assert.match(compacted.prompt, /LATEST_TOOL_REQUEST_MUST_SURVIVE/);
+  assert.match(compacted.prompt, /LATEST_TOOL_RESULT_MUST_SURVIVE/);
+  assert.match(compacted.prompt, /bridge_context_compaction/);
+  assert.doesNotMatch(compacted.prompt, /OLD_RESULT_0_BEGIN/);
+  assert.equal(compacted.contextStats.historyCompacted, true);
+  assert.equal(compacted.attachments.length, 0);
+  assert.equal(compacted.contextStats.omittedImageAttachments, 1);
+  assert.ok(compacted.contextStats.omittedHistoryEntries > 0);
+  assert.ok(compacted.contextStats.omittedHistoryChars > 0);
+  assert.ok(compacted.contextStats.retainedHistoryEntries >= 3);
+
+  const transcriptJson = compacted.prompt.match(
+    /conversation history as JSON\. Preserve the roles represented by each entry\.\n\n(\[[\s\S]*\])\n\nLatest outer user request/,
+  )?.[1];
+  assert.ok(transcriptJson);
+  assert.doesNotThrow(() => JSON.parse(transcriptJson));
 });
 
 test("maps custom and function requests back to Responses items", () => {
