@@ -13,6 +13,7 @@ $serverPath = Join-Path $bridgeRoot 'server.mjs'
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $pidPath = Join-Path $runtimeDirectory 'codex-copilot-proxy.pid'
 $stdoutLog = Join-Path $runtimeDirectory 'proxy.stdout.log'
+$processStdoutLog = Join-Path $runtimeDirectory 'proxy.process.stdout.log'
 $stderrLog = Join-Path $runtimeDirectory 'proxy.stderr.log'
 
 function Test-LocalPortInUse {
@@ -65,6 +66,13 @@ $environmentNames = @(
     'BRIDGE_DEFAULT_MODEL',
     'BRIDGE_PORT',
     'BRIDGE_WORKING_DIRECTORY',
+    'BRIDGE_EVENT_LOG_PATH',
+    'BRIDGE_EVENT_LOG_MAX_MIB',
+    'BRIDGE_HISTORY_LIMIT',
+    'BRIDGE_DETAILED_HISTORY_LIMIT',
+    'BRIDGE_HISTORY_MAX_MIB',
+    'BRIDGE_METRICS_MAX_MIB',
+    'BRIDGE_HISTORY_RECORD_MAX_KIB',
     'CODEX_COPILOT_BRIDGE_KEY'
 )
 $previousEnvironment = @{}
@@ -81,12 +89,19 @@ try {
     $env:BRIDGE_PORT = [string]$Port
     $env:BRIDGE_DEFAULT_MODEL = $Model
     $env:BRIDGE_WORKING_DIRECTORY = $env:USERPROFILE
+    $env:BRIDGE_EVENT_LOG_PATH = $stdoutLog
+    $env:BRIDGE_EVENT_LOG_MAX_MIB = '64'
+    $env:BRIDGE_HISTORY_LIMIT = '1000'
+    $env:BRIDGE_DETAILED_HISTORY_LIMIT = '200'
+    $env:BRIDGE_HISTORY_MAX_MIB = '256'
+    $env:BRIDGE_METRICS_MAX_MIB = '16'
+    $env:BRIDGE_HISTORY_RECORD_MAX_KIB = '512'
 
     $bridgeProcess = Start-Process `
         -FilePath $nodeCommand.Source `
         -ArgumentList @("`"$serverPath`"") `
         -WorkingDirectory $bridgeRoot `
-        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardOutput $processStdoutLog `
         -RedirectStandardError $stderrLog `
         -WindowStyle Hidden `
         -PassThru

@@ -14,3 +14,17 @@ test("dashboard credits the author and reports the compatibility policy", () => 
   assert.match(DASHBOARD_HTML, /compatibility: long context · Codex tools\/memory preserved/);
   assert.match(DASHBOARD_HTML, /context: bounded, salience-aware compaction/);
 });
+
+test("dashboard exposes lifetime mileage, lightweight charts, and on-demand detail", () => {
+  assert.match(DASHBOARD_HTML, /Lifetime calls received/);
+  assert.match(DASHBOARD_HTML, /id="hourly-chart"/);
+  assert.match(DASHBOARD_HTML, /id="daily-chart"/);
+  assert.match(DASHBOARD_HTML, /id="model-chart"/);
+  assert.match(DASHBOARD_HTML, /id="storage-meter"/);
+  assert.match(DASHBOARD_HTML, /1,000/);
+  assert.match(DASHBOARD_HTML, /200 detailed/);
+  assert.match(DASHBOARD_HTML, /fetch\("\/dashboard\/api\/records\//);
+  assert.doesNotMatch(DASHBOARD_HTML, /<script\s+src=/i);
+  assert.match(DASHBOARD_HTML, /Clear detailed history/);
+  assert.match(DASHBOARD_HTML, /Lifetime mileage is preserved/);
+});

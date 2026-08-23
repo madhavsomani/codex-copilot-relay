@@ -18,12 +18,22 @@ $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $pidPath = Join-Path $runtimeDirectory 'codex-copilot-watchdog.pid'
 $consolePidPath = Join-Path $runtimeDirectory 'codex-copilot-console.pid'
 $logPath = Join-Path $runtimeDirectory 'watchdog.log'
+$maxWatchdogLogBytes = 8MB
+$auxiliaryLogPaths = @(
+    (Join-Path $runtimeDirectory 'proxy.process.stdout.log'),
+    (Join-Path $runtimeDirectory 'proxy.stderr.log')
+)
+$maxAuxiliaryLogBytes = 32MB
 $mutex = [Threading.Mutex]::new($false, "Local\CodexCopilotBridgeWatchdog_$Port")
 $ownsMutex = $false
 
 function Write-WatchdogLog {
     param([Parameter(Mandatory)][string]$Message)
 
+    if ((Test-Path -LiteralPath $logPath -PathType Leaf) -and (Get-Item -LiteralPath $logPath).Length -gt $maxWatchdogLogBytes) {
+        $tail = @(Get-Content -LiteralPath $logPath -Tail 4000 -ErrorAction SilentlyContinue)
+        Set-Content -LiteralPath $logPath -Value $tail -Encoding utf8
+    }
     $line = "$(Get-Date -Format o) $Message"
     Add-Content -LiteralPath $logPath -Value $line -Encoding utf8
 }
@@ -34,6 +44,20 @@ function Get-WatchedHealth {
     }
     catch {
         return $null
+    }
+}
+
+function Limit-AuxiliaryLogs {
+    foreach ($path in $auxiliaryLogPaths) {
+        try {
+            if ((Test-Path -LiteralPath $path -PathType Leaf) -and (Get-Item -LiteralPath $path).Length -gt $maxAuxiliaryLogBytes) {
+                $tail = @(Get-Content -LiteralPath $path -Tail 4000 -ErrorAction Stop)
+                Set-Content -LiteralPath $path -Value $tail -Encoding utf8 -ErrorAction Stop
+            }
+        }
+        catch {
+            # The active process may briefly hold a redirect handle. Try again on the next watchdog pass.
+        }
     }
 }
 
@@ -101,6 +125,7 @@ try {
     Write-WatchdogLog "Watchdog started for 127.0.0.1:$Port using $Model (PID $PID)."
 
     while ($true) {
+        Limit-AuxiliaryLogs
         $health = Get-WatchedHealth
         if (-not ($health -and $health.ok -and $health.model -eq $Model)) {
             try {

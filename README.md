@@ -69,7 +69,8 @@ Protocol or product changes can require updates to the relay.
   compactor instead of failing at the old 32 MiB HTTP-reader ceiling
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
-- Local dashboard with sanitized request, replay, latency, and tool metadata
+- Lightweight analytics dashboard with 1,000 recent call entries, 200 on-demand
+  sanitized detail bodies, durable lifetime mileage, and hourly/daily/model charts
 - Visible Windows Terminal event stream
 - Watchdog recovery for both the relay and visible terminal
 - Two-click enable/restore workflow for Codex `config.toml`
@@ -177,8 +178,10 @@ npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gp
 ```
 
 Open <http://127.0.0.1:4144/dashboard> to inspect sanitized local request and
-tool-call activity. A healthy relay reports `sseHeartbeatFormat` as
-`response.in_progress` and accepts concurrent exchanges.
+tool-call activity, lifetime traffic mileage, model usage, outcomes, and bounded
+disk use. A healthy relay reports `sseHeartbeatFormat` as
+`response.in_progress`, reports its telemetry policy, and accepts concurrent
+exchanges.
 
 ### Local-only and mobile access
 
@@ -263,9 +266,36 @@ With the persistent relay running:
 - Dashboard: <http://127.0.0.1:4144/dashboard>
 - Health: <http://127.0.0.1:4144/health>
 
-The dashboard keeps a bounded, sanitized local history. It redacts common
-credential fields and token patterns, but you should still treat `runtime/` as
-private. The entire directory is excluded from Git.
+The dashboard uses two storage tiers by default:
+
+- The newest 200 calls retain bounded, sanitized request/replay/output detail.
+- The remaining 800 recent calls retain only small metadata records.
+- Lifetime received, replayed, completed, failed, tool, byte, and latency
+  counters live in a separate atomic metrics file and never decrease when old
+  detail is compacted or when **Clear detailed history** is used.
+- Hourly rollups cover 31 days, daily rollups cover up to 10 years, and model
+  totals feed dependency-free SVG/CSS charts.
+- The dashboard API returns lightweight indexes; a detailed body is fetched
+  only when a recent detailed row is selected.
+
+On the first upgrade from an older relay, the odometer is seeded from every
+record still recoverable in `proxy-events.jsonl`. Calls that an older 200-call
+recorder had already discarded cannot be reconstructed; mileage is exact and
+durable from that migration forward.
+
+Default managed storage ceilings are 256 MiB for recent history, 16 MiB for
+lifetime metrics, 64 MiB for the visible event stream, 8 MiB for watchdog
+events, and 32 MiB each for auxiliary stdout/stderr. That is roughly 408 MiB,
+comfortably below the requested 1 GiB budget. Oversized detailed records are
+bounded first, then older bodies are downgraded to metadata before any recent
+metadata would need to be dropped. The persistent launcher sets these defaults;
+advanced manual users can override `BRIDGE_HISTORY_LIMIT`,
+`BRIDGE_DETAILED_HISTORY_LIMIT`, `BRIDGE_HISTORY_MAX_MIB`,
+`BRIDGE_METRICS_MAX_MIB`, `BRIDGE_HISTORY_RECORD_MAX_KIB`, and
+`BRIDGE_EVENT_LOG_MAX_MIB` within the hard server clamps.
+
+Credential fields and common token patterns are redacted, but you should still
+treat `runtime/` as private. The entire directory is excluded from Git.
 
 ## One-shot isolated launcher
 

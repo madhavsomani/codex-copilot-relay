@@ -1,4 +1,5 @@
 import http from "node:http";
+import fs from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
@@ -92,20 +93,132 @@ const maxRequestBodyBytes = environmentInteger(
   512 * 1024 * 1024,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
+const recorderHistoryLimit = environmentInteger("BRIDGE_HISTORY_LIMIT", 1_000, 1_000, 10_000);
+const recorderDetailedLimit = environmentInteger(
+  "BRIDGE_DETAILED_HISTORY_LIMIT",
+  200,
+  25,
+  recorderHistoryLimit,
+);
+const recorderMaxHistoryBytes = environmentInteger(
+  "BRIDGE_HISTORY_MAX_MIB",
+  256,
+  32,
+  768,
+) * 1024 * 1024;
+const recorderMaxMetricsBytes = environmentInteger(
+  "BRIDGE_METRICS_MAX_MIB",
+  16,
+  1,
+  64,
+) * 1024 * 1024;
+const recorderMaxRecordBytes = environmentInteger(
+  "BRIDGE_HISTORY_RECORD_MAX_KIB",
+  512,
+  64,
+  2_048,
+) * 1024;
+const eventLogPath = process.env.BRIDGE_EVENT_LOG_PATH
+  ? path.resolve(process.env.BRIDGE_EVENT_LOG_PATH)
+  : null;
+const eventLogMaxBytes = environmentInteger(
+  "BRIDGE_EVENT_LOG_MAX_MIB",
+  64,
+  8,
+  128,
+) * 1024 * 1024;
+const watchdogLogMaxBytes = 8 * 1024 * 1024;
+const auxiliaryLogMaxBytes = 32 * 1024 * 1024;
+const telemetryDiskBudgetBytes = 1024 * 1024 * 1024;
 const recorder = new ProxyRecorder({
   filePath: path.join(runtimeDirectory, "proxy-events.jsonl"),
+  metricsFilePath: path.join(runtimeDirectory, "proxy-metrics.json"),
+  limit: recorderHistoryLimit,
+  detailedLimit: recorderDetailedLimit,
+  maxHistoryBytes: recorderMaxHistoryBytes,
+  maxMetricsBytes: recorderMaxMetricsBytes,
+  maxRecordBytes: recorderMaxRecordBytes,
 });
 
 const exchanges = new Set();
 const exchangesByCallId = new Map();
 const exchangesByResponseId = new Map();
 
+function localFileSize(filePath) {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function telemetryStorage() {
+  const recorderStorage = recorder.storage();
+  const eventLogBytes = localFileSize(eventLogPath ?? path.join(runtimeDirectory, "proxy.stdout.log"));
+  const watchdogLogBytes = localFileSize(path.join(runtimeDirectory, "watchdog.log"));
+  const processStdoutBytes = localFileSize(path.join(runtimeDirectory, "proxy.process.stdout.log"));
+  const processStderrBytes = localFileSize(path.join(runtimeDirectory, "proxy.stderr.log"));
+  const totalBytes = recorderStorage.totalBytes
+    + eventLogBytes
+    + watchdogLogBytes
+    + processStdoutBytes
+    + processStderrBytes;
+  const telemetryCapBytes = recorderStorage.telemetryCapBytes
+    + eventLogMaxBytes
+    + watchdogLogMaxBytes
+    + (2 * auxiliaryLogMaxBytes);
+  return {
+    ...recorderStorage,
+    eventLogBytes,
+    watchdogLogBytes,
+    processStdoutBytes,
+    processStderrBytes,
+    totalBytes,
+    telemetryCapBytes,
+    diskBudgetBytes: telemetryDiskBudgetBytes,
+    utilizationPercent: telemetryCapBytes
+      ? Math.min(100, Math.round((totalBytes / telemetryCapBytes) * 10_000) / 100)
+      : 0,
+  };
+}
+
+function dashboardSnapshot() {
+  const snapshot = recorder.snapshot({ includeDetails: false });
+  snapshot.storage = telemetryStorage();
+  return snapshot;
+}
+
 function log(type, fields = {}) {
-  process.stdout.write(`${JSON.stringify({
+  const line = `${JSON.stringify({
     timestamp: new Date().toISOString(),
     type,
     ...fields,
-  })}\n`);
+  })}\n`;
+  if (!eventLogPath) {
+    process.stdout.write(line);
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(eventLogPath), { recursive: true });
+    const currentBytes = fs.existsSync(eventLogPath) ? fs.statSync(eventLogPath).size : 0;
+    if (currentBytes + Buffer.byteLength(line, "utf8") > eventLogMaxBytes) {
+      const keepBytes = Math.min(8 * 1024 * 1024, Math.floor(eventLogMaxBytes / 4));
+      const existing = fs.readFileSync(eventLogPath);
+      const tail = existing.subarray(Math.max(0, existing.length - keepBytes)).toString("utf8");
+      const firstNewline = tail.indexOf("\n");
+      const retainedTail = firstNewline >= 0 ? tail.slice(firstNewline + 1) : "";
+      fs.writeFileSync(eventLogPath, `${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "event_log.compacted",
+        retainedBytes: Buffer.byteLength(retainedTail, "utf8"),
+        maxBytes: eventLogMaxBytes,
+      })}\n${retainedTail}`, "utf8");
+    }
+    fs.appendFileSync(eventLogPath, line, "utf8");
+  } catch {
+    // Logging must never affect model traffic. Fall back to the process stream.
+    process.stdout.write(line);
+  }
 }
 
 function sendJson(response, status, body, headers = {}) {
@@ -908,6 +1021,18 @@ const server = http.createServer(async (request, response) => {
         maxRequestBodyBytes,
         maxSerializedContextChars,
       },
+      telemetry: {
+        recentEntries: recorderHistoryLimit,
+        detailedEntries: recorderDetailedLimit,
+        lifetimeCounters: true,
+        hourlyRollupDays: 31,
+        dailyRollupYears: 10,
+        maxHistoryBytes: recorderMaxHistoryBytes,
+        maxMetricsBytes: recorderMaxMetricsBytes,
+        maxEventLogBytes: eventLogMaxBytes,
+        summary: recorder.summary(),
+        storage: telemetryStorage(),
+      },
       metering: "GitHub Copilot allowance applies",
     });
   }
@@ -928,7 +1053,25 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (request.method === "GET" && url.pathname === "/dashboard/api") {
-      return sendJson(response, 200, recorder.snapshot());
+      return sendJson(response, 200, dashboardSnapshot(), {
+        "cache-control": "no-store",
+      });
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/dashboard/api/records/")) {
+      let recordId;
+      try {
+        recordId = decodeURIComponent(url.pathname.slice("/dashboard/api/records/".length));
+      } catch {
+        return sendJson(response, 400, errorPayload("Invalid record identifier.", "invalid_record_id"));
+      }
+      const record = recorder.detail(recordId);
+      if (!record) return sendJson(response, 404, errorPayload("Record not found.", "not_found"));
+      return sendJson(response, 200, {
+        ok: true,
+        localOnly: true,
+        sanitized: true,
+        record,
+      }, { "cache-control": "no-store" });
     }
     if (request.method === "POST" && url.pathname === "/dashboard/clear") {
       return sendJson(response, 200, recorder.clear());

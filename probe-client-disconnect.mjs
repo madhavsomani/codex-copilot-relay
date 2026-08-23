@@ -54,7 +54,11 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
 
 const dashboardResponse = await fetch(`${rootUrl}/dashboard/api`);
 const dashboard = dashboardResponse.ok ? await dashboardResponse.json() : null;
-const latest = dashboard?.records?.[0] ?? null;
+const latestIndex = dashboard?.records?.[0] ?? null;
+const latestResponse = latestIndex?.detailAvailable
+  ? await fetch(`${rootUrl}/dashboard/api/records/${encodeURIComponent(latestIndex.id)}`)
+  : null;
+const latest = latestResponse?.ok ? (await latestResponse.json()).record : latestIndex;
 const ok = after?.activeExchanges === before.activeExchanges
   && latest?.status === "failed"
   && /disconnected/i.test(latest?.error?.message ?? "");

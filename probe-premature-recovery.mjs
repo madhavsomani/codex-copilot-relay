@@ -78,7 +78,17 @@ const normalizedFinalText = finalText.trim().replace(/[.!]+$/, "");
 
 const dashboardUrl = baseUrl.replace(/\/v1\/?$/, "/dashboard/api");
 const dashboard = await (await fetch(dashboardUrl)).json();
-const record = (dashboard.records ?? []).find((item) => item.output?.id === firstBody.id);
+let record = null;
+for (const index of dashboard.records ?? []) {
+  if (Date.parse(index.receivedAt) + 5_000 < startedAt || !index.detailAvailable) continue;
+  const detailResponse = await fetch(`${dashboardUrl}/records/${encodeURIComponent(index.id)}`);
+  if (!detailResponse.ok) continue;
+  const detail = (await detailResponse.json()).record;
+  if (detail?.output?.id === firstBody.id) {
+    record = detail;
+    break;
+  }
+}
 const recoveryReplay = (record?.copilotReplays ?? [])
   .some((item) => item.phase === "premature_completion_retry");
 const report = {
