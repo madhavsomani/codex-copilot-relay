@@ -10,6 +10,39 @@ $script:CodexCopilotBackupStateProperties = @(
     'BackupOriginalConfigExisted'
 )
 
+function Get-CodexCopilotConfigPath {
+    param(
+        [AllowEmptyString()]
+        [string]$CodexHome = $env:CODEX_HOME,
+
+        [AllowEmptyString()]
+        [string]$UserProfile = $env:USERPROFILE
+    )
+
+    $selectedHome = if ([string]::IsNullOrWhiteSpace($CodexHome)) {
+        if ([string]::IsNullOrWhiteSpace($UserProfile)) {
+            throw 'Neither CODEX_HOME nor USERPROFILE is available; the Codex config path cannot be resolved safely.'
+        }
+        Join-Path $UserProfile '.codex'
+    }
+    else {
+        [Environment]::ExpandEnvironmentVariables($CodexHome.Trim())
+    }
+
+    if ($selectedHome -eq '~' -or $selectedHome.StartsWith('~\') -or $selectedHome.StartsWith('~/')) {
+        if ([string]::IsNullOrWhiteSpace($UserProfile)) {
+            throw 'CODEX_HOME uses ~ but USERPROFILE is unavailable.'
+        }
+        $suffix = if ($selectedHome.Length -gt 1) { $selectedHome.Substring(2) } else { '' }
+        $selectedHome = if ($suffix) { Join-Path $UserProfile $suffix } else { $UserProfile }
+    }
+
+    if (-not [IO.Path]::IsPathRooted($selectedHome)) {
+        throw "CODEX_HOME must resolve to an absolute path: $selectedHome"
+    }
+    return [IO.Path]::GetFullPath((Join-Path $selectedHome 'config.toml'))
+}
+
 function Find-CodexTopLevelKeyIndex {
     param(
         [Parameter(Mandatory)]
@@ -277,7 +310,7 @@ function Set-CodexCopilotConfig {
         [int]$Port,
 
         [Parameter(Mandatory)]
-        [ValidateSet('gpt-5.6-sol', 'gpt-5.6-luna')]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
         [string]$Model,
 
         [psobject]$RestoreState
@@ -447,7 +480,7 @@ function Install-CodexCopilotStartupShortcut {
         [int]$Port,
 
         [Parameter(Mandatory)]
-        [ValidateSet('gpt-5.6-sol', 'gpt-5.6-luna')]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
         [string]$Model
     )
 
@@ -515,7 +548,7 @@ function Install-CodexCopilotAutoStart {
         [Parameter(Mandatory)][string]$WatchScript,
         [Parameter(Mandatory)][int]$Port,
         [Parameter(Mandatory)]
-        [ValidateSet('gpt-5.6-sol', 'gpt-5.6-luna')]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
         [string]$Model
     )
 
@@ -571,7 +604,7 @@ function Start-CodexCopilotAutoStart {
         [Parameter(Mandatory)][string]$WatchScript,
         [Parameter(Mandatory)][int]$Port,
         [Parameter(Mandatory)]
-        [ValidateSet('gpt-5.6-sol', 'gpt-5.6-luna')]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
         [string]$Model
     )
 
@@ -649,7 +682,7 @@ function Install-CodexCopilotDesktopShortcuts {
         [Parameter(Mandatory)][string]$DisableScript,
         [Parameter(Mandatory)][int]$Port,
         [Parameter(Mandatory)]
-        [ValidateSet('gpt-5.6-sol', 'gpt-5.6-luna')]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
         [string]$Model
     )
 

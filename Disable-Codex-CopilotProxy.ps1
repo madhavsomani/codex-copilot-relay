@@ -10,16 +10,18 @@ $stopConsoleScript = Join-Path $bridgeRoot 'Stop-Codex-CopilotGatewayConsole.ps1
 $stopScript = Join-Path $bridgeRoot 'Stop-Codex-CopilotProxy.ps1'
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $statePath = Join-Path $runtimeDirectory 'codex-copilot-proxy.state.json'
-$configPath = Join-Path $env:USERPROFILE '.codex\config.toml'
-
 if (-not (Test-Path -LiteralPath $configHelper)) {
     throw "Config helper not found: $configHelper"
 }
 . $configHelper
+$configPath = Get-CodexCopilotConfigPath
 
 $state = $null
 if (Test-Path -LiteralPath $statePath) {
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if (@($state.PSObject.Properties.Name) -contains 'ConfigPath' -and -not [string]::IsNullOrWhiteSpace([string]$state.ConfigPath)) {
+        $configPath = [IO.Path]::GetFullPath([string]$state.ConfigPath)
+    }
 }
 else {
     $state = Get-CodexCopilotEmbeddedState -ConfigPath $configPath

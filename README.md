@@ -98,6 +98,12 @@ The durable shortcuts, watchdog, automatic `config.toml` backup, and exact
 restore are Windows 10/11 features. The Node relay itself can be started
 manually on macOS or Linux; see [Manual cross-platform setup](#manual-cross-platform-setup).
 
+The Windows scripts honor `CODEX_HOME`. When it is set, they manage
+`$env:CODEX_HOME\config.toml`; otherwise they use
+`$env:USERPROFILE\.codex\config.toml`. The exact resolved path is recorded in
+the protected restore state, so disabling the relay restores the same file even
+if a repair process starts with a different environment later.
+
 ## Windows: complete setup
 
 ### 1. Install and authenticate GitHub Copilot CLI
@@ -141,7 +147,9 @@ npm run probe -- --model gpt-5.6-sol
 
 The command prints model metadata and exits successfully when the signed-in
 account exposes that model. If it reports a list of other GPT models, use one
-of those model IDs consistently in the commands below.
+of those model IDs consistently in the commands below. Windows launchers accept
+safe model IDs instead of maintaining a small hard-coded model allowlist, so a
+new SDK-exposed GPT model does not require a script update.
 
 ### 4. Enable the durable gateway
 
@@ -191,6 +199,25 @@ tool-call activity, lifetime traffic mileage, model usage, outcomes, and bounded
 disk use. A healthy relay reports `sseHeartbeatFormat` as
 `response.in_progress`, reports its telemetry policy, and accepts concurrent
 exchanges.
+
+### Update an existing relay checkout
+
+The Node process loads the bridge and dashboard modules at startup. After a
+`git pull`, restart the relay to activate a newer dashboard or server build;
+refreshing the browser alone cannot load code that the old process never read.
+Wait for active work to reach a checkpoint, then run:
+
+```powershell
+.\Stop-Codex-CopilotWatchdog.ps1
+.\Stop-Codex-CopilotGatewayConsole.ps1
+.\Stop-Codex-CopilotProxy.ps1 -Port 4144
+.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-5.6-sol
+```
+
+Use the model ID already selected for that installation. These commands keep
+`runtime\` telemetry and the protected normal-config backup intact. Do not
+restart during an in-flight tool continuation or render; an in-memory exchange
+cannot survive a process restart.
 
 ### Local-only and mobile access
 

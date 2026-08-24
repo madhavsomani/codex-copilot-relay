@@ -3,7 +3,7 @@ param(
     [ValidateRange(1024, 65535)]
     [int]$Port = 4144,
 
-    [ValidateSet('gpt-5.6-sol', 'gpt-5.6-luna')]
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
     [string]$Model = 'gpt-5.6-luna',
 
     [switch]$SkipStartup
@@ -22,12 +22,11 @@ $disableScript = Join-Path $bridgeRoot 'Disable-Codex-CopilotProxy.ps1'
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $statePath = Join-Path $runtimeDirectory 'codex-copilot-proxy.state.json'
 $backupPath = Join-Path $runtimeDirectory 'config.toml.pre-copilot.bak'
-$configPath = Join-Path $env:USERPROFILE '.codex\config.toml'
-
 if (-not (Test-Path -LiteralPath $configHelper)) {
     throw "Config helper not found: $configHelper"
 }
 . $configHelper
+$configPath = Get-CodexCopilotConfigPath
 
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 $hadState = Test-Path -LiteralPath $statePath
@@ -38,6 +37,9 @@ $watchdogStarted = $false
 try {
     if ($hadState) {
         $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        if (@($state.PSObject.Properties.Name) -contains 'ConfigPath' -and -not [string]::IsNullOrWhiteSpace([string]$state.ConfigPath)) {
+            $configPath = [IO.Path]::GetFullPath([string]$state.ConfigPath)
+        }
         if ([int]$state.Port -ne $Port -or [string]$state.Model -ne $Model) {
             throw "Codex Copilot proxy is already enabled on port $($state.Port) using $($state.Model). Disable it before changing the port or model."
         }
