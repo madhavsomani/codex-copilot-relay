@@ -13,6 +13,7 @@ const DEFAULT_MAX_METRICS_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HOURLY_RETENTION = 24 * 31;
 const DEFAULT_DAILY_RETENTION = 365 * 10;
 const DISK_BUDGET_BYTES = 1024 * 1024 * 1024;
+const METRICS_VERSION = 2;
 
 function clipString(value, maxChars) {
   if (value.length <= maxChars) return value;
@@ -101,19 +102,43 @@ function emptyCounters() {
     outputBytes: 0,
     latencyTotalMs: 0,
     latencySamples: 0,
+    meteredCalls: 0,
+    unmeteredCalls: 0,
+    sdkApiCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalNanoAiu: 0,
+    copilotCostUnits: 0,
+    apiDurationMs: 0,
+    apiEquivalentUsd: 0,
   };
+}
+
+function emptyModelCounters() {
+  const counters = emptyCounters();
+  for (const key of ["toolCalls", "inputBytes", "outputBytes", "latencyTotalMs", "latencySamples"]) {
+    delete counters[key];
+  }
+  return counters;
 }
 
 function createMetrics(now, baseline = {}) {
   const timestamp = now.toISOString();
   return {
-    version: 1,
+    version: METRICS_VERSION,
     createdAt: timestamp,
     updatedAt: timestamp,
     baseline: {
       source: baseline.source ?? "fresh",
       seededAt: timestamp,
       recoverableRecords: finiteNumber(baseline.recoverableRecords),
+      usageMeteringStartedAt: typeof baseline.usageMeteringStartedAt === "string"
+        ? baseline.usageMeteringStartedAt
+        : timestamp,
+      unmeteredBefore: finiteNumber(baseline.unmeteredBefore),
     },
     lifetime: emptyCounters(),
     hourly: Object.create(null),
@@ -145,27 +170,42 @@ function normalizeModelMap(value) {
   if (!value || typeof value !== "object") return output;
   for (const [key, counters] of Object.entries(value)) {
     if (typeof key !== "string" || !counters || typeof counters !== "object") continue;
-    output[key] = {
-      received: finiteNumber(counters.received),
-      replayed: finiteNumber(counters.replayed),
-      completed: finiteNumber(counters.completed),
-      failed: finiteNumber(counters.failed),
-    };
+    const normalized = emptyModelCounters();
+    for (const field of Object.keys(normalized)) normalized[field] = finiteNumber(counters[field]);
+    output[key] = normalized;
   }
   return output;
 }
 
 function normalizeMetrics(value, now) {
-  if (!value || typeof value !== "object" || value.version !== 1) return null;
-  const metrics = createMetrics(now, value.baseline);
+  if (!value || typeof value !== "object" || ![1, METRICS_VERSION].includes(value.version)) return null;
+  const legacyFinalized = finiteNumber(value.lifetime?.completed) + finiteNumber(value.lifetime?.failed);
+  const metrics = createMetrics(now, {
+    ...value.baseline,
+    usageMeteringStartedAt: value.version === 1
+      ? now.toISOString()
+      : value.baseline?.usageMeteringStartedAt,
+    unmeteredBefore: value.version === 1
+      ? legacyFinalized
+      : value.baseline?.unmeteredBefore,
+  });
   metrics.createdAt = typeof value.createdAt === "string" ? value.createdAt : metrics.createdAt;
   metrics.updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : metrics.updatedAt;
   metrics.baseline = {
     source: typeof value.baseline?.source === "string" ? value.baseline.source : "unknown",
     seededAt: typeof value.baseline?.seededAt === "string" ? value.baseline.seededAt : metrics.createdAt,
     recoverableRecords: finiteNumber(value.baseline?.recoverableRecords),
+    usageMeteringStartedAt: value.version === 1
+      ? now.toISOString()
+      : (typeof value.baseline?.usageMeteringStartedAt === "string"
+        ? value.baseline.usageMeteringStartedAt
+        : metrics.createdAt),
+    unmeteredBefore: value.version === 1
+      ? legacyFinalized
+      : finiteNumber(value.baseline?.unmeteredBefore),
   };
   metrics.lifetime = normalizedCounterObject(value.lifetime);
+  if (value.version === 1) metrics.lifetime.unmeteredCalls = legacyFinalized;
   metrics.hourly = normalizeBucketMap(value.hourly);
   metrics.daily = normalizeBucketMap(value.daily);
   metrics.models = normalizeModelMap(value.models);
@@ -185,10 +225,64 @@ function modelName(value) {
 
 function incrementModel(metrics, model, changes) {
   const key = modelName(model);
-  metrics.models[key] ??= { received: 0, replayed: 0, completed: 0, failed: 0 };
+  metrics.models[key] ??= emptyModelCounters();
   for (const [field, value] of Object.entries(changes)) {
     if (Number.isFinite(value) && field in metrics.models[key]) metrics.models[key][field] += value;
   }
+}
+
+function normalizedUsageSummary(value) {
+  const output = {
+    metered: Boolean(value?.metered),
+    sdkApiCalls: finiteNumber(value?.sdkApiCalls),
+    inputTokens: finiteNumber(value?.inputTokens),
+    outputTokens: finiteNumber(value?.outputTokens),
+    cacheReadTokens: finiteNumber(value?.cacheReadTokens),
+    cacheWriteTokens: finiteNumber(value?.cacheWriteTokens),
+    reasoningTokens: finiteNumber(value?.reasoningTokens),
+    totalNanoAiu: finiteNumber(value?.totalNanoAiu),
+    copilotCostUnits: finiteNumber(value?.copilotCostUnits),
+    apiDurationMs: finiteNumber(value?.apiDurationMs),
+    apiEquivalentUsd: finiteNumber(value?.apiEquivalentUsd),
+    pricedApiCalls: finiteNumber(value?.pricedApiCalls),
+    unpricedApiCalls: finiteNumber(value?.unpricedApiCalls),
+    priceSourceDate: typeof value?.priceSourceDate === "string" ? value.priceSourceDate.slice(0, 32) : null,
+    models: [],
+  };
+  if (Array.isArray(value?.models)) {
+    output.models = value.models.slice(0, 50).map((item) => ({
+      model: modelName(item?.model),
+      sdkApiCalls: finiteNumber(item?.sdkApiCalls),
+      inputTokens: finiteNumber(item?.inputTokens),
+      outputTokens: finiteNumber(item?.outputTokens),
+      cacheReadTokens: finiteNumber(item?.cacheReadTokens),
+      cacheWriteTokens: finiteNumber(item?.cacheWriteTokens),
+      reasoningTokens: finiteNumber(item?.reasoningTokens),
+      totalNanoAiu: finiteNumber(item?.totalNanoAiu),
+      copilotCostUnits: finiteNumber(item?.copilotCostUnits),
+      apiDurationMs: finiteNumber(item?.apiDurationMs),
+      apiEquivalentUsd: finiteNumber(item?.apiEquivalentUsd),
+    }));
+  }
+  return output;
+}
+
+function usageCounterChanges(usage) {
+  const value = normalizedUsageSummary(usage);
+  if (!value.metered) return { unmeteredCalls: 1 };
+  return {
+    meteredCalls: 1,
+    sdkApiCalls: value.sdkApiCalls,
+    inputTokens: value.inputTokens,
+    outputTokens: value.outputTokens,
+    cacheReadTokens: value.cacheReadTokens,
+    cacheWriteTokens: value.cacheWriteTokens,
+    reasoningTokens: value.reasoningTokens,
+    totalNanoAiu: value.totalNanoAiu,
+    copilotCostUnits: value.copilotCostUnits,
+    apiDurationMs: value.apiDurationMs,
+    apiEquivalentUsd: value.apiEquivalentUsd,
+  };
 }
 
 function incrementRollup(metrics, at, changes, fallback) {
@@ -222,6 +316,7 @@ function lightweightRecord(record) {
     previousResponseId: record.previousResponseId ?? null,
     continuedFrom: record.continuedFrom ?? null,
     errorSummary: errorMessage,
+    usage: record.usage ? normalizedUsageSummary(record.usage) : null,
     detailTier: "lightweight",
     detailAvailable: false,
   };
@@ -313,6 +408,7 @@ export class ProxyRecorder {
     this.clock = now;
     this.options = { payloadLimit, stringLimit, maxDepth: 12, maxArrayItems: 500 };
     this.records = [];
+    this.listeners = new Set();
     this.persistedLineCount = 0;
     this.startedAt = this.now().toISOString();
     this.metrics = null;
@@ -344,8 +440,11 @@ export class ProxyRecorder {
     const uniqueRecords = [...new Map(parsedRecords.map((record) => [record.id, record])).values()];
     this.records = uniqueRecords.slice(-this.limit);
     this.rebalanceDetails();
+    let loadedMetricsVersion = null;
     try {
-      this.metrics = normalizeMetrics(JSON.parse(fs.readFileSync(this.metricsFilePath, "utf8")), this.now());
+      const loadedMetrics = JSON.parse(fs.readFileSync(this.metricsFilePath, "utf8"));
+      loadedMetricsVersion = loadedMetrics?.version ?? null;
+      this.metrics = normalizeMetrics(loadedMetrics, this.now());
     } catch {
       this.metrics = null;
     }
@@ -355,6 +454,8 @@ export class ProxyRecorder {
         recoverableRecords: uniqueRecords.length,
       });
       this.seedMetrics(uniqueRecords);
+      this.persistMetrics();
+    } else if (loadedMetricsVersion !== METRICS_VERSION) {
       this.persistMetrics();
     }
     if (this.persistedLineCount > this.compactAfterLines || fileSize(this.filePath) > this.maxHistoryBytes) {
@@ -387,17 +488,23 @@ export class ProxyRecorder {
         incrementRollup(this.metrics, record.completedAt ?? record.receivedAt, toolChanges, fallback);
       }
       if (record.status === "completed" || record.status === "failed") {
+        const usageChanges = usageCounterChanges(record.usage);
         const statusChanges = {
           [record.status]: 1,
           outputBytes: finiteNumber(record.outputBytes),
           latencyTotalMs: finiteNumber(record.latencyMs),
           latencySamples: Number.isFinite(record.latencyMs) ? 1 : 0,
+          ...usageChanges,
         };
         addCounters(this.metrics.lifetime, statusChanges);
         incrementRollup(this.metrics, record.completedAt ?? record.receivedAt, statusChanges, fallback);
-        incrementModel(this.metrics, record.selectedModel ?? record.requestedModel, { [record.status]: 1 });
+        incrementModel(this.metrics, record.selectedModel ?? record.requestedModel, {
+          [record.status]: 1,
+          ...usageChanges,
+        });
       }
     }
+    this.metrics.baseline.unmeteredBefore = this.metrics.lifetime.unmeteredCalls;
   }
 
   updateMetrics(at, changes, model, modelChanges = {}) {
@@ -440,6 +547,29 @@ export class ProxyRecorder {
     }
   }
 
+  subscribe(listener) {
+    if (typeof listener !== "function") return () => {};
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(type, record, fields = {}) {
+    if (!this.listeners.size) return;
+    const event = {
+      type,
+      at: this.now().toISOString(),
+      record: record ? recordIndex(record) : null,
+      ...fields,
+    };
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Dashboard observers are never allowed to affect relay traffic.
+      }
+    }
+  }
+
   start({ requestPath, body, inputBytes, streaming }) {
     const now = this.now();
     const record = {
@@ -473,6 +603,7 @@ export class ProxyRecorder {
     this.updateMetrics(record.receivedAt, { received: 1, inputBytes: record.inputBytes }, record.requestedModel, {
       received: 1,
     });
+    this.emit("relay.received", record);
     return record;
   }
 
@@ -488,6 +619,10 @@ export class ProxyRecorder {
     this.updateMetrics(at, { replayed: 1 }, details?.model ?? record.selectedModel ?? record.requestedModel, {
       replayed: 1,
     });
+    this.emit("relay.forwarded", record, {
+      phase: typeof details?.phase === "string" ? details.phase.slice(0, 80) : "request",
+      model: modelName(details?.model ?? record.selectedModel ?? record.requestedModel),
+    });
   }
 
   toolRequested(record, details) {
@@ -495,13 +630,40 @@ export class ProxyRecorder {
     record.toolCalls += 1;
     record.toolRequests.push(payloadWithinLimit(details, this.options));
     this.updateMetrics(this.now().toISOString(), { toolCalls: 1 }, record.selectedModel ?? record.requestedModel);
+    this.emit("relay.tool_requested", record, {
+      tool: typeof details?.name === "string" ? scrubString(details.name, 120) : "tool",
+    });
   }
 
   toolResolved(record, details) {
-    if (record) record.toolResolutions.push(payloadWithinLimit(details, this.options));
+    if (!record) return;
+    record.toolResolutions.push(payloadWithinLimit(details, this.options));
+    this.emit("relay.tool_resolved", record, { failed: Boolean(details?.failed) });
   }
 
-  finish(record, { status, selectedModel, output, outputBytes = 0, error = null }) {
+  usageObserved(record, usage) {
+    if (!record) return;
+    const safeUsage = normalizedUsageSummary({
+      metered: true,
+      sdkApiCalls: 1,
+      ...usage,
+      models: [],
+    });
+    this.emit("relay.usage", record, {
+      usage: {
+        model: modelName(usage?.model),
+        inputTokens: safeUsage.inputTokens,
+        outputTokens: safeUsage.outputTokens,
+        cacheReadTokens: safeUsage.cacheReadTokens,
+        reasoningTokens: safeUsage.reasoningTokens,
+        totalNanoAiu: safeUsage.totalNanoAiu,
+        copilotCostUnits: safeUsage.copilotCostUnits,
+        apiDurationMs: safeUsage.apiDurationMs,
+      },
+    });
+  }
+
+  finish(record, { status, selectedModel, output, outputBytes = 0, error = null, usage = null }) {
     if (!record || record.completedAt) return;
     if (selectedModel) record.selectedModel = selectedModel;
     record.status = status;
@@ -510,19 +672,26 @@ export class ProxyRecorder {
     record.outputBytes = Number.isFinite(outputBytes) ? outputBytes : 0;
     record.output = output === null || output === undefined ? null : payloadWithinLimit(output, this.options);
     record.error = error === null || error === undefined ? null : safeError(error, this.options);
+    record.usage = normalizedUsageSummary(usage);
     if (!this.records.some((item) => item.id === record.id)) {
       this.records.push(record);
       this.trim();
     }
     const finalStatus = status === "failed" ? "failed" : "completed";
+    const usageChanges = usageCounterChanges(record.usage);
     this.updateMetrics(record.completedAt, {
       [finalStatus]: 1,
       outputBytes: record.outputBytes,
       latencyTotalMs: record.latencyMs,
       latencySamples: 1,
-    }, record.selectedModel ?? record.requestedModel, { [finalStatus]: 1 });
+      ...usageChanges,
+    }, record.selectedModel ?? record.requestedModel, {
+      [finalStatus]: 1,
+      ...usageChanges,
+    });
     this.persist(record);
     this.rebalanceDetails();
+    this.emit(`relay.${finalStatus}`, record);
   }
 
   persist(record) {
@@ -598,6 +767,7 @@ export class ProxyRecorder {
     const active = this.records.filter((record) => record.status === "active").length;
     const detailed = this.records.filter((record) => record.detailTier !== "lightweight").length;
     const lifetime = this.metrics.lifetime;
+    const finalizedForMetering = lifetime.meteredCalls + lifetime.unmeteredCalls;
     return {
       received: lifetime.received,
       replayed: lifetime.replayed,
@@ -607,6 +777,22 @@ export class ProxyRecorder {
       toolCalls: lifetime.toolCalls,
       inputBytes: lifetime.inputBytes,
       outputBytes: lifetime.outputBytes,
+      meteredCalls: lifetime.meteredCalls,
+      unmeteredCalls: lifetime.unmeteredCalls,
+      meteringCoveragePercent: finalizedForMetering
+        ? Math.round((lifetime.meteredCalls / finalizedForMetering) * 10_000) / 100
+        : 0,
+      sdkApiCalls: lifetime.sdkApiCalls,
+      inputTokens: lifetime.inputTokens,
+      outputTokens: lifetime.outputTokens,
+      cacheReadTokens: lifetime.cacheReadTokens,
+      cacheWriteTokens: lifetime.cacheWriteTokens,
+      reasoningTokens: lifetime.reasoningTokens,
+      totalNanoAiu: lifetime.totalNanoAiu,
+      aiCredits: lifetime.totalNanoAiu / 1_000_000_000,
+      copilotCostUnits: lifetime.copilotCostUnits,
+      apiDurationMs: lifetime.apiDurationMs,
+      apiEquivalentUsd: lifetime.apiEquivalentUsd,
       avgLatencyMs: lifetime.latencySamples
         ? Math.round(lifetime.latencyTotalMs / lifetime.latencySamples)
         : null,
@@ -636,6 +822,12 @@ export class ProxyRecorder {
         completed: counters.completed,
         failed: counters.failed,
         toolCalls: counters.toolCalls,
+        meteredCalls: counters.meteredCalls,
+        inputTokens: counters.inputTokens,
+        outputTokens: counters.outputTokens,
+        cacheReadTokens: counters.cacheReadTokens,
+        totalNanoAiu: counters.totalNanoAiu,
+        apiEquivalentUsd: counters.apiEquivalentUsd,
       });
     }
     return rows;
@@ -696,6 +888,7 @@ export class ProxyRecorder {
     } catch {
       // The dashboard still clears its in-memory view if the local file cannot be truncated.
     }
+    this.emit("relay.history_cleared", null);
     return this.snapshot({ includeDetails: false });
   }
 }

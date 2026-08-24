@@ -28,3 +28,17 @@ test("dashboard exposes lifetime mileage, lightweight charts, and on-demand deta
   assert.match(DASHBOARD_HTML, /Clear detailed history/);
   assert.match(DASHBOARD_HTML, /Lifetime mileage is preserved/);
 });
+
+test("dashboard exposes measured cost, Copilot quota, and a live accessible architecture view", () => {
+  assert.match(DASHBOARD_HTML, /OpenAI API-equivalent estimate/);
+  assert.match(DASHBOARD_HTML, /Not an actual charge/);
+  assert.match(DASHBOARD_HTML, /Copilot entitlement/);
+  assert.match(DASHBOARD_HTML, /id="relay-architecture"/);
+  assert.match(DASHBOARD_HTML, /Codex App/);
+  assert.match(DASHBOARD_HTML, /Local Relay/);
+  assert.match(DASHBOARD_HTML, /GitHub Copilot/);
+  assert.match(DASHBOARD_HTML, /EventSource\("\/dashboard\/events"\)/);
+  assert.match(DASHBOARD_HTML, /prefers-reduced-motion/);
+  assert.match(DASHBOARD_HTML, /aria-live="polite"/);
+  assert.match(DASHBOARD_HTML, /Public price snapshot/);
+});

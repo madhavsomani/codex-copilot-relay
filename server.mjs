@@ -13,6 +13,14 @@ import {
   startSseHeartbeat,
 } from "./exchange-lifecycle.mjs";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
+import {
+  normalizeAssistantUsage,
+  normalizeQuotaResult,
+  safeCopilotModelBilling,
+  summarizeAssistantUsage,
+  toResponsesUsage,
+} from "./copilot-telemetry.mjs";
+import { publicPricingSnapshot } from "./pricing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import {
@@ -80,6 +88,12 @@ const sseHeartbeatIntervalMs = environmentInteger(
   1_000,
   60_000,
 );
+const quotaRefreshIntervalMs = environmentInteger(
+  "BRIDGE_QUOTA_REFRESH_INTERVAL_MS",
+  5 * 60 * 1000,
+  30_000,
+  60 * 60 * 1000,
+);
 const maxSerializedContextChars = environmentInteger(
   "BRIDGE_MAX_SERIALIZED_CONTEXT_CHARS",
   1_000_000,
@@ -139,6 +153,15 @@ const recorder = new ProxyRecorder({
   maxMetricsBytes: recorderMaxMetricsBytes,
   maxRecordBytes: recorderMaxRecordBytes,
 });
+let copilotQuota = {
+  status: "loading",
+  lastUpdatedAt: null,
+  snapshots: {},
+};
+let copilotModelBilling = [];
+let openAiPublicPricing = publicPricingSnapshot([]);
+let quotaRefreshPromise = null;
+let quotaRefreshTimer = null;
 
 const exchanges = new Set();
 const exchangesByCallId = new Map();
@@ -185,6 +208,14 @@ function telemetryStorage() {
 function dashboardSnapshot() {
   const snapshot = recorder.snapshot({ includeDetails: false });
   snapshot.storage = telemetryStorage();
+  snapshot.activeExchanges = exchanges.size;
+  snapshot.copilot = {
+    quota: copilotQuota,
+    modelBilling: copilotModelBilling,
+    usageUnit: "AI credits",
+    currencyConversionApplied: false,
+  };
+  snapshot.pricing = openAiPublicPricing;
   return snapshot;
 }
 
@@ -232,6 +263,35 @@ function writeSseEvent(response, event) {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+function openDashboardEventStream(request, response) {
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-store",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  response.write(`event: relay\ndata: ${JSON.stringify({
+    type: "dashboard.ready",
+    at: new Date().toISOString(),
+    summary: recorder.summary(),
+  })}\n\n`);
+  const unsubscribe = recorder.subscribe((event) => {
+    if (!response.writableEnded && !response.destroyed) {
+      response.write(`event: relay\ndata: ${JSON.stringify(event)}\n\n`);
+    }
+  });
+  const heartbeat = setInterval(() => {
+    if (!response.writableEnded && !response.destroyed) response.write(": heartbeat\n\n");
+  }, sseHeartbeatIntervalMs);
+  heartbeat.unref?.();
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  };
+  request.once("close", cleanup);
+  response.once("close", cleanup);
+}
+
 function errorPayload(error, code = "bridge_error") {
   return {
     error: {
@@ -266,6 +326,7 @@ class ResponseSink {
     this.stopDisconnectObserver = () => {};
     this.disconnectHandler = null;
     this.disconnectError = null;
+    this.usageProvider = () => null;
     this.eventStream = null;
 
     this.stopDisconnectObserver = observeClientDisconnect(response, {
@@ -299,6 +360,18 @@ class ResponseSink {
     if (this.disconnectError) handler(this.disconnectError);
   }
 
+  setUsageProvider(provider) {
+    this.usageProvider = typeof provider === "function" ? provider : () => null;
+  }
+
+  relayUsage() {
+    try {
+      return this.usageProvider();
+    } catch {
+      return null;
+    }
+  }
+
   handleClientDisconnect() {
     if (this.closed) return;
     this.closed = true;
@@ -309,6 +382,7 @@ class ResponseSink {
       status: "failed",
       selectedModel: this.model,
       error: this.disconnectError,
+      usage: this.relayUsage(),
     });
     log("response.client_disconnected", {
       responseId: this.responseId,
@@ -338,7 +412,7 @@ class ResponseSink {
     return item;
   }
 
-  complete(output, usage) {
+  complete(output, usage, relayUsage = this.relayUsage()) {
     if (this.closed) return;
     this.closed = true;
     this.stopHeartbeat();
@@ -357,6 +431,7 @@ class ResponseSink {
       selectedModel: this.model,
       output: responseObject,
       outputBytes: Buffer.byteLength(JSON.stringify(responseObject), "utf8"),
+      usage: relayUsage,
     });
 
     if (this.streaming) {
@@ -366,7 +441,7 @@ class ResponseSink {
     }
   }
 
-  fail(error, code = "bridge_error") {
+  fail(error, code = "bridge_error", relayUsage = this.relayUsage()) {
     if (this.closed) return;
     this.closed = true;
     this.stopHeartbeat();
@@ -383,6 +458,7 @@ class ResponseSink {
       status: "failed",
       selectedModel: this.model,
       error: payload.error,
+      usage: relayUsage,
     });
     log("response.failed", {
       responseId: this.responseId,
@@ -415,6 +491,7 @@ class Exchange {
     this.streamedContent = "";
     this.responseItems = [];
     this.pendingFinalMessage = null;
+    this.usageEvents = [];
     this.requiresAction = requiresAction;
     this.toolCount = toolCount;
     this.blankGuard = new BlankCompletionGuard({
@@ -449,8 +526,10 @@ class Exchange {
     this.record = sink.record;
     this.responseItems = [];
     this.pendingFinalMessage = null;
+    this.usageEvents = [];
     this.prematureGuard.reset();
     this.armModelDeadline();
+    sink.setUsageProvider(() => this.currentUsage());
     sink.setClientDisconnectHandler((error) => this.clientDisconnected(sink, error));
     return !this.done;
   }
@@ -489,6 +568,15 @@ class Exchange {
   async handleEvent(event) {
     if (this.done) return;
     this.armModelDeadline();
+
+    if (event.type === "assistant.usage") {
+      const usage = normalizeAssistantUsage(event.data);
+      if (usage) {
+        this.usageEvents.push(usage);
+        recorder.usageObserved(this.record, usage);
+      }
+      return;
+    }
 
     if (event.type === "assistant.turn_start") {
       this.streamedContent = "";
@@ -587,9 +675,12 @@ class Exchange {
     const item = messageItem ?? this.sink.finishText(text);
     const output = [...this.responseItems];
     if (item && !output.some((candidate) => candidate.id === item.id)) output.push(item);
-    const usage = this.usageFromEvent(eventData);
+    const relayUsage = this.currentUsage();
+    const usage = relayUsage.metered
+      ? toResponsesUsage(relayUsage)
+      : this.usageFromEvent(eventData);
     const responseId = this.sink.responseId;
-    this.sink.complete(output, usage);
+    this.sink.complete(output, usage, relayUsage);
     log("response.completed", { responseId, kind: "message", model: this.model });
     this.done = true;
     await this.disconnect();
@@ -695,6 +786,10 @@ class Exchange {
     };
   }
 
+  currentUsage() {
+    return summarizeAssistantUsage(this.usageEvents);
+  }
+
   maybeCompleteToolTurn() {
     if (!this.lastToolMessage || !this.sink || this.sink.closed) return;
     const expected = this.lastToolMessage.toolRequests
@@ -710,9 +805,12 @@ class Exchange {
       output.push(item);
     }
 
-    const usage = this.usageFromEvent(this.lastToolMessage);
+    const relayUsage = this.currentUsage();
+    const usage = relayUsage.metered
+      ? toResponsesUsage(relayUsage)
+      : this.usageFromEvent(this.lastToolMessage);
     const responseId = this.sink.responseId;
-    this.sink.complete(output, usage);
+    this.sink.complete(output, usage, relayUsage);
     exchangesByResponseId.set(responseId, this);
     this.sink = null;
     this.lastToolMessage = null;
@@ -763,7 +861,7 @@ class Exchange {
       code,
       message: error instanceof Error ? error.message : String(error),
     });
-    this.sink?.fail(error, code);
+    this.sink?.fail(error, code, this.currentUsage());
     void this.session.abort().catch(() => {});
     void this.disconnect();
   }
@@ -809,6 +907,49 @@ const defaultModelCompatibility = resolveModelCompatibility(modelsById.get(defau
 const availableOpenAiModels = [...availableModelIds]
   .filter((model) => model.startsWith("gpt-"))
   .sort();
+copilotModelBilling = safeCopilotModelBilling(models);
+openAiPublicPricing = publicPricingSnapshot(availableOpenAiModels);
+
+async function refreshCopilotQuota({ force = false } = {}) {
+  if (quotaRefreshPromise) return quotaRefreshPromise;
+  const lastUpdatedMs = Date.parse(copilotQuota.lastUpdatedAt ?? "");
+  if (!force && Number.isFinite(lastUpdatedMs)
+    && Date.now() - lastUpdatedMs < quotaRefreshIntervalMs) {
+    return copilotQuota;
+  }
+  const previous = copilotQuota;
+  copilotQuota = {
+    ...previous,
+    status: Object.keys(previous.snapshots ?? {}).length ? "refreshing" : "loading",
+    lastAttemptAt: new Date().toISOString(),
+  };
+  quotaRefreshPromise = (async () => {
+    try {
+      const result = await client.rpc.account.getQuota({});
+      copilotQuota = {
+        ...normalizeQuotaResult(result, new Date().toISOString()),
+        lastAttemptAt: new Date().toISOString(),
+      };
+    } catch {
+      copilotQuota = {
+        status: Object.keys(previous.snapshots ?? {}).length ? "stale" : "unavailable",
+        lastUpdatedAt: previous.lastUpdatedAt ?? null,
+        lastAttemptAt: new Date().toISOString(),
+        snapshots: previous.snapshots ?? {},
+        message: "Copilot SDK quota lookup is temporarily unavailable.",
+      };
+      log("quota.refresh_failed");
+    } finally {
+      quotaRefreshPromise = null;
+    }
+    return copilotQuota;
+  })();
+  return quotaRefreshPromise;
+}
+
+void refreshCopilotQuota({ force: true });
+quotaRefreshTimer = setInterval(() => void refreshCopilotQuota({ force: true }), quotaRefreshIntervalMs);
+quotaRefreshTimer.unref?.();
 
 function resolveModel(requestedModel) {
   if (typeof requestedModel === "string" && availableModelIds.has(requestedModel)
@@ -1032,8 +1173,11 @@ const server = http.createServer(async (request, response) => {
         maxEventLogBytes: eventLogMaxBytes,
         summary: recorder.summary(),
         storage: telemetryStorage(),
+        sdkUsageEvents: true,
+        quotaStatus: copilotQuota.status,
+        publicPricingSourceDate: openAiPublicPricing.sourceDate,
       },
-      metering: "GitHub Copilot allowance applies",
+      metering: "Exact Copilot SDK usage plus separately labeled OpenAI API-equivalent estimate",
     });
   }
 
@@ -1052,7 +1196,12 @@ const server = http.createServer(async (request, response) => {
       response.end(DASHBOARD_HTML);
       return;
     }
+    if (request.method === "GET" && url.pathname === "/dashboard/events") {
+      openDashboardEventStream(request, response);
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/dashboard/api") {
+      void refreshCopilotQuota();
       return sendJson(response, 200, dashboardSnapshot(), {
         "cache-control": "no-store",
       });
@@ -1075,6 +1224,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/dashboard/clear") {
       return sendJson(response, 200, recorder.clear());
+    }
+    if (request.method === "POST" && url.pathname === "/dashboard/quota/refresh") {
+      const quota = await refreshCopilotQuota({ force: true });
+      return sendJson(response, 200, { ok: true, quota }, { "cache-control": "no-store" });
     }
     return sendJson(response, 404, errorPayload("Not found.", "not_found"));
   }
@@ -1150,6 +1303,7 @@ server.listen(port, host, () => {
 
 async function shutdown(signal) {
   log("bridge.shutdown", { signal });
+  if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
   await Promise.allSettled([...exchanges].map((exchange) => exchange.disconnect()));
   await client.stop();

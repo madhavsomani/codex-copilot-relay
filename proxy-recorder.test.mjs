@@ -222,3 +222,99 @@ test("returns lightweight indexes and fetches sanitized detail on demand", () =>
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("persists exact SDK token and cost mileage and emits safe live phases", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-copilot-recorder-"));
+  const filePath = path.join(directory, "events.jsonl");
+  const metricsFilePath = path.join(directory, "metrics.json");
+  try {
+    const recorder = new ProxyRecorder({ filePath, metricsFilePath });
+    const liveEvents = [];
+    const unsubscribe = recorder.subscribe((event) => liveEvents.push(event));
+    const record = recorder.start({
+      requestPath: "/v1/responses",
+      inputBytes: 200,
+      streaming: true,
+      body: { model: "gpt-5.6-sol", input: "do not emit me" },
+    });
+    recorder.replay(record, { phase: "initial", model: "gpt-5.6-sol", prompt: "private" });
+    recorder.usageObserved(record, {
+      model: "gpt-5.6-sol",
+      inputTokens: 1000,
+      outputTokens: 100,
+    });
+    recorder.finish(record, {
+      status: "completed",
+      selectedModel: "gpt-5.6-sol",
+      usage: {
+        metered: true,
+        sdkApiCalls: 1,
+        inputTokens: 1000,
+        outputTokens: 100,
+        cacheReadTokens: 200,
+        cacheWriteTokens: 0,
+        reasoningTokens: 25,
+        totalNanoAiu: 5_000_000,
+        copilotCostUnits: 1,
+        apiDurationMs: 400,
+        apiEquivalentUsd: 0.0052,
+        pricedApiCalls: 1,
+        unpricedApiCalls: 0,
+        models: [],
+      },
+    });
+    unsubscribe();
+
+    const reloaded = new ProxyRecorder({ filePath, metricsFilePath });
+    const snapshot = reloaded.snapshot({ includeDetails: false });
+    assert.equal(snapshot.summary.meteredCalls, 1);
+    assert.equal(snapshot.summary.inputTokens, 1000);
+    assert.equal(snapshot.summary.outputTokens, 100);
+    assert.equal(snapshot.summary.cacheReadTokens, 200);
+    assert.equal(snapshot.summary.reasoningTokens, 25);
+    assert.equal(snapshot.summary.totalNanoAiu, 5_000_000);
+    assert.equal(snapshot.summary.apiEquivalentUsd, 0.0052);
+    assert.equal(snapshot.summary.meteringCoveragePercent, 100);
+    assert.equal(snapshot.records[0].usage.apiEquivalentUsd, 0.0052);
+    assert.deepEqual(liveEvents.map((event) => event.type), [
+      "relay.received",
+      "relay.forwarded",
+      "relay.usage",
+      "relay.completed",
+    ]);
+    assert.doesNotMatch(JSON.stringify(liveEvents), /do not emit me|private/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migrates version-one mileage without pretending old calls had token metering", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-copilot-recorder-"));
+  const filePath = path.join(directory, "events.jsonl");
+  const metricsFilePath = path.join(directory, "metrics.json");
+  try {
+    fs.writeFileSync(filePath, "", "utf8");
+    fs.writeFileSync(metricsFilePath, JSON.stringify({
+      version: 1,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      updatedAt: "2026-08-21T00:00:00.000Z",
+      baseline: { source: "fresh", seededAt: "2026-08-20T00:00:00.000Z", recoverableRecords: 0 },
+      lifetime: { received: 12, replayed: 12, completed: 10, failed: 2, toolCalls: 4 },
+      hourly: {},
+      daily: {},
+      models: {},
+    }), "utf8");
+    const recorder = new ProxyRecorder({
+      filePath,
+      metricsFilePath,
+      now: () => new Date("2026-08-24T00:00:00.000Z"),
+    });
+    const snapshot = recorder.snapshot({ includeDetails: false });
+    assert.equal(snapshot.summary.unmeteredCalls, 12);
+    assert.equal(snapshot.summary.meteredCalls, 0);
+    assert.equal(snapshot.summary.meteringCoveragePercent, 0);
+    assert.equal(JSON.parse(fs.readFileSync(metricsFilePath, "utf8")).version, 2);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

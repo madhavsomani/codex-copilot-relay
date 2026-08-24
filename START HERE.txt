@@ -13,6 +13,11 @@ Double-click this Desktop shortcut:
 DASHBOARD
 http://127.0.0.1:4144/dashboard
 
+The dashboard animates live Codex -> Relay -> Copilot -> Model traffic, shows
+exact SDK token/AI-credit mileage and Copilot quota, and estimates what the same
+measured text tokens would cost at source-dated public OpenAI API list prices.
+The dollar estimate is a comparison only, not an actual OpenAI or GitHub charge.
+
 The watchdog automatically restarts the bridge and visible gateway terminal.
 The relay keeps Codex's normal Responses streaming, tools, parallel agents, and
 child-agent continuation while model inference is routed through Copilot.

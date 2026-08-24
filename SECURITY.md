@@ -9,6 +9,13 @@ requests and consume that user's GitHub Copilot allowance.
 Do not bind the relay to a public or LAN interface. Do not place it behind a
 public tunnel or reverse proxy.
 
+The dashboard, its JSON API, and its live Server-Sent Events feed share this
+same loopback trust boundary. Browser-visible quota data is limited to safe
+numeric entitlement fields and reset dates. GitHub tokens, usernames, account
+identifiers, provider trace IDs, and service request IDs are never included.
+Usage records contain numeric aggregates; detailed prompts and outputs remain in
+the bounded, sanitized local history tier and are fetched only on row selection.
+
 ## Sensitive local files
 
 Never commit or share `runtime/`. It can contain sanitized model history,

@@ -5,9 +5,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Codex Copilot Relay</title>
   <style>
-    :root { color-scheme: dark; --bg: #080d19; --panel: #111a2d; --panel2: #17243d; --line: #263958; --text: #eef5ff; --muted: #91a5c4; --accent: #69b7ff; --cyan: #54e0d1; --good: #6ddd9a; --bad: #ff8398; --warn: #ffd27a; }
+    :root { color-scheme: dark; --bg: #060a13; --panel: #111a2d; --panel2: #17243d; --line: #263958; --text: #eef5ff; --muted: #91a5c4; --accent: #69b7ff; --cyan: #54e0d1; --violet: #a98cff; --good: #6ddd9a; --bad: #ff8398; --warn: #ffd27a; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 84% -10%, #173968 0, transparent 31rem), radial-gradient(circle at -8% 35%, #172548 0, transparent 27rem), var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 82% -12%, rgba(38,91,164,.54) 0, transparent 34rem), radial-gradient(circle at -8% 30%, rgba(67,46,140,.32) 0, transparent 29rem), linear-gradient(180deg, #080d19 0, var(--bg) 55%); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
     header { padding: 25px 30px 17px; border-bottom: 1px solid var(--line); background: rgba(8,13,25,.84); position: sticky; top: 0; z-index: 4; backdrop-filter: blur(16px); }
     .topline { display: flex; align-items: center; justify-content: space-between; gap: 18px; max-width: 1540px; margin: 0 auto; }
     h1, h2, h3, p { margin: 0; }
@@ -26,7 +26,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .pill { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 12px var(--good); }
     .stats { display: grid; grid-template-columns: repeat(8, minmax(115px, 1fr)); gap: 10px; margin-bottom: 15px; }
-    .stat, .panel { border: 1px solid var(--line); border-radius: 13px; background: linear-gradient(145deg, rgba(23,36,61,.96), rgba(12,19,35,.96)); box-shadow: 0 13px 36px rgba(0,0,0,.16); }
+    .stat, .panel { border: 1px solid var(--line); border-radius: 15px; background: linear-gradient(145deg, rgba(23,36,61,.94), rgba(10,16,30,.97)); box-shadow: 0 15px 44px rgba(0,0,0,.2), inset 0 1px rgba(255,255,255,.025); }
     .stat { padding: 14px; min-height: 88px; }
     .stat-label { color: var(--muted); font-size: 11px; min-height: 30px; }
     .stat-value { font-size: 25px; font-weight: 730; margin-top: 4px; letter-spacing: -.04em; overflow-wrap: anywhere; }
@@ -55,6 +55,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .storage-line { display: flex; justify-content: space-between; gap: 8px; }
     .baseline { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
     .workspace { display: grid; grid-template-columns: minmax(610px, 1.25fr) minmax(380px, .75fr); gap: 16px; align-items: start; }
+    .workspace > *, .command-grid > *, .insight-stack > * { min-width: 0; }
     .table-wrap { overflow: auto; max-height: 650px; }
     table { width: 100%; border-collapse: collapse; min-width: 735px; }
     th, td { padding: 10px 11px; border-bottom: 1px solid rgba(38,57,88,.72); text-align: left; vertical-align: top; white-space: nowrap; }
@@ -73,10 +74,80 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     pre { margin: 0; padding: 11px; max-height: 205px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #080e1c; color: #d8e6fb; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .empty { padding: 34px 18px; text-align: center; color: var(--muted); }
     .error { color: var(--bad); }
+    .header-actions { display: flex; align-items: center; gap: 9px; }
+    .live-badge { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 99px; padding: 8px 11px; color: var(--muted); background: rgba(10,18,33,.8); font-size: 11px; }
+    .live-badge.connected { color: var(--good); border-color: rgba(109,221,154,.42); }
+    .live-badge .dot { background: var(--warn); box-shadow: 0 0 12px var(--warn); }
+    .live-badge.connected .dot { background: var(--good); box-shadow: 0 0 12px var(--good); }
+    .command-grid { display: grid; grid-template-columns: minmax(680px, 1.65fr) minmax(330px, .75fr); gap: 14px; margin-bottom: 15px; align-items: stretch; }
+    .architecture { overflow: hidden; position: relative; min-height: 400px; }
+    .architecture::before { content: ""; position: absolute; width: 260px; height: 260px; right: 8%; top: 17%; border-radius: 50%; background: rgba(84,224,209,.08); filter: blur(70px); pointer-events: none; }
+    .architecture-body { padding: 17px; position: relative; }
+    .flow-viewport { overflow-x: auto; padding: 8px 2px 12px; scrollbar-width: thin; }
+    .flow-stage { min-width: 720px; display: grid; grid-template-columns: minmax(130px,1fr) 62px minmax(130px,1fr) 62px minmax(130px,1fr) 62px minmax(130px,1fr); align-items: center; }
+    .flow-node { min-height: 138px; border: 1px solid #30496d; border-radius: 16px; background: linear-gradient(155deg, rgba(29,47,78,.9), rgba(9,16,30,.96)); padding: 15px; position: relative; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+    .flow-node::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; opacity: 0; box-shadow: 0 0 28px rgba(105,183,255,.34); transition: opacity .2s ease; pointer-events: none; }
+    .flow-node.active { border-color: var(--accent); transform: translateY(-3px); }
+    .flow-node.active::after { opacity: 1; }
+    .flow-node[data-node="model"].active { border-color: var(--violet); }
+    .flow-node[data-node="codex"].response { border-color: var(--good); box-shadow: 0 0 28px rgba(109,221,154,.15); }
+    .node-icon { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #3e608f; border-radius: 10px; color: var(--accent); background: rgba(105,183,255,.09); font-size: 17px; margin-bottom: 14px; }
+    .node-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: .09em; font-size: 9px; }
+    .node-title { margin-top: 3px; font-size: 15px; font-weight: 720; }
+    .node-copy { margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .connector { height: 38px; position: relative; overflow: hidden; }
+    .connector::before { content: ""; position: absolute; left: 4px; right: 4px; top: 18px; height: 1px; background: linear-gradient(90deg, var(--line), #4a6f9e, var(--line)); }
+    .connector::after { content: "›"; position: absolute; right: 3px; top: 5px; color: #557aa9; font-size: 22px; }
+    .packet { position: absolute; left: 3px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 15px var(--accent); opacity: 0; z-index: 1; }
+    .flow-stage.request .connector:nth-of-type(2) .packet, .flow-stage.forward .connector:nth-of-type(4) .packet, .flow-stage.process .connector:nth-of-type(6) .packet { animation: packet-forward 1.05s ease-out both; }
+    .flow-stage.request .connector:nth-of-type(4) .packet, .flow-stage.request .connector:nth-of-type(6) .packet { animation: packet-forward 1.05s ease-out both; animation-delay: .22s; }
+    .flow-stage.response .connector .packet { background: var(--good); box-shadow: 0 0 15px var(--good); animation: packet-return 1.1s ease-out both; }
+    .flow-stage.response .connector:nth-of-type(4) .packet { animation-delay: .18s; }
+    .flow-stage.response .connector:nth-of-type(2) .packet { animation-delay: .36s; }
+    .flow-stage.failed .connector .packet { background: var(--bad); box-shadow: 0 0 15px var(--bad); animation: packet-forward .7s ease-out both; }
+    @keyframes packet-forward { 0% { opacity: 0; transform: translateX(0) scale(.6); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(49px) scale(1.2); } }
+    @keyframes packet-return { 0% { opacity: 0; transform: translateX(49px) scale(.6); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(0) scale(1.2); } }
+    .flow-footer { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border-top: 1px solid var(--line); padding-top: 14px; }
+    .event-copy { min-width: 0; }
+    .event-copy strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .event-copy span { color: var(--muted); font-size: 11px; }
+    .phase { color: var(--cyan); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; border: 1px solid rgba(84,224,209,.3); background: rgba(84,224,209,.07); border-radius: 99px; padding: 5px 9px; }
+    .active-strip { margin-top: 12px; display: flex; gap: 7px; overflow-x: auto; min-height: 29px; }
+    .call-chip { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); background: #0b1325; font-size: 10px; }
+    .call-chip strong { color: var(--text); }
+    .insight-stack { display: grid; gap: 14px; }
+    .insight { min-height: 0; }
+    .insight-body { padding: 15px 16px; }
+    .metric-hero { display: flex; justify-content: space-between; gap: 12px; align-items: end; }
+    .metric-hero strong { font-size: 31px; letter-spacing: -.05em; }
+    .metric-hero span { color: var(--muted); font-size: 10px; text-align: right; }
+    .metric-hero.cost strong { color: var(--cyan); }
+    .metric-hero.quota strong { color: var(--good); }
+    .micro-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; margin: 13px 0; }
+    .micro { min-width: 0; border: 1px solid var(--line); background: rgba(8,14,27,.63); border-radius: 10px; padding: 8px; }
+    .micro span { display: block; color: var(--muted); font-size: 9px; }
+    .micro strong { display: block; margin-top: 3px; font-size: 12px; overflow-wrap: anywhere; }
+    .disclaimer { color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .disclaimer strong { color: var(--warn); }
+    .disclaimer a { color: var(--accent); }
+    .coverage-track { height: 6px; margin: 10px 0 6px; border-radius: 99px; overflow: hidden; background: #080e1c; }
+    .coverage-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--cyan)); transition: width .35s ease; }
+    .rate-strip { display: flex; gap: 6px; overflow-x: auto; margin-top: 10px; padding-bottom: 2px; }
+    .rate-chip { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; background: #0a1221; font-size: 9px; color: var(--muted); }
+    .rate-chip strong { display: block; color: var(--text); font-size: 10px; margin-bottom: 2px; }
+    .quota-progress { width: 100%; height: 9px; margin: 11px 0 8px; accent-color: var(--good); }
+    .quota-categories { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+    .quota-chip { border: 1px solid var(--line); border-radius: 99px; padding: 4px 7px; color: var(--muted); font-size: 9px; }
+    .quota-chip.unlimited { color: var(--good); border-color: rgba(109,221,154,.35); }
+    .button-small { padding: 5px 8px; font-size: 10px; }
+    .token-cell { color: var(--cyan); }
+    @media (max-width: 1250px) { .command-grid { grid-template-columns: 1fr; } .insight-stack { grid-template-columns: repeat(2,1fr); } }
     @media (max-width: 1250px) { .stats { grid-template-columns: repeat(4, 1fr); } .charts { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .detail { min-height: auto; } }
-    @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .stats, .charts { grid-template-columns: repeat(2, 1fr); } .chart { min-height: 220px; } }
+    @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .header-actions { width: 100%; justify-content: space-between; } .stats, .charts, .insight-stack { grid-template-columns: repeat(2, 1fr); } .chart { min-height: 220px; } .architecture-body { padding: 12px; } }
     @media (max-width: 430px) { .stats, .charts { grid-template-columns: 1fr; } }
+    @media (max-width: 430px) { .insight-stack { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
   </style>
 </head>
 <body>
@@ -87,11 +158,53 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <p class="subtitle">Local Responses gateway telemetry · durable mileage without heavyweight logging</p>
         <p class="byline">Created by <a href="https://www.linkedin.com/in/madhavsomani" target="_blank" rel="noopener noreferrer" aria-label="Madhav Somani on LinkedIn">Madhav Somani</a><span aria-hidden="true">↗</span></p>
       </div>
-      <button id="clear">Clear detailed history</button>
+      <div class="header-actions"><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
     </div>
   </header>
   <main>
     <div class="notice"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">mileage: durable rollups</span><span class="pill" id="updated">waiting for bridge…</span></div>
+    <section class="command-grid">
+      <article class="panel architecture" id="relay-architecture">
+        <div class="panel-head"><div><h2>Live relay architecture</h2><span class="tiny">Every pulse is driven by a real loopback telemetry event</span></div><span class="phase" id="flow-phase">IDLE</span></div>
+        <div class="architecture-body">
+          <div class="flow-viewport">
+            <div class="flow-stage idle" id="flow-stage" role="img" aria-label="Animated architecture showing a Codex request traveling through the local relay and GitHub Copilot to a model, then streaming back to Codex">
+              <div class="flow-node" data-node="codex"><div class="node-icon">C</div><div class="node-kicker">Origin</div><div class="node-title">Codex App</div><div class="node-copy">Sends an OpenAI Responses-compatible request. Codex keeps ownership of tools and child agents.</div></div>
+              <div class="connector" aria-hidden="true"><span class="packet"></span></div>
+              <div class="flow-node" data-node="relay"><div class="node-icon">R</div><div class="node-kicker" id="relay-address">127.0.0.1:4144</div><div class="node-title">Local Relay</div><div class="node-copy">Bounds context, translates tools, preserves streaming, and records sanitized telemetry.</div></div>
+              <div class="connector" aria-hidden="true"><span class="packet"></span></div>
+              <div class="flow-node" data-node="copilot"><div class="node-icon">↗</div><div class="node-kicker">Official SDK</div><div class="node-title">GitHub Copilot</div><div class="node-copy">Authenticates with your local Copilot CLI session and reports exact usage and quota.</div></div>
+              <div class="connector" aria-hidden="true"><span class="packet"></span></div>
+              <div class="flow-node" data-node="model"><div class="node-icon">AI</div><div class="node-kicker">Remote inference</div><div class="node-title">GPT Model</div><div class="node-copy">Produces text or tool calls; the relay converts the stream back into Codex Responses events.</div></div>
+            </div>
+          </div>
+          <div class="flow-footer"><div class="event-copy" aria-live="polite"><strong id="live-event">Waiting for the next Codex request</strong><span id="live-event-detail">The dashboard stays connected and will animate both directions.</span></div><span class="tiny" id="active-exchanges">0 exchanges</span></div>
+          <div class="active-strip" id="active-calls" aria-label="Recently active relay calls"><span class="call-chip">No calls in flight</span></div>
+        </div>
+      </article>
+      <aside class="insight-stack">
+        <article class="panel insight">
+          <div class="panel-head"><div><h2>OpenAI API-equivalent estimate</h2><span class="tiny">Measured text tokens · public list prices</span></div><span class="tiny" id="price-date">loading</span></div>
+          <div class="insight-body">
+            <div class="metric-hero cost"><strong id="api-cost">$0.00</strong><span id="cost-coverage">0% metered<br>forward-only coverage</span></div>
+            <div class="micro-grid"><div class="micro"><span>Input tokens</span><strong id="input-tokens">0</strong></div><div class="micro"><span>Output tokens</span><strong id="output-tokens">0</strong></div><div class="micro"><span>SDK model calls</span><strong id="sdk-calls">0</strong></div></div>
+            <div class="coverage-track" title="Share of completed relay responses with exact SDK token telemetry"><div class="coverage-fill" id="coverage-fill"></div></div>
+            <p class="disclaimer"><strong>Not an actual charge.</strong> Measured SDK tokens are multiplied by standard public API rates; Copilot subscription billing is separate. <a id="price-source" href="https://developers.openai.com/api/docs/models/gpt-5.6-sol" target="_blank" rel="noopener noreferrer">Public price snapshot</a>: <span id="price-source-date">—</span>.</p>
+            <div class="rate-strip" id="rate-strip" aria-label="Public model price snapshot"></div>
+          </div>
+        </article>
+        <article class="panel insight">
+          <div class="panel-head"><div><h2>Copilot entitlement</h2><span class="tiny">Fetched from the authenticated local SDK</span></div><button class="button-small" id="refresh-quota">Refresh</button></div>
+          <div class="insight-body">
+            <div class="metric-hero quota"><strong id="quota-left">—</strong><span id="quota-state">waiting for SDK<br>quota snapshot</span></div>
+            <progress class="quota-progress" id="quota-progress" value="0" max="100"></progress>
+            <div class="micro-grid"><div class="micro"><span>Used units</span><strong id="quota-used">—</strong></div><div class="micro"><span>Entitlement</span><strong id="quota-total">—</strong></div><div class="micro"><span>Relay AI credits</span><strong id="ai-credits">0</strong></div></div>
+            <div class="quota-categories" id="quota-categories"><span class="quota-chip">Loading categories…</span></div>
+            <p class="disclaimer" id="quota-note">The SDK exposes entitlement and reset data, not your subscription purchase price. AI credits are relay-session usage, not an invoice.</p>
+          </div>
+        </article>
+      </aside>
+    </section>
     <section class="stats">
       <div class="stat"><div class="stat-label">Lifetime calls received</div><div class="stat-value accent" id="received">0</div></div>
       <div class="stat"><div class="stat-label">Lifetime Copilot replays</div><div class="stat-value cyan" id="replayed">0</div></div>
@@ -109,12 +222,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <article class="panel chart"><div class="panel-head"><h2>Bounded storage</h2><span class="tiny">under 1 GB</span></div><div class="chart-body"><div class="storage-number" id="storage-total">0 B</div><progress id="storage-meter" value="0" max="1"></progress><div class="storage-lines"><div class="storage-line"><span>Detailed history</span><strong id="history-size">0 B</strong></div><div class="storage-line"><span>Metrics + event logs</span><strong id="metrics-size">0 B</strong></div><div class="storage-line"><span>Telemetry ceiling</span><strong id="telemetry-cap">408 MB</strong></div><div class="storage-line"><span>Retained tiers</span><strong id="retained">0</strong></div></div><p class="baseline" id="baseline">Mileage initializes from recoverable history, then remains exact as detail is pruned.</p></div></article>
     </section>
     <div class="workspace">
-      <section class="panel"><div class="panel-head"><h2>Recent call history</h2><span class="tiny" id="count">0 records</span></div><div class="table-wrap"><table><thead><tr><th>Received</th><th>Route / model</th><th>Status</th><th>Tier</th><th>Replay</th><th>Tools</th><th>Latency</th><th>Bytes</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No Responses calls have crossed the bridge yet.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
+      <section class="panel"><div class="panel-head"><h2>Recent call history</h2><span class="tiny" id="count">0 records</span></div><div class="table-wrap"><table><thead><tr><th>Received</th><th>Route / model</th><th>Status</th><th>Tier</th><th>Replay</th><th>Tools</th><th>Latency</th><th>Bytes</th><th>Measured usage</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No Responses calls have crossed the bridge yet.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
       <aside class="panel detail"><div class="panel-head"><h2>Selected call</h2><span class="tiny" id="selected-id">none</span></div><div class="detail-body" id="detail"><div class="empty">Select a row. Detailed bodies load only when requested; older entries keep lightweight metadata.</div></div></aside>
     </div>
   </main>
   <script>
-    const state = { records: [], selected: null, visible: 200, details: new Map() };
+    const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), flowTimer: null, refreshTimer: null };
     const svgNs = "http://www.w3.org/2000/svg";
     const $ = (id) => document.getElementById(id);
     const fmt = (value) => value === null || value === undefined ? "—" : String(value);
@@ -123,6 +236,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     const bytes = (value) => { if (!Number.isFinite(value)) return "—"; if (value < 1024) return value + " B"; if (value < 1024 * 1024) return (value / 1024).toFixed(1) + " KB"; if (value < 1024 * 1024 * 1024) return (value / 1024 / 1024).toFixed(1) + " MB"; return (value / 1024 / 1024 / 1024).toFixed(2) + " GB"; };
     const duration = (value) => Number.isFinite(value) ? (value < 1000 ? value + " ms" : value < 60000 ? (value / 1000).toFixed(1) + " s" : (value / 60000).toFixed(1) + " min") : "—";
     const time = (value) => { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleString() : "—"; };
+    const usd = (value) => { const amount = Number(value) || 0; if (amount === 0) return "$0.00"; if (amount < .01) return "$" + amount.toFixed(6); if (amount < 1) return "$" + amount.toFixed(4); return "$" + amount.toFixed(2); };
+    const compact = (value) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(Number(value) || 0);
     function setText(id, value) { $(id).textContent = fmt(value); }
     function svgElement(name, attributes) { const node = document.createElementNS(svgNs, name); for (const entry of Object.entries(attributes || {})) node.setAttribute(entry[0], String(entry[1])); return node; }
     function chartFrame(svg, rows, fields, colors, mode) {
@@ -183,6 +298,101 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         track.appendChild(fill); row.append(meta, track); root.appendChild(row);
       }
     }
+    function renderPricing(data) {
+      const summary = data.summary || {}, pricing = data.pricing || {};
+      const coverage = Math.max(0, Math.min(100, Number(summary.meteringCoveragePercent) || 0));
+      setText("api-cost", usd(summary.apiEquivalentUsd));
+      setText("input-tokens", compact(summary.inputTokens));
+      setText("output-tokens", compact(summary.outputTokens));
+      setText("sdk-calls", number(summary.sdkApiCalls));
+      setText("cost-coverage", coverage.toFixed(1) + "% metered · " + number(summary.unmeteredCalls || 0) + " earlier unmetered");
+      $("coverage-fill").style.width = coverage.toFixed(2) + "%";
+      setText("price-date", pricing.sourceDate ? "snapshot " + pricing.sourceDate : "price unavailable");
+      setText("price-source-date", pricing.sourceDate || "—");
+      const priced = (pricing.models || []).filter((model) => !model.unavailable);
+      if (priced[0]?.sourceUrl) $("price-source").href = priced[0].sourceUrl;
+      const strip = $("rate-strip"); strip.replaceChildren();
+      for (const model of priced) {
+        const chip = document.createElement("a"); chip.className = "rate-chip"; chip.href = model.sourceUrl; chip.target = "_blank"; chip.rel = "noopener noreferrer";
+        const name = document.createElement("strong"); name.textContent = model.id.replace("gpt-", "GPT ");
+        const rate = document.createElement("span"); rate.textContent = "$" + model.inputUsdPerMillion + " in · $" + model.outputUsdPerMillion + " out / 1M";
+        chip.append(name, rate); strip.appendChild(chip);
+      }
+    }
+    function renderQuota(data) {
+      const summary = data.summary || {}, quota = data.copilot?.quota || {}, snapshots = quota.snapshots || {};
+      const premium = snapshots.premium_interactions;
+      setText("ai-credits", (Number(summary.aiCredits) || 0).toFixed(6));
+      if (premium) {
+        const remaining = Math.max(0, Math.min(100, Number(premium.remainingPercentage) || 0));
+        setText("quota-left", premium.isUnlimitedEntitlement ? "Unlimited" : remaining.toFixed(1) + "% left");
+        setText("quota-used", compact(premium.usedRequests));
+        setText("quota-total", premium.isUnlimitedEntitlement ? "Unlimited" : compact(premium.entitlementRequests));
+        $("quota-progress").value = premium.isUnlimitedEntitlement ? 100 : remaining;
+        setText("quota-state", quota.status + " · resets " + time(premium.resetDate));
+        $("quota-note").textContent = "Premium interaction units are reported by GitHub's SDK. Continued use after quota is " + (premium.usageAllowedWithExhaustedQuota ? "allowed" : "blocked") + "; overage billing is " + (premium.overageAllowedWithExhaustedQuota ? "allowed" : "not allowed") + " by this entitlement. Actual charges depend on your GitHub plan.";
+      } else {
+        setText("quota-left", quota.status === "unavailable" ? "Unavailable" : "Loading…");
+        setText("quota-state", quota.message || "waiting for SDK quota snapshot");
+        setText("quota-used", "—"); setText("quota-total", "—"); $("quota-progress").value = 0;
+      }
+      const root = $("quota-categories"); root.replaceChildren();
+      const entries = Object.entries(snapshots);
+      if (!entries.length) { const chip = document.createElement("span"); chip.className = "quota-chip"; chip.textContent = quota.status || "loading"; root.appendChild(chip); }
+      for (const entry of entries) {
+        const chip = document.createElement("span"); chip.className = "quota-chip" + (entry[1].isUnlimitedEntitlement ? " unlimited" : "");
+        chip.textContent = entry[0].replaceAll("_", " ") + ": " + (entry[1].isUnlimitedEntitlement ? "unlimited" : (Number(entry[1].remainingPercentage) || 0).toFixed(1) + "% left");
+        root.appendChild(chip);
+      }
+    }
+    function renderActiveCalls() {
+      const root = $("active-calls"); root.replaceChildren();
+      const calls = [...state.liveCalls.values()].slice(-10).reverse();
+      if (!calls.length) { const empty = document.createElement("span"); empty.className = "call-chip"; empty.textContent = "No calls in flight"; root.appendChild(empty); return; }
+      for (const call of calls) {
+        const chip = document.createElement("span"); chip.className = "call-chip";
+        const strong = document.createElement("strong"); strong.textContent = (call.id || "call").slice(-8);
+        chip.append(strong, document.createTextNode(" · " + (call.model || "model") + " · " + call.phase)); root.appendChild(chip);
+      }
+    }
+    function setFlowPhase(phase, title, detail) {
+      const stage = $("flow-stage");
+      stage.className = "flow-stage idle";
+      void stage.offsetWidth;
+      stage.className = "flow-stage " + phase;
+      for (const node of stage.querySelectorAll(".flow-node")) { node.classList.remove("active", "response"); }
+      const activate = (name, response) => { const node = stage.querySelector('[data-node="' + name + '"]'); if (node) { node.classList.add("active"); if (response) node.classList.add("response"); } };
+      if (phase === "request") { activate("codex"); activate("relay"); }
+      if (phase === "forward") { activate("relay"); activate("copilot"); }
+      if (phase === "process") { activate("copilot"); activate("model"); }
+      if (phase === "response") { activate("model"); activate("codex", true); }
+      if (phase === "failed") { activate("relay"); }
+      setText("flow-phase", phase.toUpperCase()); setText("live-event", title); setText("live-event-detail", detail);
+      clearTimeout(state.flowTimer);
+      state.flowTimer = setTimeout(() => { stage.className = "flow-stage idle"; for (const node of stage.querySelectorAll(".flow-node")) node.classList.remove("active", "response"); setText("flow-phase", "IDLE"); }, 2200);
+    }
+    function handleLiveEvent(event) {
+      const record = event.record || {}, id = record.id || "unknown", model = record.selectedModel || record.requestedModel || event.model || "model";
+      if (event.type === "dashboard.ready") return;
+      let phase = "active", animation = "request", title = "Codex request received", detail = "Call " + id.slice(-8) + " entered the loopback relay.";
+      if (event.type === "relay.forwarded") { phase = "forwarded"; animation = "forward"; title = "Relay forwarded context to Copilot"; detail = model + " · " + (event.phase || "request") + "."; }
+      if (event.type === "relay.usage") { phase = "model response"; animation = "process"; title = "Copilot model usage received"; detail = model + " · " + number(event.usage?.inputTokens || 0) + " input / " + number(event.usage?.outputTokens || 0) + " output tokens."; }
+      if (event.type === "relay.tool_requested") { phase = "tool call"; animation = "response"; title = "Tool call returned to Codex"; detail = "Codex will execute " + (event.tool || "the requested tool") + " outside the relay."; }
+      if (event.type === "relay.tool_resolved") { phase = "tool result"; animation = "request"; title = "Tool result sent back through relay"; detail = event.failed ? "The outer tool reported a failure." : "Copilot can continue the same SDK session."; }
+      if (event.type === "relay.completed") { phase = "completed"; animation = "response"; title = "Response completed back in Codex"; detail = model + " · " + duration(record.latencyMs) + " end-to-end."; }
+      if (event.type === "relay.failed") { phase = "failed"; animation = "failed"; title = "Relay call failed"; detail = model + " · inspect the sanitized call record for details."; }
+      state.liveCalls.set(id, { id, model, phase });
+      while (state.liveCalls.size > 20) state.liveCalls.delete(state.liveCalls.keys().next().value);
+      renderActiveCalls(); setFlowPhase(animation, title, detail);
+      if (event.type === "relay.completed" || event.type === "relay.failed") setTimeout(() => { state.liveCalls.delete(id); renderActiveCalls(); }, 2600);
+      clearTimeout(state.refreshTimer); state.refreshTimer = setTimeout(refresh, 250);
+    }
+    function connectLiveEvents() {
+      const source = new EventSource("/dashboard/events");
+      source.onopen = () => { $("live-badge").className = "live-badge connected"; setText("live-status", "live event stream"); };
+      source.addEventListener("relay", (message) => { try { handleLiveEvent(JSON.parse(message.data)); } catch { /* Ignore a damaged transient dashboard event. */ } });
+      source.onerror = () => { $("live-badge").className = "live-badge"; setText("live-status", "reconnecting live feed"); };
+    }
     function renderStats(data) {
       const summary = data.summary || {}, storage = data.storage || {};
       setText("received", number(summary.received)); setText("replayed", number(summary.replayed)); setText("completed", number(summary.completed)); setText("failed", number(summary.failed)); setText("active", number(summary.active)); setText("tools", number(summary.toolCalls)); setText("latency", duration(summary.avgLatencyMs)); setText("traffic", bytes((summary.inputBytes || 0) + (summary.outputBytes || 0)));
@@ -190,18 +400,20 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("storage-total", bytes(storage.totalBytes || 0)); setText("history-size", bytes(storage.historyBytes || 0)); setText("metrics-size", bytes((storage.metricsBytes || 0) + (storage.eventLogBytes || 0) + (storage.watchdogLogBytes || 0) + (storage.processStdoutBytes || 0) + (storage.processStderrBytes || 0))); setText("telemetry-cap", bytes(storage.telemetryCapBytes || 0)); setText("retained", number(summary.detailed || 0) + " detailed · " + number(summary.lightweight || 0) + " light");
       $("storage-meter").max = storage.telemetryCapBytes || 1; $("storage-meter").value = storage.totalBytes || 0;
       const baseline = data.metricsBaseline || {};
-      $("baseline").textContent = baseline.source === "history-migration" ? "Mileage baseline: " + number(baseline.recoverableRecords || 0) + " recoverable calls. Exact and durable from " + time(baseline.seededAt) + "." : "Lifetime mileage is durable from " + time(data.metricsCreatedAt) + " and survives detailed-history pruning.";
+      $("baseline").textContent = "Lifetime call mileage is durable from " + time(data.metricsCreatedAt) + ". Exact token/cost metering began " + time(baseline.usageMeteringStartedAt) + "; " + number(summary.unmeteredCalls || 0) + " earlier outcomes remain honestly unmetered.";
       chartFrame($("hourly-chart"), data.analytics?.hourly || [], ["received", "replayed"], ["#69b7ff", "#54e0d1"], "lines");
       chartFrame($("daily-chart"), data.analytics?.daily || [], ["completed", "failed"], ["#6ddd9a", "#ff8398"], "bars");
       renderModels(data.analytics?.models || []);
+      renderPricing(data); renderQuota(data); setText("active-exchanges", number(data.activeExchanges || 0) + " exchanges");
       setText("updated", "updated " + new Date().toLocaleTimeString()); $("updated").className = "pill";
     }
     function renderRows() {
       const rows = $("rows"); rows.replaceChildren(); const records = state.records.slice(0, state.visible); $("empty").style.display = records.length ? "none" : "block";
       for (const record of records) {
-        const row = document.createElement("tr"); if (record.id === state.selected) row.className = "selected"; row.onclick = () => selectRecord(record.id);
-        const values = [time(record.receivedAt), (record.requestPath || "—") + "\n" + (record.selectedModel || record.requestedModel || "unknown"), record.status, record.detailTier, record.replayCount || 0, record.toolCalls || 0, duration(record.latencyMs), bytes((record.inputBytes || 0) + (record.outputBytes || 0))];
-        values.forEach((value, index) => { const cell = document.createElement("td"); if (index === 1) { cell.className = "wrap model"; cell.style.whiteSpace = "pre-line"; } else if (index === 2) cell.className = "status " + record.status; if (index === 3) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : "detail"; cell.appendChild(badge); } else cell.textContent = value; row.appendChild(cell); });
+        const row = document.createElement("tr"); if (record.id === state.selected) row.className = "selected"; row.tabIndex = 0; row.setAttribute("role", "button"); row.onclick = () => selectRecord(record.id); row.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRecord(record.id); } };
+        const measured = record.usage?.metered ? compact((record.usage.inputTokens || 0) + (record.usage.outputTokens || 0)) + " tokens\n" + usd(record.usage.apiEquivalentUsd) : "unmetered";
+        const values = [time(record.receivedAt), (record.requestPath || "—") + "\n" + (record.selectedModel || record.requestedModel || "unknown"), record.status, record.detailTier, record.replayCount || 0, record.toolCalls || 0, duration(record.latencyMs), bytes((record.inputBytes || 0) + (record.outputBytes || 0)), measured];
+        values.forEach((value, index) => { const cell = document.createElement("td"); if (index === 1) { cell.className = "wrap model"; cell.style.whiteSpace = "pre-line"; } else if (index === 2) cell.className = "status " + record.status; else if (index === 8) { cell.className = "token-cell"; cell.style.whiteSpace = "pre-line"; } if (index === 3) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : "detail"; cell.appendChild(badge); } else cell.textContent = value; row.appendChild(cell); });
         rows.appendChild(row);
       }
       $("show-more").hidden = state.visible >= state.records.length;
@@ -211,6 +423,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       const detail = $("detail"); detail.replaceChildren(); setText("selected-id", record?.id || "none");
       if (!record) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "Select a call to inspect it."; detail.appendChild(empty); return; }
       detail.appendChild(section("Call metadata", { id: record.id, tier: record.detailTier, status: record.status, receivedAt: record.receivedAt, completedAt: record.completedAt, route: record.requestPath, requestedModel: record.requestedModel, selectedModel: record.selectedModel, streaming: record.streaming, inputBytes: record.inputBytes, outputBytes: record.outputBytes, latencyMs: record.latencyMs, replayCount: record.replayCount, toolCalls: record.toolCalls, previousResponseId: record.previousResponseId, continuedFrom: record.continuedFrom }));
+      detail.appendChild(section("Measured SDK usage and API-equivalent estimate", record.usage || { metered: false, note: "This call predates exact SDK usage capture." }));
       if (loading) { const note = document.createElement("div"); note.className = "empty"; note.textContent = "Loading sanitized detail on demand…"; detail.appendChild(note); return; }
       if (record.detailTier === "lightweight" || !record.detailAvailable) { detail.appendChild(section("Lightweight retention", { note: "The full body aged out of the 200-call detailed tier. Mileage and metadata remain durable.", errorSummary: record.errorSummary || null })); return; }
       detail.appendChild(section("Codex input (sanitized)", record.input)); detail.appendChild(section("Copilot replay(s)", record.copilotReplays)); if (record.toolRequests?.length) detail.appendChild(section("Tool requests", record.toolRequests)); if (record.toolResolutions?.length) detail.appendChild(section("Tool resolutions", record.toolResolutions)); detail.appendChild(section("Codex output (sanitized)", record.output)); if (record.error) detail.appendChild(section("Error", record.error, "error"));
@@ -248,7 +461,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     $("show-more").onclick = () => { state.visible += 200; renderRows(); };
     $("clear").onclick = async () => { if (!confirm("Clear the 1,000-entry detailed history? Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
-    refresh(); setInterval(refresh, 5000);
+    $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
+    setText("relay-address", location.host); connectLiveEvents(); refresh(); setInterval(refresh, 5000);
   </script>
 </body>
 </html>`;

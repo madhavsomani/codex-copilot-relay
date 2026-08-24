@@ -69,8 +69,15 @@ Protocol or product changes can require updates to the relay.
   compactor instead of failing at the old 32 MiB HTTP-reader ceiling
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
-- Lightweight analytics dashboard with 1,000 recent call entries, 200 on-demand
-  sanitized detail bodies, durable lifetime mileage, and hourly/daily/model charts
+- Modern loopback dashboard with a real-time animated Codex → relay → Copilot →
+  model request path, 1,000 recent call entries, 200 on-demand sanitized detail
+  bodies, durable lifetime mileage, and hourly/daily/model charts
+- Exact per-call Copilot SDK input, output, cache, reasoning, AI-credit, model-
+  cost-unit, and model-call telemetry when the runtime emits `assistant.usage`
+- Authenticated Copilot entitlement/quota snapshots with no token, login, or
+  account identifier exposed to the browser
+- Separately labeled OpenAI API-equivalent cost estimates from source-dated
+  public standard text-token prices; estimates are never presented as charges
 - Visible Windows Terminal event stream
 - Watchdog recovery for both the relay and visible terminal
 - Two-click enable/restore workflow for Codex `config.toml`
@@ -266,6 +273,33 @@ With the persistent relay running:
 - Dashboard: <http://127.0.0.1:4144/dashboard>
 - Health: <http://127.0.0.1:4144/health>
 
+The dashboard is a local command center as well as a history viewer:
+
+- `/dashboard/events` is a loopback-only Server-Sent Events feed. Real request
+  phases animate Codex → Local Relay → GitHub Copilot → GPT Model, then the
+  return stream animates back to Codex. Tool calls visibly return to outer Codex,
+  which remains responsible for tool execution and approvals.
+- GitHub's SDK `assistant.usage` events provide exact per-model input, output,
+  cache-read, cache-write, reasoning, nano-AIU, and model-cost-unit metrics. The
+  relay stores only the safe numeric aggregate, never provider tracing IDs.
+- GitHub's SDK `account.getQuota` supplies `chat`, `completions`, and
+  `premium_interactions` entitlement snapshots. Refresh is fail-soft and never
+  blocks model traffic. The SDK does not expose the user's subscription purchase
+  price, so the dashboard does not invent one.
+- The **OpenAI API-equivalent estimate** multiplies measured per-call text tokens
+  by a source-dated snapshot of OpenAI's standard public list prices. Cached input,
+  GPT-5.6 cache writes, and documented >272K long-context multipliers are applied
+  per model call. It excludes tool charges, regional/service-tier differences,
+  taxes, and any unmetered calls, and is explicitly **not an OpenAI charge, a
+  GitHub charge, savings, or a Copilot invoice**.
+
+Official metric and price references:
+
+- [GitHub Copilot SDK usage and billing metrics](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/usage-and-billing)
+- [GPT-5.6 Sol public API pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+- [GPT-5.6 Luna public API pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+- The remaining model-specific links are visible beside each rate in the dashboard.
+
 The dashboard uses two storage tiers by default:
 
 - The newest 200 calls retain bounded, sanitized request/replay/output detail.
@@ -273,15 +307,18 @@ The dashboard uses two storage tiers by default:
 - Lifetime received, replayed, completed, failed, tool, byte, and latency
   counters live in a separate atomic metrics file and never decrease when old
   detail is compacted or when **Clear detailed history** is used.
+- Exact token, AI-credit, model-cost-unit, SDK-call, and API-equivalent cost
+  counters share that durable metrics file and survive process restart.
 - Hourly rollups cover 31 days, daily rollups cover up to 10 years, and model
   totals feed dependency-free SVG/CSS charts.
 - The dashboard API returns lightweight indexes; a detailed body is fetched
   only when a recent detailed row is selected.
 
-On the first upgrade from an older relay, the odometer is seeded from every
-record still recoverable in `proxy-events.jsonl`. Calls that an older 200-call
-recorder had already discarded cannot be reconstructed; mileage is exact and
-durable from that migration forward.
+On the first upgrade from an older relay, the call odometer is preserved. Older
+outcomes are labeled **unmetered** because their exact SDK token events no longer
+exist; the dashboard shows a forward-only metering coverage percentage instead
+of estimating old prompts from bytes. Exact token/cost mileage is durable from
+the version-2 metrics migration forward.
 
 Default managed storage ceilings are 256 MiB for recent history, 16 MiB for
 lifetime metrics, 64 MiB for the visible event stream, 8 MiB for watchdog
@@ -296,6 +333,11 @@ advanced manual users can override `BRIDGE_HISTORY_LIMIT`,
 
 Credential fields and common token patterns are redacted, but you should still
 treat `runtime/` as private. The entire directory is excluded from Git.
+
+Public pricing changes over time. `pricing.mjs` records the source date and
+model-specific official URLs used by the dashboard; update and retest that
+snapshot when OpenAI changes a listed rate. Copilot-side token prices and quota
+remain runtime SDK data and are not hard-coded as currency.
 
 ## One-shot isolated launcher
 
