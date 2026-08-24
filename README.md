@@ -1,34 +1,112 @@
+<div align="center">
+
 # Codex Copilot Relay
 
-An unofficial, loopback-only compatibility relay that lets Codex use the
-official GitHub Copilot SDK as a custom model provider.
+**Keep the Codex experience. Route model inference through your GitHub Copilot entitlement.**
 
-```text
-Codex desktop / CLI
-        |
-        | OpenAI Responses-compatible HTTP
-        v
-Codex Copilot Relay (127.0.0.1 only)
-        |
-        | GitHub Copilot SDK + Copilot CLI JSON-RPC
-        v
-GitHub Copilot model entitlement
-```
+An unofficial, localhost-only OpenAI Responses compatibility gateway between
+Codex and the official GitHub Copilot SDK.
 
-The relay translates request, response, streaming-event, and tool-call
-envelopes. At the OpenAI Responses protocol boundary, it is designed to be a
-transparent Codex provider: the desktop app and CLI keep their normal tool,
-approval, multi-agent, and continuation behavior while the model inference is
-served by GitHub Copilot. Codex keeps ownership of local tool execution,
-sandboxing, and approvals. When a model asks for a tool, the relay returns that
-request to Codex; Codex runs the tool locally and sends the result back through
-the same open exchange.
+[![CI](https://github.com/madhavsomani/codex-copilot-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/madhavsomani/codex-copilot-relay/actions/workflows/ci.yml)
+[![Node.js 22 LTS](https://img.shields.io/badge/Node.js-22%20LTS-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Windows 10/11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows&logoColor=white)](#windows-complete-setup)
+[![Loopback only](https://img.shields.io/badge/network-127.0.0.1%20only-22c55e)](#security-model)
+[![MIT License](https://img.shields.io/badge/license-MIT-8b5cf6)](LICENSE)
+
+[Quick start](#quick-start-windows) · [Live dashboard](#dashboard-preview) · [How it works](#how-it-works) · [Restore Codex](#restore-normal-codex) · [Security](#security-model)
+
+</div>
+
+![Codex Copilot Relay dashboard showing four genuine concurrent requests moving through Codex, the local relay, GitHub Copilot, and a GPT model](docs/images/dashboard-live-concurrency.png)
+
+<p align="center"><sub>A real four-request concurrency run captured from the dependency-free local dashboard. No mock traffic or fabricated metrics.</sub></p>
+
+## Keep Codex. Change the inference path.
+
+Codex Copilot Relay makes GitHub Copilot look like a custom OpenAI
+Responses-compatible provider to Codex. The desktop app and CLI keep their
+normal tools, approvals, memory, child agents, streaming, and continuation
+loop; the relay translates model traffic to and from GitHub's official Copilot
+SDK.
+
+| Codex keeps owning | The relay handles | You gain |
+| --- | --- | --- |
+| Tools, files, approvals, sandboxing, memory, and agent orchestration | Responses protocol translation, Copilot sessions, streaming, recovery, and telemetry | A reversible Copilot-backed Codex route with live local observability |
+
+- **Local by design:** the server and dashboard bind only to `127.0.0.1`.
+- **Built for overlapping agents:** each initial request receives an independent
+  Copilot SDK session.
+- **Made for long tool loops:** SSE heartbeats, bounded recovery, context
+  compaction, and a 13-hour outer-tool continuation window protect legitimate
+  long-running work.
+- **Observable without a cloud dashboard:** inspect live request flow, outcomes,
+  models, sanitized history, usage, quota, storage, and API-equivalent estimates.
+- **Reversible on Windows:** one shortcut enables or repairs the gateway; a
+  second shortcut stops it and restores the exact original `config.toml`.
 
 > [!IMPORTANT]
 > This is not an unlimited-token route, an authentication bypass, or an
 > official Codex/GitHub integration. Every model call uses the signed-in user's
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
+
+## Quick start (Windows)
+
+```powershell
+npm install -g @github/copilot
+copilot login
+
+git clone https://github.com/madhavsomani/codex-copilot-relay.git
+cd codex-copilot-relay
+npm ci
+npm run probe -- --model gpt-5.6-sol
+
+Set-ExecutionPolicy -Scope Process Bypass
+.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-5.6-sol
+```
+
+Reopen the Codex task after the provider switch, then visit
+<http://127.0.0.1:4144/dashboard>. If the probe lists a different available GPT
+model, use that model ID consistently. The [complete Windows setup](#windows-complete-setup)
+explains authentication, verification, shortcuts, updating, and rollback.
+
+## Dashboard preview
+
+The dashboard is served by the relay itself: no framework, analytics service,
+CDN, or external database is required. All displayed traffic is sanitized local
+telemetry.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/dashboard-overview.png" alt="Relay overview with lifetime calls, success rate, latency, estimated API-equivalent cost, Copilot credits, entitlement, and architecture" /></td>
+    <td width="50%"><img src="docs/images/dashboard-analytics.png" alt="Relay analytics with traffic charts, model mileage, bounded storage, and recent call history" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Overview, entitlement, pricing reference, and live request inspector</sub></td>
+    <td align="center"><sub>Traffic history, model mileage, bounded storage, and recent calls</sub></td>
+  </tr>
+</table>
+
+## How it works
+
+```text
+Codex desktop / CLI
+        |
+        | OpenAI Responses-compatible HTTP + SSE
+        v
+Codex Copilot Relay (127.0.0.1:4144)
+        |
+        | GitHub Copilot SDK + Copilot CLI authentication
+        v
+GitHub Copilot model entitlement
+```
+
+The relay translates request, response, streaming-event, and tool-call
+envelopes. At the OpenAI Responses protocol boundary, it is designed to be a
+transparent Codex provider. Codex keeps ownership of local tool execution,
+sandboxing, and approvals. When a model asks for a tool, the relay returns that
+request to Codex; Codex runs the tool locally and sends the result back through
+the same open exchange.
 
 ## Why it exists
 
