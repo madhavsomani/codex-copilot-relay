@@ -83,38 +83,36 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .architecture { overflow: hidden; position: relative; min-height: 400px; }
     .architecture::before { content: ""; position: absolute; width: 260px; height: 260px; right: 8%; top: 17%; border-radius: 50%; background: rgba(84,224,209,.08); filter: blur(70px); pointer-events: none; }
     .architecture-body { padding: 17px; position: relative; }
-    .flow-viewport { overflow-x: auto; padding: 8px 2px 12px; scrollbar-width: thin; }
-    .flow-stage { min-width: 720px; display: grid; grid-template-columns: minmax(130px,1fr) 62px minmax(130px,1fr) 62px minmax(130px,1fr) 62px minmax(130px,1fr); align-items: center; }
-    .flow-node { min-height: 138px; border: 1px solid #30496d; border-radius: 16px; background: linear-gradient(155deg, rgba(29,47,78,.9), rgba(9,16,30,.96)); padding: 15px; position: relative; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
-    .flow-node::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; opacity: 0; box-shadow: 0 0 28px rgba(105,183,255,.34); transition: opacity .2s ease; pointer-events: none; }
-    .flow-node.active { border-color: var(--accent); transform: translateY(-3px); }
-    .flow-node.active::after { opacity: 1; }
-    .flow-node[data-node="model"].active { border-color: var(--violet); }
-    .flow-node[data-node="codex"].response { border-color: var(--good); box-shadow: 0 0 28px rgba(109,221,154,.15); }
-    .node-icon { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #3e608f; border-radius: 10px; color: var(--accent); background: rgba(105,183,255,.09); font-size: 17px; margin-bottom: 14px; }
-    .node-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: .09em; font-size: 9px; }
-    .node-title { margin-top: 3px; font-size: 15px; font-weight: 720; }
-    .node-copy { margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
-    .connector { height: 38px; position: relative; overflow: hidden; }
-    .connector::before { content: ""; position: absolute; left: 4px; right: 4px; top: 18px; height: 1px; background: linear-gradient(90deg, var(--line), #4a6f9e, var(--line)); }
-    .connector::after { content: "›"; position: absolute; right: 3px; top: 5px; color: #557aa9; font-size: 22px; }
-    .packet { position: absolute; left: 3px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 15px var(--accent); opacity: 0; z-index: 1; }
-    .flow-stage.request .connector:nth-of-type(2) .packet, .flow-stage.forward .connector:nth-of-type(4) .packet, .flow-stage.process .connector:nth-of-type(6) .packet { animation: packet-forward 1.05s ease-out both; }
-    .flow-stage.request .connector:nth-of-type(4) .packet, .flow-stage.request .connector:nth-of-type(6) .packet { animation: packet-forward 1.05s ease-out both; animation-delay: .22s; }
-    .flow-stage.response .connector .packet { background: var(--good); box-shadow: 0 0 15px var(--good); animation: packet-return 1.1s ease-out both; }
-    .flow-stage.response .connector:nth-of-type(4) .packet { animation-delay: .18s; }
-    .flow-stage.response .connector:nth-of-type(2) .packet { animation-delay: .36s; }
-    .flow-stage.failed .connector .packet { background: var(--bad); box-shadow: 0 0 15px var(--bad); animation: packet-forward .7s ease-out both; }
-    @keyframes packet-forward { 0% { opacity: 0; transform: translateX(0) scale(.6); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(49px) scale(1.2); } }
-    @keyframes packet-return { 0% { opacity: 0; transform: translateX(49px) scale(.6); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(0) scale(1.2); } }
+    .network-viewport { overflow-x: auto; padding: 2px 0 12px; scrollbar-width: thin; }
+    .network-stage { min-width: 720px; border: 1px solid rgba(48,73,109,.74); border-radius: 15px; background: radial-gradient(circle at 61% 39%, rgba(84,224,209,.08), transparent 15rem), linear-gradient(180deg, rgba(5,10,19,.94), rgba(8,15,28,.86)); overflow: hidden; }
+    .traffic-map { width: 100%; min-width: 720px; height: 292px; display: block; overflow: hidden; }
+    .route-line { fill: none; stroke: #77869b; stroke-width: 2.6; stroke-dasharray: 1 11; stroke-linecap: round; opacity: .63; }
+    .route-line.secondary { stroke: #53647d; opacity: .46; }
+    .network-node { color: var(--accent); transition: opacity .2s ease; }
+    .network-node .node-shell { fill: #0b1425; stroke: #536984; stroke-width: 1.6; transition: stroke .2s ease, fill .2s ease; }
+    .network-node .node-aura { fill: currentColor; opacity: 0; transition: opacity .2s ease; }
+    .network-node .node-glyph { fill: none; stroke: #b8c6d9; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .network-node.active .node-shell { stroke: currentColor; fill: #101e34; }
+    .network-node.active .node-aura { opacity: .12; }
+    .network-node.response { color: var(--good); }
+    .network-node[data-node="model"] { color: var(--violet); }
+    .network-node[data-node="tools"] { color: var(--warn); }
+    .network-label { fill: var(--text); font-size: 13px; font-weight: 700; text-anchor: middle; }
+    .network-meta { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: .035em; }
+    .traffic-legend { fill: var(--muted); font-size: 9px; }
+    .traffic-counter { fill: rgba(10,20,36,.86); stroke: #344b6a; }
+    .traffic-packet { color: var(--accent); pointer-events: none; }
+    .traffic-packet .halo { fill: currentColor; opacity: .2; }
+    .traffic-packet .core { fill: currentColor; stroke: rgba(255,255,255,.9); stroke-width: .8; }
     .flow-footer { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border-top: 1px solid var(--line); padding-top: 14px; }
     .event-copy { min-width: 0; }
     .event-copy strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .event-copy span { color: var(--muted); font-size: 11px; }
     .phase { color: var(--cyan); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; border: 1px solid rgba(84,224,209,.3); background: rgba(84,224,209,.07); border-radius: 99px; padding: 5px 9px; }
     .active-strip { margin-top: 12px; display: flex; gap: 7px; overflow-x: auto; min-height: 29px; }
-    .call-chip { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); background: #0b1325; font-size: 10px; }
+    .call-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); background: #0b1325; font-size: 10px; }
     .call-chip strong { color: var(--text); }
+    .call-color { width: 7px; height: 7px; border-radius: 50%; background: var(--call-color, var(--accent)); box-shadow: 0 0 8px var(--call-color, var(--accent)); }
     .insight-stack { display: grid; gap: 14px; }
     .insight { min-height: 0; }
     .insight-body { padding: 15px 16px; }
@@ -167,15 +165,53 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <article class="panel architecture" id="relay-architecture">
         <div class="panel-head"><div><h2>Live relay architecture</h2><span class="tiny">Every pulse is driven by a real loopback telemetry event</span></div><span class="phase" id="flow-phase">IDLE</span></div>
         <div class="architecture-body">
-          <div class="flow-viewport">
-            <div class="flow-stage idle" id="flow-stage" role="img" aria-label="Animated architecture showing a Codex request traveling through the local relay and GitHub Copilot to a model, then streaming back to Codex">
-              <div class="flow-node" data-node="codex"><div class="node-icon">C</div><div class="node-kicker">Origin</div><div class="node-title">Codex App</div><div class="node-copy">Sends an OpenAI Responses-compatible request. Codex keeps ownership of tools and child agents.</div></div>
-              <div class="connector" aria-hidden="true"><span class="packet"></span></div>
-              <div class="flow-node" data-node="relay"><div class="node-icon">R</div><div class="node-kicker" id="relay-address">127.0.0.1:4144</div><div class="node-title">Local Relay</div><div class="node-copy">Bounds context, translates tools, preserves streaming, and records sanitized telemetry.</div></div>
-              <div class="connector" aria-hidden="true"><span class="packet"></span></div>
-              <div class="flow-node" data-node="copilot"><div class="node-icon">↗</div><div class="node-kicker">Official SDK</div><div class="node-title">GitHub Copilot</div><div class="node-copy">Authenticates with your local Copilot CLI session and reports exact usage and quota.</div></div>
-              <div class="connector" aria-hidden="true"><span class="packet"></span></div>
-              <div class="flow-node" data-node="model"><div class="node-icon">AI</div><div class="node-kicker">Remote inference</div><div class="node-title">GPT Model</div><div class="node-copy">Produces text or tool calls; the relay converts the stream back into Codex Responses events.</div></div>
+          <div class="network-viewport">
+            <div class="network-stage">
+              <svg class="traffic-map idle" id="traffic-map" viewBox="0 0 840 310" role="img" aria-labelledby="traffic-map-title traffic-map-description">
+                <title id="traffic-map-title">Live concurrent Codex relay traffic</title>
+                <desc id="traffic-map-description">A dotted network map where each colored moving packet represents one real Codex call traveling through the local relay, GitHub Copilot, a GPT model, or an outer Codex tool.</desc>
+                <defs>
+                  <path id="route-codex-relay" d="M132 148 C178 148 211 148 250 148"></path>
+                  <path id="route-relay-copilot" d="M350 137 C397 125 435 94 470 82"></path>
+                  <path id="route-copilot-model" d="M570 84 C627 89 676 121 717 140"></path>
+                  <path id="route-relay-tools" d="M350 160 C404 177 443 217 470 232"></path>
+                  <path id="route-tools-model" d="M570 232 C631 224 678 187 720 160"></path>
+                </defs>
+                <g aria-hidden="true">
+                  <use href="#route-codex-relay" class="route-line"></use>
+                  <use href="#route-relay-copilot" class="route-line"></use>
+                  <use href="#route-copilot-model" class="route-line"></use>
+                  <use href="#route-relay-tools" class="route-line secondary"></use>
+                  <use href="#route-tools-model" class="route-line secondary"></use>
+                </g>
+                <g id="traffic-packets" aria-hidden="true"></g>
+                <g class="network-node" data-node="codex" transform="translate(82 148)">
+                  <circle class="node-aura" r="54"></circle><rect class="node-shell" x="-48" y="-42" width="96" height="84" rx="18"></rect>
+                  <g class="node-glyph"><rect x="-22" y="-19" width="35" height="30" rx="4"></rect><path d="M-13 19 H22 M22 19 V-11 H14"></path><circle cx="-31" cy="-19" r="3"></circle><circle cx="-31" cy="-7" r="3"></circle><circle cx="-31" cy="5" r="3"></circle></g>
+                  <text class="network-label" y="61">Codex App</text><text class="network-meta" y="77">TASKS + CHILD AGENTS</text>
+                </g>
+                <g class="network-node" data-node="relay" transform="translate(300 148)">
+                  <circle class="node-aura" r="56"></circle><rect class="node-shell" x="-50" y="-44" width="100" height="88" rx="18"></rect>
+                  <g class="node-glyph"><rect x="-21" y="-25" width="42" height="50" rx="5"></rect><path d="M-12 -15 H12 M-12 -6 H12 M-12 3 H12 M-12 12 H12"></path><circle cx="14" cy="-15" r="1.5"></circle><circle cx="14" cy="-6" r="1.5"></circle><circle cx="14" cy="3" r="1.5"></circle><circle cx="14" cy="12" r="1.5"></circle></g>
+                  <text class="network-label" y="63">Local Relay</text><text class="network-meta" id="relay-address" y="79">127.0.0.1:4144</text>
+                </g>
+                <g class="network-node" data-node="copilot" transform="translate(520 82)">
+                  <circle class="node-aura" r="52"></circle><rect class="node-shell" x="-48" y="-38" width="96" height="76" rx="18"></rect>
+                  <g class="node-glyph"><path d="M-24 3 C-24 -14 -10 -24 0 -15 C10 -24 24 -14 24 3 V14 C17 22 8 20 0 14 C-8 20 -17 22 -24 14 Z"></path><path d="M-9 -1 L-2 6 M9 -1 L2 6"></path><circle cx="-11" cy="-4" r="2"></circle><circle cx="11" cy="-4" r="2"></circle></g>
+                  <text class="network-label" y="56">GitHub Copilot</text><text class="network-meta" y="72">OFFICIAL SDK</text>
+                </g>
+                <g class="network-node" data-node="model" transform="translate(760 148)">
+                  <circle class="node-aura" r="53"></circle><circle class="node-shell" r="43"></circle>
+                  <g class="node-glyph"><circle r="22"></circle><path d="M-14 -11 C-3 -19 12 -14 15 -3 C18 8 8 19 -4 18 C-16 17 -22 4 -17 -7 M-19 7 C-8 1 3 5 8 15 M-5 -18 C0 -7 9 -3 20 -5"></path></g>
+                  <text class="network-label" y="62">GPT Model</text><text class="network-meta" y="78">REMOTE INFERENCE</text>
+                </g>
+                <g class="network-node" data-node="tools" transform="translate(520 232)">
+                  <circle class="node-aura" r="48"></circle><rect class="node-shell" x="-48" y="-34" width="96" height="68" rx="17"></rect>
+                  <g class="node-glyph"><path d="M-21 -8 H-6 L0 -17 L7 -8 H21 V14 H-21 Z"></path><path d="M-12 2 H12 M-12 10 H5"></path></g>
+                  <text class="network-label" y="53">Codex tools</text><text class="network-meta" y="69">OUTER APP EXECUTES</text>
+                </g>
+                <g transform="translate(17 18)"><rect class="traffic-counter" width="165" height="25" rx="12.5"></rect><circle cx="14" cy="12.5" r="3.5" fill="#69b7ff"></circle><text class="traffic-legend" id="traffic-count" x="24" y="16">idle · each color is one call</text></g>
+              </svg>
             </div>
           </div>
           <div class="flow-footer"><div class="event-copy" aria-live="polite"><strong id="live-event">Waiting for the next Codex request</strong><span id="live-event-detail">The dashboard stays connected and will animate both directions.</span></div><span class="tiny" id="active-exchanges">0 exchanges</span></div>
@@ -229,6 +265,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <script>
     const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), flowTimer: null, refreshTimer: null };
     const svgNs = "http://www.w3.org/2000/svg";
+    const MAX_LIVE_CALLS = 64;
+    const MAX_TRAFFIC_PACKETS = 96;
+    const TRAFFIC_COLORS = ["#69b7ff", "#54e0d1", "#a98cff", "#ffd27a", "#ff8398", "#6ddd9a", "#ff9f6e", "#8fd3ff"];
+    const TRAFFIC_LANES = [-8, -4, 0, 4, 8];
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const $ = (id) => document.getElementById(id);
     const fmt = (value) => value === null || value === undefined ? "—" : String(value);
     const number = (value) => new Intl.NumberFormat().format(Number.isFinite(value) ? value : 0);
@@ -345,31 +386,79 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         root.appendChild(chip);
       }
     }
+    function callVisual(id) {
+      let hash = 2166136261;
+      const text = String(id || "unknown");
+      for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619) >>> 0;
+      return {
+        color: TRAFFIC_COLORS[hash % TRAFFIC_COLORS.length],
+        lane: TRAFFIC_LANES[(hash >>> 8) % TRAFFIC_LANES.length],
+      };
+    }
+    function ensureLiveCall(id, model, phase) {
+      const prior = state.liveCalls.get(id);
+      const visual = prior || callVisual(id);
+      const call = { id, model, phase, color: visual.color, lane: visual.lane };
+      state.liveCalls.delete(id);
+      state.liveCalls.set(id, call);
+      while (state.liveCalls.size > MAX_LIVE_CALLS) state.liveCalls.delete(state.liveCalls.keys().next().value);
+      return call;
+    }
     function renderActiveCalls() {
       const root = $("active-calls"); root.replaceChildren();
-      const calls = [...state.liveCalls.values()].slice(-10).reverse();
+      const calls = [...state.liveCalls.values()].reverse();
+      setText("traffic-count", calls.length ? number(calls.length) + (calls.length === 1 ? " call visible" : " calls visible") : "idle · each color is one call");
       if (!calls.length) { const empty = document.createElement("span"); empty.className = "call-chip"; empty.textContent = "No calls in flight"; root.appendChild(empty); return; }
       for (const call of calls) {
         const chip = document.createElement("span"); chip.className = "call-chip";
+        const marker = document.createElement("span"); marker.className = "call-color"; marker.style.setProperty("--call-color", call.color);
         const strong = document.createElement("strong"); strong.textContent = (call.id || "call").slice(-8);
-        chip.append(strong, document.createTextNode(" · " + (call.model || "model") + " · " + call.phase)); root.appendChild(chip);
+        chip.append(marker, strong, document.createTextNode(" · " + (call.model || "model") + " · " + call.phase)); root.appendChild(chip);
       }
     }
+    function launchTrafficPacket(pathId, call, options = {}) {
+      if (reducedMotion.matches) return;
+      const layer = $("traffic-packets");
+      if (!layer) return;
+      while (layer.childElementCount >= MAX_TRAFFIC_PACKETS) layer.firstElementChild.remove();
+      const reverse = Boolean(options.reverse), delay = Number(options.delay) || 0;
+      const packet = svgElement("g", { class: "traffic-packet", "data-call": String(call.id).slice(-32), transform: "translate(0 " + call.lane + ")" });
+      packet.style.color = options.color || call.color;
+      packet.appendChild(svgElement("circle", { class: "halo", r: 9 }));
+      packet.appendChild(svgElement("circle", { class: "core", r: 3.8 }));
+      const motion = svgElement("animateMotion", { dur: ".95s", begin: "indefinite", fill: "freeze", rotate: "auto", calcMode: "spline", keyTimes: "0;1", keySplines: ".2 .8 .2 1", keyPoints: reverse ? "1;0" : "0;1" });
+      motion.appendChild(svgElement("mpath", { href: "#" + pathId }));
+      packet.appendChild(motion); layer.appendChild(packet);
+      setTimeout(() => { if (packet.isConnected && typeof motion.beginElement === "function") motion.beginElement(); }, delay);
+      setTimeout(() => packet.remove(), delay + 1125);
+    }
+    function launchTrafficSequence(call, steps, color) {
+      for (const step of steps) launchTrafficPacket(step.path, call, { reverse: step.reverse, delay: step.delay, color });
+    }
+    function launchTrafficForEvent(event, call) {
+      if (event.type === "relay.received") launchTrafficSequence(call, [{ path: "route-codex-relay", delay: 0 }]);
+      if (event.type === "relay.forwarded") launchTrafficSequence(call, [{ path: "route-relay-copilot", delay: 0 }, { path: "route-copilot-model", delay: 170 }]);
+      if (event.type === "relay.usage") launchTrafficSequence(call, [{ path: "route-copilot-model", reverse: true, delay: 0 }]);
+      if (event.type === "relay.tool_requested") launchTrafficSequence(call, [{ path: "route-tools-model", reverse: true, delay: 0 }, { path: "route-relay-tools", reverse: true, delay: 150 }, { path: "route-codex-relay", reverse: true, delay: 300 }]);
+      if (event.type === "relay.tool_resolved") launchTrafficSequence(call, [{ path: "route-codex-relay", delay: 0 }, { path: "route-relay-tools", delay: 150 }, { path: "route-tools-model", delay: 300 }]);
+      if (event.type === "relay.completed") launchTrafficSequence(call, [{ path: "route-copilot-model", reverse: true, delay: 0 }, { path: "route-relay-copilot", reverse: true, delay: 160 }, { path: "route-codex-relay", reverse: true, delay: 320 }]);
+      if (event.type === "relay.failed") launchTrafficSequence(call, [{ path: "route-relay-copilot", reverse: true, delay: 0 }, { path: "route-codex-relay", reverse: true, delay: 160 }], "#ff8398");
+    }
     function setFlowPhase(phase, title, detail) {
-      const stage = $("flow-stage");
-      stage.className = "flow-stage idle";
-      void stage.offsetWidth;
-      stage.className = "flow-stage " + phase;
-      for (const node of stage.querySelectorAll(".flow-node")) { node.classList.remove("active", "response"); }
+      const stage = $("traffic-map");
+      stage.setAttribute("class", "traffic-map " + phase);
+      for (const node of stage.querySelectorAll(".network-node")) node.classList.remove("active", "response");
       const activate = (name, response) => { const node = stage.querySelector('[data-node="' + name + '"]'); if (node) { node.classList.add("active"); if (response) node.classList.add("response"); } };
       if (phase === "request") { activate("codex"); activate("relay"); }
-      if (phase === "forward") { activate("relay"); activate("copilot"); }
+      if (phase === "forward") { activate("relay"); activate("copilot"); activate("model"); }
       if (phase === "process") { activate("copilot"); activate("model"); }
-      if (phase === "response") { activate("model"); activate("codex", true); }
-      if (phase === "failed") { activate("relay"); }
-      setText("flow-phase", phase.toUpperCase()); setText("live-event", title); setText("live-event-detail", detail);
+      if (phase === "tool-return") { activate("model"); activate("tools"); activate("relay"); activate("codex", true); }
+      if (phase === "tool-forward") { activate("codex"); activate("relay"); activate("tools"); activate("model"); }
+      if (phase === "response") { activate("model"); activate("copilot"); activate("relay"); activate("codex", true); }
+      if (phase === "failed") { activate("relay"); activate("codex", true); }
+      setText("flow-phase", phase.toUpperCase().replace("-", " ")); setText("live-event", title); setText("live-event-detail", detail);
       clearTimeout(state.flowTimer);
-      state.flowTimer = setTimeout(() => { stage.className = "flow-stage idle"; for (const node of stage.querySelectorAll(".flow-node")) node.classList.remove("active", "response"); setText("flow-phase", "IDLE"); }, 2200);
+      state.flowTimer = setTimeout(() => { stage.setAttribute("class", "traffic-map idle"); for (const node of stage.querySelectorAll(".network-node")) node.classList.remove("active", "response"); setText("flow-phase", "IDLE"); }, 2200);
     }
     function handleLiveEvent(event) {
       const record = event.record || {}, id = record.id || "unknown", model = record.selectedModel || record.requestedModel || event.model || "model";
@@ -377,20 +466,20 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       let phase = "active", animation = "request", title = "Codex request received", detail = "Call " + id.slice(-8) + " entered the loopback relay.";
       if (event.type === "relay.forwarded") { phase = "forwarded"; animation = "forward"; title = "Relay forwarded context to Copilot"; detail = model + " · " + (event.phase || "request") + "."; }
       if (event.type === "relay.usage") { phase = "model response"; animation = "process"; title = "Copilot model usage received"; detail = model + " · " + number(event.usage?.inputTokens || 0) + " input / " + number(event.usage?.outputTokens || 0) + " output tokens."; }
-      if (event.type === "relay.tool_requested") { phase = "tool call"; animation = "response"; title = "Tool call returned to Codex"; detail = "Codex will execute " + (event.tool || "the requested tool") + " outside the relay."; }
-      if (event.type === "relay.tool_resolved") { phase = "tool result"; animation = "request"; title = "Tool result sent back through relay"; detail = event.failed ? "The outer tool reported a failure." : "Copilot can continue the same SDK session."; }
+      if (event.type === "relay.tool_requested") { phase = "tool call"; animation = "tool-return"; title = "Tool call returned to Codex"; detail = "Codex will execute " + (event.tool || "the requested tool") + " outside the relay."; }
+      if (event.type === "relay.tool_resolved") { phase = "tool result"; animation = "tool-forward"; title = "Tool result sent back through relay"; detail = event.failed ? "The outer tool reported a failure." : "Copilot can continue the same SDK session."; }
       if (event.type === "relay.completed") { phase = "completed"; animation = "response"; title = "Response completed back in Codex"; detail = model + " · " + duration(record.latencyMs) + " end-to-end."; }
       if (event.type === "relay.failed") { phase = "failed"; animation = "failed"; title = "Relay call failed"; detail = model + " · inspect the sanitized call record for details."; }
-      state.liveCalls.set(id, { id, model, phase });
-      while (state.liveCalls.size > 20) state.liveCalls.delete(state.liveCalls.keys().next().value);
+      const call = ensureLiveCall(id, model, phase);
       renderActiveCalls(); setFlowPhase(animation, title, detail);
-      if (event.type === "relay.completed" || event.type === "relay.failed") setTimeout(() => { state.liveCalls.delete(id); renderActiveCalls(); }, 2600);
+      try { launchTrafficForEvent(event, call); } catch (error) { console.warn("Relay traffic animation skipped:", error); }
+      if (event.type === "relay.completed" || event.type === "relay.failed") setTimeout(() => { if (state.liveCalls.get(id) === call) { state.liveCalls.delete(id); renderActiveCalls(); } }, 3000);
       clearTimeout(state.refreshTimer); state.refreshTimer = setTimeout(refresh, 250);
     }
     function connectLiveEvents() {
       const source = new EventSource("/dashboard/events");
       source.onopen = () => { $("live-badge").className = "live-badge connected"; setText("live-status", "live event stream"); };
-      source.addEventListener("relay", (message) => { try { handleLiveEvent(JSON.parse(message.data)); } catch { /* Ignore a damaged transient dashboard event. */ } });
+      source.addEventListener("relay", (message) => { try { handleLiveEvent(JSON.parse(message.data)); } catch (error) { console.warn("Relay dashboard event skipped:", error); } });
       source.onerror = () => { $("live-badge").className = "live-badge"; setText("live-status", "reconnecting live feed"); };
     }
     function renderStats(data) {

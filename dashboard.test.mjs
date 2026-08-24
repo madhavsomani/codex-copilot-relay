@@ -42,3 +42,20 @@ test("dashboard exposes measured cost, Copilot quota, and a live accessible arch
   assert.match(DASHBOARD_HTML, /aria-live="polite"/);
   assert.match(DASHBOARD_HTML, /Public price snapshot/);
 });
+
+test("dashboard renders bounded independent packets for concurrent relay calls", () => {
+  assert.match(DASHBOARD_HTML, /id="traffic-map"/);
+  assert.match(DASHBOARD_HTML, /id="traffic-packets"/);
+  assert.match(DASHBOARD_HTML, /id="route-codex-relay"/);
+  assert.match(DASHBOARD_HTML, /id="route-relay-copilot"/);
+  assert.match(DASHBOARD_HTML, /id="route-copilot-model"/);
+  assert.match(DASHBOARD_HTML, /stroke-dasharray/);
+  assert.match(DASHBOARD_HTML, /const MAX_LIVE_CALLS = 64/);
+  assert.match(DASHBOARD_HTML, /const MAX_TRAFFIC_PACKETS = 96/);
+  assert.match(DASHBOARD_HTML, /function callVisual/);
+  assert.match(DASHBOARD_HTML, /function launchTrafficPacket/);
+  assert.match(DASHBOARD_HTML, /animateMotion/);
+  assert.match(DASHBOARD_HTML, /prefers-reduced-motion: reduce/);
+  assert.match(DASHBOARD_HTML, /renderActiveCalls\(\); setFlowPhase[\s\S]*try \{ launchTrafficForEvent/);
+  assert.doesNotMatch(DASHBOARD_HTML, /requestAnimationFrame/);
+});
