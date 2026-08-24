@@ -70,9 +70,10 @@ Protocol or product changes can require updates to the relay.
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
 - Modern loopback dashboard with a real-time dotted Codex → relay → Copilot →
-  model network where concurrent calls keep separate colors and lanes, plus
-  1,000 recent call entries, 200 on-demand sanitized detail bodies, durable
-  lifetime mileage, and hourly/daily/model charts
+  model network where concurrent calls keep separate colors and lanes, a
+  six-card real-data KPI strip, a bounded live request inspector, 1,000 recent
+  call entries, 200 on-demand sanitized detail bodies, durable lifetime mileage,
+  and hourly/daily/model charts
 - Exact per-call Copilot SDK input, output, cache, reasoning, AI-credit, model-
   cost-unit, and model-call telemetry when the runtime emits `assistant.usage`
 - Authenticated Copilot entitlement/quota snapshots with no token, login, or
@@ -276,12 +277,21 @@ With the persistent relay running:
 
 The dashboard is a local command center as well as a history viewer:
 
+- The overview starts with six source-backed KPIs: lifetime calls, actual
+  completion rate, measured average latency, API-equivalent estimate, Copilot
+  AI-credit mileage, and currently active exchanges. Lightweight SVG sparklines
+  use the existing hourly, daily, and retained-call telemetry. There are no
+  fabricated seats, users, accounts, or subscription charges.
 - `/dashboard/events` is a loopback-only Server-Sent Events feed. Real request
   phases animate Codex → Local Relay → GitHub Copilot → GPT Model, then the
   return stream animates back to Codex. Each simultaneous call receives a stable
   color/lane and its own SVG packet; tool calls branch through outer Codex. The
   dependency-free renderer uses no per-frame JavaScript, honors reduced-motion,
   and bounds itself to 64 visible calls and 96 transient packets.
+- A live request inspector shows the latest real call ID, model, phase, measured
+  usage, latency, API-equivalent estimate, route, and outer-tool count. Its
+  newest-first event log is capped at 16 rows in memory, even when many calls
+  stream concurrently.
 - GitHub's SDK `assistant.usage` events provide exact per-model input, output,
   cache-read, cache-write, reasoning, nano-AIU, and model-cost-unit metrics. The
   relay stores only the safe numeric aggregate, never provider tracing IDs.

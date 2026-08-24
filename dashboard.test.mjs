@@ -59,3 +59,18 @@ test("dashboard renders bounded independent packets for concurrent relay calls",
   assert.match(DASHBOARD_HTML, /renderActiveCalls\(\); setFlowPhase[\s\S]*try \{ launchTrafficForEvent/);
   assert.doesNotMatch(DASHBOARD_HTML, /requestAnimationFrame/);
 });
+
+test("dashboard adds reference-inspired observability without fabricated enterprise data", () => {
+  assert.match(DASHBOARD_HTML, /id="observability-kpis"/);
+  assert.match(DASHBOARD_HTML, /id="success-rate"/);
+  assert.match(DASHBOARD_HTML, /class="kpi-sparkline"/);
+  assert.match(DASHBOARD_HTML, /Live request inspector/);
+  assert.match(DASHBOARD_HTML, /id="inspector-events"/);
+  assert.match(DASHBOARD_HTML, /const MAX_LIVE_EVENTS = 16/);
+  assert.match(DASHBOARD_HTML, /function renderKpis/);
+  assert.match(DASHBOARD_HTML, /function renderLiveInspector/);
+  assert.match(DASHBOARD_HTML, /function recordLiveEvent/);
+  assert.match(DASHBOARD_HTML, /route-line outbound/);
+  assert.match(DASHBOARD_HTML, /route-line response/);
+  assert.doesNotMatch(DASHBOARD_HTML, /Contoso|Active Seats|developer@|Business: \$/);
+});

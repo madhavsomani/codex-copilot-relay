@@ -21,16 +21,26 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     button { border: 1px solid #3a5d8b; border-radius: 9px; color: var(--text); background: #172b4c; padding: 9px 13px; cursor: pointer; font: inherit; }
     button:hover { background: #21416e; }
     button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .section-nav { display: flex; align-items: center; gap: 5px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: rgba(6,11,21,.72); }
+    .section-nav a { color: var(--muted); text-decoration: none; border-radius: 8px; padding: 6px 9px; font-size: 10px; }
+    .section-nav a:hover, .section-nav a:focus-visible { color: var(--text); background: rgba(105,183,255,.12); outline: none; }
     main { max-width: 1540px; margin: 0 auto; padding: 20px 30px 44px; }
     .notice { display: flex; flex-wrap: wrap; gap: 8px 17px; align-items: center; padding: 11px 14px; border: 1px solid #2e4c75; border-radius: 11px; background: rgba(18,29,50,.74); margin-bottom: 15px; }
     .pill { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 12px var(--good); }
-    .stats { display: grid; grid-template-columns: repeat(8, minmax(115px, 1fr)); gap: 10px; margin-bottom: 15px; }
-    .stat, .panel { border: 1px solid var(--line); border-radius: 15px; background: linear-gradient(145deg, rgba(23,36,61,.94), rgba(10,16,30,.97)); box-shadow: 0 15px 44px rgba(0,0,0,.2), inset 0 1px rgba(255,255,255,.025); }
-    .stat { padding: 14px; min-height: 88px; }
-    .stat-label { color: var(--muted); font-size: 11px; min-height: 30px; }
-    .stat-value { font-size: 25px; font-weight: 730; margin-top: 4px; letter-spacing: -.04em; overflow-wrap: anywhere; }
-    .stat-value.good { color: var(--good); } .stat-value.bad { color: var(--bad); } .stat-value.accent { color: var(--accent); } .stat-value.cyan { color: var(--cyan); }
+    .panel { border: 1px solid var(--line); border-radius: 15px; background: linear-gradient(145deg, rgba(23,36,61,.94), rgba(10,16,30,.97)); box-shadow: 0 15px 44px rgba(0,0,0,.2), inset 0 1px rgba(255,255,255,.025); }
+    .kpis { display: grid; grid-template-columns: repeat(6, minmax(170px, 1fr)); gap: 10px; margin-bottom: 15px; }
+    .kpi { --card-color: var(--accent); min-width: 0; min-height: 120px; padding: 13px 14px 11px; border: 1px solid var(--line); border-radius: 14px; background: radial-gradient(circle at 95% 4%, color-mix(in srgb, var(--card-color) 17%, transparent), transparent 7rem), linear-gradient(145deg, rgba(21,34,58,.96), rgba(8,14,27,.98)); box-shadow: 0 13px 34px rgba(0,0,0,.2), inset 0 1px rgba(255,255,255,.03); overflow: hidden; }
+    .kpi.good { --card-color: var(--good); } .kpi.violet { --card-color: var(--violet); } .kpi.cyan { --card-color: var(--cyan); } .kpi.warn { --card-color: var(--warn); }
+    .kpi-top { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; }
+    .kpi-icon { width: 31px; height: 31px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--card-color) 52%, var(--line)); border-radius: 10px; color: var(--card-color); background: color-mix(in srgb, var(--card-color) 11%, transparent); font-weight: 750; }
+    .kpi-main { display: grid; grid-template-columns: minmax(0,1fr) 72px; align-items: end; gap: 8px; margin-top: 8px; }
+    .kpi-value { min-width: 0; font-size: 25px; font-weight: 760; line-height: 1; letter-spacing: -.045em; overflow-wrap: anywhere; }
+    .kpi-foot { color: var(--muted); font-size: 9px; margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kpi-foot strong { color: var(--card-color); font-weight: 680; }
+    svg.kpi-sparkline { width: 72px; height: 35px; overflow: visible; }
+    .spark-area { opacity: .14; }
+    .spark-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 4px currentColor); }
     .charts { display: grid; grid-template-columns: 1.25fr 1.25fr .9fr .7fr; gap: 12px; margin-bottom: 16px; }
     .chart { min-height: 242px; overflow: hidden; }
     .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
@@ -79,15 +89,21 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .live-badge.connected { color: var(--good); border-color: rgba(109,221,154,.42); }
     .live-badge .dot { background: var(--warn); box-shadow: 0 0 12px var(--warn); }
     .live-badge.connected .dot { background: var(--good); box-shadow: 0 0 12px var(--good); }
-    .command-grid { display: grid; grid-template-columns: minmax(680px, 1.65fr) minmax(330px, .75fr); gap: 14px; margin-bottom: 15px; align-items: stretch; }
+    .command-grid { display: grid; grid-template-columns: minmax(250px,.66fr) minmax(620px,1.7fr) minmax(270px,.72fr); grid-template-areas: "insights architecture inspector"; gap: 12px; margin-bottom: 15px; align-items: stretch; }
+    .command-grid > .architecture { grid-area: architecture; }
+    .command-grid > .insight-stack { grid-area: insights; }
+    .command-grid > .live-inspector { grid-area: inspector; }
     .architecture { overflow: hidden; position: relative; min-height: 400px; }
     .architecture::before { content: ""; position: absolute; width: 260px; height: 260px; right: 8%; top: 17%; border-radius: 50%; background: rgba(84,224,209,.08); filter: blur(70px); pointer-events: none; }
     .architecture-body { padding: 17px; position: relative; }
     .network-viewport { overflow-x: auto; padding: 2px 0 12px; scrollbar-width: thin; }
     .network-stage { min-width: 720px; border: 1px solid rgba(48,73,109,.74); border-radius: 15px; background: radial-gradient(circle at 61% 39%, rgba(84,224,209,.08), transparent 15rem), linear-gradient(180deg, rgba(5,10,19,.94), rgba(8,15,28,.86)); overflow: hidden; }
     .traffic-map { width: 100%; min-width: 720px; height: 292px; display: block; overflow: hidden; }
-    .route-line { fill: none; stroke: #77869b; stroke-width: 2.6; stroke-dasharray: 1 11; stroke-linecap: round; opacity: .63; }
-    .route-line.secondary { stroke: #53647d; opacity: .46; }
+    .route-line { fill: none; stroke-width: 2.7; stroke-dasharray: 1 11; stroke-linecap: round; }
+    .route-line.outbound { stroke: #2d94ff; opacity: .78; filter: drop-shadow(0 0 4px rgba(45,148,255,.75)); }
+    .route-line.response { stroke: #58e59b; opacity: .68; filter: drop-shadow(0 0 4px rgba(88,229,155,.62)); }
+    .route-line.secondary.outbound { stroke: #9a75ff; opacity: .46; }
+    .route-line.secondary.response { stroke: #ffd27a; opacity: .42; }
     .network-node { color: var(--accent); transition: opacity .2s ease; }
     .network-node .node-shell { fill: #0b1425; stroke: #536984; stroke-width: 1.6; transition: stroke .2s ease, fill .2s ease; }
     .network-node .node-aura { fill: currentColor; opacity: 0; transition: opacity .2s ease; }
@@ -104,6 +120,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .traffic-packet { color: var(--accent); pointer-events: none; }
     .traffic-packet .halo { fill: currentColor; opacity: .2; }
     .traffic-packet .core { fill: currentColor; stroke: rgba(255,255,255,.9); stroke-width: .8; }
+    .flow-legend { fill: var(--muted); font-size: 9px; }
     .flow-footer { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border-top: 1px solid var(--line); padding-top: 14px; }
     .event-copy { min-width: 0; }
     .event-copy strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -139,11 +156,27 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .quota-chip.unlimited { color: var(--good); border-color: rgba(109,221,154,.35); }
     .button-small { padding: 5px 8px; font-size: 10px; }
     .token-cell { color: var(--cyan); }
-    @media (max-width: 1250px) { .command-grid { grid-template-columns: 1fr; } .insight-stack { grid-template-columns: repeat(2,1fr); } }
-    @media (max-width: 1250px) { .stats { grid-template-columns: repeat(4, 1fr); } .charts { grid-template-columns: repeat(2, 1fr); } }
+    .live-inspector { min-height: 0; overflow: hidden; }
+    .inspector-body { padding: 13px 14px 14px; display: grid; gap: 12px; }
+    .inspector-grid { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 10px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: rgba(5,10,20,.55); font-size: 10px; }
+    .inspector-grid dt { color: var(--muted); }
+    .inspector-grid dd { margin: 0; color: var(--text); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .inspector-grid dd.live-good { color: var(--good); }
+    .inspector-grid dd.live-bad { color: var(--bad); }
+    .event-log-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+    .event-log { display: grid; gap: 0; max-height: 255px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #070d18; }
+    .event-row { display: grid; grid-template-columns: 49px 7px minmax(0,1fr); gap: 7px; align-items: center; padding: 7px 8px; border-bottom: 1px solid rgba(38,57,88,.52); font-size: 9px; }
+    .event-row:last-child { border-bottom: 0; }
+    .event-time { color: var(--muted); font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .event-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--event-color,var(--accent)); box-shadow: 0 0 7px var(--event-color,var(--accent)); }
+    .event-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .event-empty { padding: 20px 10px; color: var(--muted); text-align: center; font-size: 10px; }
+    @media (max-width: 1370px) { .command-grid { grid-template-columns: minmax(650px,1.5fr) minmax(300px,.7fr); grid-template-areas: "architecture inspector" "insights insights"; } .insight-stack { grid-template-columns: repeat(2,1fr); } }
+    @media (max-width: 1250px) { .kpis { grid-template-columns: repeat(3, 1fr); } .charts { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 1050px) { .command-grid { grid-template-columns: 1fr; grid-template-areas: "architecture" "inspector" "insights"; } .live-inspector { min-height: auto; } }
     @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .detail { min-height: auto; } }
-    @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .header-actions { width: 100%; justify-content: space-between; } .stats, .charts, .insight-stack { grid-template-columns: repeat(2, 1fr); } .chart { min-height: 220px; } .architecture-body { padding: 12px; } }
-    @media (max-width: 430px) { .stats, .charts { grid-template-columns: 1fr; } }
+    @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; } .section-nav { order: 3; width: 100%; overflow-x: auto; } .kpis, .charts, .insight-stack { grid-template-columns: repeat(2, 1fr); } .chart { min-height: 220px; } .architecture-body { padding: 12px; } }
+    @media (max-width: 430px) { .kpis, .charts { grid-template-columns: 1fr; } }
     @media (max-width: 430px) { .insight-stack { grid-template-columns: 1fr; } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
   </style>
@@ -152,15 +185,23 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <header>
     <div class="topline">
       <div>
-        <h1>Codex Copilot Relay</h1>
-        <p class="subtitle">Local Responses gateway telemetry · durable mileage without heavyweight logging</p>
+        <h1>Codex Copilot Relay Observability</h1>
+        <p class="subtitle">Usage, cost, architecture, and live request playback · local and dependency-free</p>
         <p class="byline">Created by <a href="https://www.linkedin.com/in/madhavsomani" target="_blank" rel="noopener noreferrer" aria-label="Madhav Somani on LinkedIn">Madhav Somani</a><span aria-hidden="true">↗</span></p>
       </div>
-      <div class="header-actions"><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
+      <div class="header-actions"><nav class="section-nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#relay-architecture">Relay</a><a href="#analytics">Analytics</a><a href="#history">Requests</a></nav><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
     </div>
   </header>
   <main>
-    <div class="notice"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">mileage: durable rollups</span><span class="pill" id="updated">waiting for bridge…</span></div>
+    <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
+    <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
+      <article class="kpi"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">↗</span><span>Lifetime calls received</span></div><div class="kpi-main"><strong class="kpi-value" id="received">0</strong><svg class="kpi-sparkline" id="kpi-requests-chart" role="img" aria-label="Recent received request trend"></svg></div><div class="kpi-foot"><strong id="replayed">0</strong> Copilot replays</div></article>
+      <article class="kpi good"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">✓</span><span>Success rate</span></div><div class="kpi-main"><strong class="kpi-value" id="success-rate">—</strong><svg class="kpi-sparkline" id="kpi-success-chart" role="img" aria-label="Recent completion-rate trend"></svg></div><div class="kpi-foot"><strong id="completed">0</strong> completed · <span id="failed">0</span> failed</div></article>
+      <article class="kpi violet"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">◷</span><span>Average latency</span></div><div class="kpi-main"><strong class="kpi-value" id="latency">—</strong><svg class="kpi-sparkline" id="kpi-latency-chart" role="img" aria-label="Recent completed-call latency trend"></svg></div><div class="kpi-foot"><strong id="tools">0</strong> lifetime tool calls</div></article>
+      <article class="kpi cyan"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">$</span><span>API-equivalent estimate</span></div><div class="kpi-main"><strong class="kpi-value" id="kpi-cost">$0.00</strong><svg class="kpi-sparkline" id="kpi-cost-chart" role="img" aria-label="Recent measured API-equivalent cost trend"></svg></div><div class="kpi-foot">Measured tokens · <strong>not a charge</strong></div></article>
+      <article class="kpi violet"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">✦</span><span>Relay AI credits</span></div><div class="kpi-main"><strong class="kpi-value" id="kpi-credits">0</strong><svg class="kpi-sparkline" id="kpi-credits-chart" role="img" aria-label="Recent Copilot credit-unit trend"></svg></div><div class="kpi-foot"><strong id="kpi-sdk-calls">0</strong> measured SDK calls</div></article>
+      <article class="kpi warn"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">●</span><span>Active now</span></div><div class="kpi-main"><strong class="kpi-value" id="active">0</strong><svg class="kpi-sparkline" id="kpi-active-chart" role="img" aria-label="Recent active-call trend"></svg></div><div class="kpi-foot"><strong id="active-exchanges-kpi">0</strong> resumable · <span id="traffic">0 B</span></div></article>
+    </section>
     <section class="command-grid">
       <article class="panel architecture" id="relay-architecture">
         <div class="panel-head"><div><h2>Live relay architecture</h2><span class="tiny">Every pulse is driven by a real loopback telemetry event</span></div><span class="phase" id="flow-phase">IDLE</span></div>
@@ -178,11 +219,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
                   <path id="route-tools-model" d="M570 232 C631 224 678 187 720 160"></path>
                 </defs>
                 <g aria-hidden="true">
-                  <use href="#route-codex-relay" class="route-line"></use>
-                  <use href="#route-relay-copilot" class="route-line"></use>
-                  <use href="#route-copilot-model" class="route-line"></use>
-                  <use href="#route-relay-tools" class="route-line secondary"></use>
-                  <use href="#route-tools-model" class="route-line secondary"></use>
+                  <use href="#route-codex-relay" class="route-line outbound" transform="translate(0 -3)"></use><use href="#route-codex-relay" class="route-line response" transform="translate(0 3)"></use>
+                  <use href="#route-relay-copilot" class="route-line outbound" transform="translate(0 -3)"></use><use href="#route-relay-copilot" class="route-line response" transform="translate(0 3)"></use>
+                  <use href="#route-copilot-model" class="route-line outbound" transform="translate(0 -3)"></use><use href="#route-copilot-model" class="route-line response" transform="translate(0 3)"></use>
+                  <use href="#route-relay-tools" class="route-line secondary outbound" transform="translate(0 -3)"></use><use href="#route-relay-tools" class="route-line secondary response" transform="translate(0 3)"></use>
+                  <use href="#route-tools-model" class="route-line secondary outbound" transform="translate(0 -3)"></use><use href="#route-tools-model" class="route-line secondary response" transform="translate(0 3)"></use>
                 </g>
                 <g id="traffic-packets" aria-hidden="true"></g>
                 <g class="network-node" data-node="codex" transform="translate(82 148)">
@@ -211,6 +252,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
                   <text class="network-label" y="53">Codex tools</text><text class="network-meta" y="69">OUTER APP EXECUTES</text>
                 </g>
                 <g transform="translate(17 18)"><rect class="traffic-counter" width="165" height="25" rx="12.5"></rect><circle cx="14" cy="12.5" r="3.5" fill="#69b7ff"></circle><text class="traffic-legend" id="traffic-count" x="24" y="16">idle · each color is one call</text></g>
+                <g transform="translate(610 21)" aria-hidden="true"><circle cx="0" cy="0" r="3" fill="#2d94ff"></circle><text class="flow-legend" x="8" y="3">request outbound</text><circle cx="103" cy="0" r="3" fill="#58e59b"></circle><text class="flow-legend" x="111" y="3">response streaming</text></g>
               </svg>
             </div>
           </div>
@@ -240,33 +282,41 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           </div>
         </article>
       </aside>
+      <aside class="panel live-inspector" aria-labelledby="inspector-heading">
+        <div class="panel-head"><div><h2 id="inspector-heading">Live request inspector</h2><span class="tiny">Most recent real SSE phase across all calls</span></div><span class="live-badge connected"><span class="dot"></span>live</span></div>
+        <div class="inspector-body">
+          <dl class="inspector-grid">
+            <dt>Request ID</dt><dd id="inspector-id">waiting</dd>
+            <dt>Model</dt><dd class="model" id="inspector-model">—</dd>
+            <dt>Status</dt><dd id="inspector-status">idle</dd>
+            <dt>Measured tokens</dt><dd id="inspector-tokens">—</dd>
+            <dt>Latency</dt><dd id="inspector-latency">—</dd>
+            <dt>Estimated cost</dt><dd class="live-good" id="inspector-cost">—</dd>
+            <dt>Route</dt><dd id="inspector-route">—</dd>
+            <dt>Outer tools</dt><dd id="inspector-tools">0</dd>
+          </dl>
+          <div class="event-log-head"><strong>Event log</strong><span>newest first · 16 max</span></div>
+          <div class="event-log" id="inspector-events" aria-live="polite"><div class="event-empty">Waiting for relay traffic…</div></div>
+        </div>
+      </aside>
     </section>
-    <section class="stats">
-      <div class="stat"><div class="stat-label">Lifetime calls received</div><div class="stat-value accent" id="received">0</div></div>
-      <div class="stat"><div class="stat-label">Lifetime Copilot replays</div><div class="stat-value cyan" id="replayed">0</div></div>
-      <div class="stat"><div class="stat-label">Lifetime completed</div><div class="stat-value good" id="completed">0</div></div>
-      <div class="stat"><div class="stat-label">Lifetime failed</div><div class="stat-value bad" id="failed">0</div></div>
-      <div class="stat"><div class="stat-label">Active now</div><div class="stat-value" id="active">0</div></div>
-      <div class="stat"><div class="stat-label">Lifetime tool calls</div><div class="stat-value" id="tools">0</div></div>
-      <div class="stat"><div class="stat-label">Average latency</div><div class="stat-value" id="latency">—</div></div>
-      <div class="stat"><div class="stat-label">Lifetime traffic</div><div class="stat-value" id="traffic">0 B</div></div>
-    </section>
-    <section class="charts">
+    <section class="charts" id="analytics">
       <article class="panel chart"><div class="panel-head"><h2>24-hour relay traffic</h2><div class="legend"><span class="key"><span class="swatch"></span>received</span><span class="key"><span class="swatch cyan"></span>Copilot replay</span></div></div><div class="chart-body"><svg id="hourly-chart" role="img" aria-label="Calls received and replayed to Copilot during the last 24 hours"></svg></div></article>
       <article class="panel chart"><div class="panel-head"><h2>30-day outcomes</h2><div class="legend"><span class="key"><span class="swatch good"></span>completed</span><span class="key"><span class="swatch bad"></span>failed</span></div></div><div class="chart-body"><svg id="daily-chart" role="img" aria-label="Completed and failed calls during the last 30 days"></svg></div></article>
       <article class="panel chart"><div class="panel-head"><h2>Model mileage</h2><span class="tiny">received + replayed</span></div><div class="chart-body"><div class="model-list" id="model-chart"><div class="empty">No model traffic yet.</div></div></div></article>
       <article class="panel chart"><div class="panel-head"><h2>Bounded storage</h2><span class="tiny">under 1 GB</span></div><div class="chart-body"><div class="storage-number" id="storage-total">0 B</div><progress id="storage-meter" value="0" max="1"></progress><div class="storage-lines"><div class="storage-line"><span>Detailed history</span><strong id="history-size">0 B</strong></div><div class="storage-line"><span>Metrics + event logs</span><strong id="metrics-size">0 B</strong></div><div class="storage-line"><span>Telemetry ceiling</span><strong id="telemetry-cap">408 MB</strong></div><div class="storage-line"><span>Retained tiers</span><strong id="retained">0</strong></div></div><p class="baseline" id="baseline">Mileage initializes from recoverable history, then remains exact as detail is pruned.</p></div></article>
     </section>
-    <div class="workspace">
+    <div class="workspace" id="history">
       <section class="panel"><div class="panel-head"><h2>Recent call history</h2><span class="tiny" id="count">0 records</span></div><div class="table-wrap"><table><thead><tr><th>Received</th><th>Route / model</th><th>Status</th><th>Tier</th><th>Replay</th><th>Tools</th><th>Latency</th><th>Bytes</th><th>Measured usage</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No Responses calls have crossed the bridge yet.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
       <aside class="panel detail"><div class="panel-head"><h2>Selected call</h2><span class="tiny" id="selected-id">none</span></div><div class="detail-body" id="detail"><div class="empty">Select a row. Detailed bodies load only when requested; older entries keep lightweight metadata.</div></div></aside>
     </div>
   </main>
   <script>
-    const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), flowTimer: null, refreshTimer: null };
+    const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), liveEvents: [], activeSamples: [], latestInspectorRecord: null, flowTimer: null, refreshTimer: null };
     const svgNs = "http://www.w3.org/2000/svg";
     const MAX_LIVE_CALLS = 64;
     const MAX_TRAFFIC_PACKETS = 96;
+    const MAX_LIVE_EVENTS = 16;
     const TRAFFIC_COLORS = ["#69b7ff", "#54e0d1", "#a98cff", "#ffd27a", "#ff8398", "#6ddd9a", "#ff9f6e", "#8fd3ff"];
     const TRAFFIC_LANES = [-8, -4, 0, 4, 8];
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -281,6 +331,35 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     const compact = (value) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(Number(value) || 0);
     function setText(id, value) { $(id).textContent = fmt(value); }
     function svgElement(name, attributes) { const node = document.createElementNS(svgNs, name); for (const entry of Object.entries(attributes || {})) node.setAttribute(entry[0], String(entry[1])); return node; }
+    function sparkline(id, values, color) {
+      const svg = $(id); svg.replaceChildren(); svg.setAttribute("viewBox", "0 0 72 35");
+      const clean = (values || []).map(Number).filter(Number.isFinite);
+      const series = clean.length > 1 ? clean : [clean[0] || 0, clean[0] || 0];
+      const minimum = Math.min(...series), maximum = Math.max(...series), range = Math.max(1e-9, maximum - minimum);
+      const points = series.map((value, index) => [2 + 68 * index / (series.length - 1), 31 - 27 * (value - minimum) / range]);
+      const line = points.map((point, index) => (index ? "L" : "M") + point[0].toFixed(1) + " " + point[1].toFixed(1)).join(" ");
+      const area = line + " L70 33 L2 33 Z";
+      svg.appendChild(svgElement("path", { d: area, fill: color, class: "spark-area" }));
+      svg.appendChild(svgElement("path", { d: line, stroke: color, class: "spark-line" }));
+    }
+    function renderKpis(data) {
+      const summary = data.summary || {}, hourly = data.analytics?.hourly || [], daily = data.analytics?.daily || [];
+      const outcomes = (Number(summary.completed) || 0) + (Number(summary.failed) || 0);
+      const successRate = outcomes ? 100 * (Number(summary.completed) || 0) / outcomes : 0;
+      setText("success-rate", outcomes ? successRate.toFixed(2) + "%" : "—");
+      setText("kpi-cost", usd(summary.apiEquivalentUsd));
+      setText("kpi-credits", compact(summary.aiCredits));
+      setText("kpi-sdk-calls", number(summary.sdkApiCalls));
+      setText("active-exchanges-kpi", number(data.activeExchanges || 0));
+      const recent = state.records.slice(0, 18).reverse();
+      state.activeSamples.push(Number(summary.active) || 0); while (state.activeSamples.length > 18) state.activeSamples.shift();
+      sparkline("kpi-requests-chart", hourly.slice(-18).map((row) => row.received), "#2d94ff");
+      sparkline("kpi-success-chart", daily.slice(-18).map((row) => { const total = (Number(row.completed) || 0) + (Number(row.failed) || 0); return total ? 100 * (Number(row.completed) || 0) / total : 0; }), "#6ddd9a");
+      sparkline("kpi-latency-chart", recent.map((record) => Number(record.latencyMs) || 0), "#a98cff");
+      sparkline("kpi-cost-chart", recent.map((record) => Number(record.usage?.apiEquivalentUsd) || 0), "#54e0d1");
+      sparkline("kpi-credits-chart", recent.map((record) => Number(record.usage?.copilotCostUnits) || 0), "#a98cff");
+      sparkline("kpi-active-chart", state.activeSamples, "#ffd27a");
+    }
     function chartFrame(svg, rows, fields, colors, mode) {
       svg.replaceChildren();
       const width = 640, height = 168, left = 32, right = 8, top = 8, bottom = 24;
@@ -416,6 +495,40 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         chip.append(marker, strong, document.createTextNode(" · " + (call.model || "model") + " · " + call.phase)); root.appendChild(chip);
       }
     }
+    function renderEventLog() {
+      const root = $("inspector-events"); root.replaceChildren();
+      if (!state.liveEvents.length) { const empty = document.createElement("div"); empty.className = "event-empty"; empty.textContent = "Waiting for relay traffic…"; root.appendChild(empty); return; }
+      for (const item of state.liveEvents) {
+        const row = document.createElement("div"); row.className = "event-row";
+        const at = document.createElement("span"); at.className = "event-time"; at.textContent = new Date(item.at).toLocaleTimeString(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const dot = document.createElement("span"); dot.className = "event-dot"; dot.style.setProperty("--event-color", item.color);
+        const title = document.createElement("span"); title.className = "event-title"; title.textContent = item.title + " · " + item.id.slice(-8); title.title = item.title + " · " + item.id;
+        row.append(at, dot, title); root.appendChild(row);
+      }
+    }
+    function recordLiveEvent(event, call, title) {
+      const color = event.type === "relay.failed" ? "#ff8398" : event.type === "relay.completed" ? "#6ddd9a" : call.color;
+      state.liveEvents.unshift({ at: event.at || new Date().toISOString(), id: String(call.id || "unknown"), title, color });
+      if (state.liveEvents.length > MAX_LIVE_EVENTS) state.liveEvents.length = MAX_LIVE_EVENTS;
+      renderEventLog();
+    }
+    function renderLiveInspector(record, event) {
+      if (!record) return;
+      state.latestInspectorRecord = record;
+      const usage = event?.usage || record.usage || {};
+      const inputTokens = Number(usage.inputTokens), outputTokens = Number(usage.outputTokens);
+      const hasTokens = Number.isFinite(inputTokens) || Number.isFinite(outputTokens);
+      const status = event?.type ? event.type.replace("relay.", "") : (record.status || "retained");
+      setText("inspector-id", String(record.id || "unknown").slice(-18));
+      setText("inspector-model", record.selectedModel || record.requestedModel || event?.model || "unknown");
+      setText("inspector-status", status);
+      setText("inspector-tokens", hasTokens ? number((inputTokens || 0) + (outputTokens || 0)) + " tokens" : "unmetered / pending");
+      setText("inspector-latency", duration(record.latencyMs));
+      setText("inspector-cost", Number.isFinite(Number(usage.apiEquivalentUsd)) ? usd(Number(usage.apiEquivalentUsd)) : "pending");
+      setText("inspector-route", (record.requestPath || "/v1/responses") + " · Codex → Relay → Copilot → Model");
+      setText("inspector-tools", number(record.toolCalls || 0));
+      $("inspector-status").className = status === "failed" ? "live-bad" : status === "completed" ? "live-good" : "";
+    }
     function launchTrafficPacket(pathId, call, options = {}) {
       if (reducedMotion.matches) return;
       const layer = $("traffic-packets");
@@ -461,7 +574,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       state.flowTimer = setTimeout(() => { stage.setAttribute("class", "traffic-map idle"); for (const node of stage.querySelectorAll(".network-node")) node.classList.remove("active", "response"); setText("flow-phase", "IDLE"); }, 2200);
     }
     function handleLiveEvent(event) {
-      const record = event.record || {}, id = record.id || "unknown", model = record.selectedModel || record.requestedModel || event.model || "model";
+      const record = event.record || {}, id = String(record.id || "unknown"), model = record.selectedModel || record.requestedModel || event.model || "model";
       if (event.type === "dashboard.ready") return;
       let phase = "active", animation = "request", title = "Codex request received", detail = "Call " + id.slice(-8) + " entered the loopback relay.";
       if (event.type === "relay.forwarded") { phase = "forwarded"; animation = "forward"; title = "Relay forwarded context to Copilot"; detail = model + " · " + (event.phase || "request") + "."; }
@@ -472,6 +585,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if (event.type === "relay.failed") { phase = "failed"; animation = "failed"; title = "Relay call failed"; detail = model + " · inspect the sanitized call record for details."; }
       const call = ensureLiveCall(id, model, phase);
       renderActiveCalls(); setFlowPhase(animation, title, detail);
+      renderLiveInspector(record, event); recordLiveEvent(event, call, title);
       try { launchTrafficForEvent(event, call); } catch (error) { console.warn("Relay traffic animation skipped:", error); }
       if (event.type === "relay.completed" || event.type === "relay.failed") setTimeout(() => { if (state.liveCalls.get(id) === call) { state.liveCalls.delete(id); renderActiveCalls(); } }, 3000);
       clearTimeout(state.refreshTimer); state.refreshTimer = setTimeout(refresh, 250);
@@ -493,7 +607,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       chartFrame($("hourly-chart"), data.analytics?.hourly || [], ["received", "replayed"], ["#69b7ff", "#54e0d1"], "lines");
       chartFrame($("daily-chart"), data.analytics?.daily || [], ["completed", "failed"], ["#6ddd9a", "#ff8398"], "bars");
       renderModels(data.analytics?.models || []);
-      renderPricing(data); renderQuota(data); setText("active-exchanges", number(data.activeExchanges || 0) + " exchanges");
+      renderPricing(data); renderQuota(data); renderKpis(data); setText("active-exchanges", number(data.activeExchanges || 0) + " exchanges");
       setText("updated", "updated " + new Date().toLocaleTimeString()); $("updated").className = "pill";
     }
     function renderRows() {
@@ -545,6 +659,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         if (!state.records.some((record) => record.id === state.selected)) state.selected = null;
         renderStats(data); renderRows();
+        if (!state.liveEvents.length && state.records[0]) renderLiveInspector(state.records[0]);
         if (state.selected) { const cached = state.details.get(state.selected); renderDetail(cached || state.records.find((record) => record.id === state.selected)); }
       } catch (error) { $("updated").textContent = error.message; $("updated").className = "error"; }
     }
