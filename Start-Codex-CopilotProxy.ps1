@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $bridgeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverPath = Join-Path $bridgeRoot 'server.mjs'
+$backupScript = Join-Path $bridgeRoot 'Backup-Codex-CopilotTelemetry.ps1'
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $pidPath = Join-Path $runtimeDirectory 'codex-copilot-proxy.pid'
 $stdoutLog = Join-Path $runtimeDirectory 'proxy.stdout.log'
@@ -60,11 +61,20 @@ $nodeCommand = Get-Command node -ErrorAction Stop
 if (-not (Test-Path -LiteralPath $serverPath)) {
     throw "Bridge server not found: $serverPath"
 }
+if (-not (Test-Path -LiteralPath $backupScript)) {
+    throw "Telemetry backup script not found: $backupScript"
+}
+
+$telemetryBackup = & $backupScript -RuntimeDirectory $runtimeDirectory -Reason 'pre-start' -Keep 8 -MaxTotalMiB 512
+if ($telemetryBackup.Created) {
+    Write-Output "Preserved $($telemetryBackup.RecordCount) telemetry records before startup: $($telemetryBackup.Path)"
+}
 
 $environmentNames = @(
     'BRIDGE_AUTH_TOKEN',
     'BRIDGE_DEFAULT_MODEL',
     'BRIDGE_PORT',
+    'BRIDGE_RUNTIME_DIRECTORY',
     'BRIDGE_WORKING_DIRECTORY',
     'BRIDGE_EVENT_LOG_PATH',
     'BRIDGE_EVENT_LOG_MAX_MIB',
@@ -88,6 +98,7 @@ try {
     Remove-Item -LiteralPath 'Env:CODEX_COPILOT_BRIDGE_KEY' -ErrorAction SilentlyContinue
     $env:BRIDGE_PORT = [string]$Port
     $env:BRIDGE_DEFAULT_MODEL = $Model
+    $env:BRIDGE_RUNTIME_DIRECTORY = $runtimeDirectory
     $env:BRIDGE_WORKING_DIRECTORY = $env:USERPROFILE
     $env:BRIDGE_EVENT_LOG_PATH = $stdoutLog
     $env:BRIDGE_EVENT_LOG_MAX_MIB = '64'

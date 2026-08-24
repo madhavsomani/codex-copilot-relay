@@ -296,6 +296,26 @@ The dashboard is a local command center as well as a history viewer:
   taxes, and any unmetered calls, and is explicitly **not an OpenAI charge, a
   GitHub charge, savings, or a Copilot invoice**.
 
+The persistent launcher always pins telemetry to the repository's ignored
+`runtime` directory, regardless of the shell's inherited environment. Before a
+stopped relay starts, it creates and validates a local telemetry snapshot under
+`runtime/telemetry-backups`; the newest eight launcher-managed snapshots are
+retained within a 512 MiB managed-backup ceiling, keeping the configured live
+telemetry plus managed recovery points below 1 GiB. At least the newest valid
+snapshot survives even if it alone exceeds that ceiling. Manually created
+backup folders are never pruned. These snapshots can contain sanitized request
+and response bodies, so keep them local and do not commit or share them.
+
+To create an additional recovery point without restarting the relay:
+
+```powershell
+.\Backup-Codex-CopilotTelemetry.ps1 -Reason before-upgrade
+```
+
+Alternate-port development servers must set a separate
+`BRIDGE_RUNTIME_DIRECTORY`. Never point two running relay processes at the same
+telemetry directory.
+
 Official metric and price references:
 
 - [GitHub Copilot SDK usage and billing metrics](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/usage-and-billing)
