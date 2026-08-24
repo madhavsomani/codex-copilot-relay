@@ -89,16 +89,107 @@ telemetry.
 
 ## How it works
 
-```text
-Codex desktop / CLI
-        |
-        | OpenAI Responses-compatible HTTP + SSE
-        v
-Codex Copilot Relay (127.0.0.1:4144)
-        |
-        | GitHub Copilot SDK + Copilot CLI authentication
-        v
-GitHub Copilot model entitlement
+Codex remains the agent runtime. It owns tasks, child agents, tools, approvals,
+memory, files, connectors, and sandboxing. The relay is a stateful protocol
+adapter plus a Windows lifecycle supervisor.
+
+### Component architecture
+
+```mermaid
+flowchart LR
+  subgraph Codex["Codex desktop or CLI"]
+    Task["Task and child agents"]
+    Client["Responses client"]
+    Tools["Tools, approvals, memory,<br/>sandbox and connectors"]
+    Task --> Client
+    Task <--> Tools
+  end
+
+  Config[("Codex config.toml")]
+  Config -. "provider and base_url" .-> Client
+
+  subgraph Relay["Node relay on 127.0.0.1:4144"]
+    HTTP["HTTP router<br/>server.mjs"]
+    Core["Protocol and context adapter<br/>bridge-core.mjs"]
+    Exchange["Exchange registry<br/>one SDK session per initial request"]
+    Stream["Responses stream adapter<br/>ordered SSE and heartbeats"]
+    Recorder["Sanitized recorder<br/>metrics and live events"]
+    Dashboard["Embedded dashboard"]
+
+    HTTP --> Core --> Exchange
+    Exchange --> Stream --> HTTP
+    HTTP --> Recorder
+    Exchange --> Recorder
+    Recorder --> Dashboard
+    HTTP --> Dashboard
+  end
+
+  Client -- "POST /v1/responses" --> HTTP
+  HTTP -- "SSE or JSON" --> Client
+
+  SDK["GitHub Copilot SDK<br/>local client"]
+  CLI["Copilot CLI server<br/>JSON-RPC"]
+  Service["GitHub Copilot service<br/>entitled GPT model"]
+  Exchange <--> SDK
+  SDK <--> CLI
+  CLI <--> Service
+
+  subgraph Windows["Windows lifecycle control plane"]
+    Repair["Repair or Enable shortcut"]
+    Watchdog["Scheduled Task watchdog"]
+    Disable["Restore or Disable shortcut"]
+    Runtime[("runtime/<br/>state, backup and telemetry")]
+
+    Repair --> Watchdog
+    Repair --> Runtime --> Disable
+  end
+
+  Repair -- "backup, edit and start" --> Config
+  Repair -. "start relay" .-> HTTP
+  Watchdog -. "/health and restart" .-> HTTP
+  Recorder --> Runtime
+  Disable -- "exact restore" --> Config
+  Disable -. "stop" .-> Watchdog
+  Disable -. "stop relay" .-> HTTP
+```
+
+### Tool-call continuation lifecycle
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Codex
+  participant H as HTTP router / ResponseSink
+  participant E as Exchange
+  participant S as Copilot SDK session
+  participant G as GitHub model
+
+  C->>H: POST /v1/responses with input, tools and stream
+  H->>E: Translate context and create Exchange
+  E->>S: createSession() and send(prompt)
+  S->>G: Inference request
+
+  loop Model generation
+    G-->>S: Text or tool events
+    S-->>E: SDK events
+    E-->>C: Responses SSE deltas and quiet-period heartbeats
+  end
+
+  alt Model requests a Codex tool
+    G-->>S: external_tool.requested
+    S-->>E: Tool name, arguments and call ID
+    E-->>C: response.completed with function or custom call
+    Note over E: Exchange remains in memory for the outer-tool window
+    C->>C: Execute the tool locally with normal approvals
+    C->>H: Continuation with call_id and tool output
+    H->>E: Find the existing Exchange
+    E->>S: handlePendingToolCall(result)
+    S->>G: Resume inference
+  else Model returns a final answer
+    E-->>C: response.completed with assistant message
+    E->>S: Disconnect session
+    E->>E: Remove call and response mappings
+  end
 ```
 
 The relay translates request, response, streaming-event, and tool-call
@@ -111,12 +202,13 @@ the same open exchange.
 ## Why it exists
 
 Codex supports custom providers that speak the OpenAI Responses protocol. The
-GitHub Copilot SDK provides a supported way to build applications on top of the
+[GitHub Copilot SDK](https://github.com/github/copilot-sdk) is a generally
+available, semantically versioned SDK for building applications on top of the
 Copilot agent runtime. Codex Copilot Relay adapts those two interfaces locally.
 
-This combination is experimental. The Copilot SDK is currently in public
-preview, and neither GitHub nor OpenAI documents this exact cross-product setup.
-Protocol or product changes can require updates to the relay.
+The relay itself remains an unofficial, experimental compatibility layer.
+Neither GitHub nor OpenAI documents this exact cross-product setup, so protocol
+or product changes can require updates to the relay.
 
 ## Features
 
