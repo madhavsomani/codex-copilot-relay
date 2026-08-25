@@ -45,6 +45,16 @@ import {
 
 const host = "127.0.0.1";
 const port = Number.parseInt(process.env.BRIDGE_PORT ?? "4141", 10);
+const relayVersion = (() => {
+  try {
+    const metadata = JSON.parse(
+      fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+    );
+    return typeof metadata.version === "string" ? metadata.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
 const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-5.6-sol";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
@@ -210,6 +220,7 @@ function telemetryStorage() {
 
 function dashboardSnapshot() {
   const snapshot = recorder.snapshot({ includeDetails: false });
+  snapshot.relayVersion = relayVersion;
   snapshot.storage = telemetryStorage();
   snapshot.activeExchanges = exchanges.size;
   snapshot.copilot = {
@@ -1336,6 +1347,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/health") {
     return sendJson(response, 200, {
       ok: true,
+      version: relayVersion,
       provider: "github-copilot-sdk",
       model: defaultModel,
       models: availableOpenAiModels,
@@ -1534,6 +1546,7 @@ server.headersTimeout = 60_000;
 server.listen(port, host, () => {
   log("bridge.ready", {
     url: `http://${host}:${port}/v1`,
+    version: relayVersion,
     model: defaultModel,
     models: availableOpenAiModels,
     authenticated: Boolean(expectedToken),
