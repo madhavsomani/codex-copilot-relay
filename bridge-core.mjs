@@ -77,6 +77,20 @@ function describeOuterTool(tool, namespace) {
   return [prefix, tool.description ?? ""].filter(Boolean).join("\n\n");
 }
 
+function portableToolMetadata(tool) {
+  const metadata = {
+    "codex.outer.strict": tool.strict === true,
+    "codex.outer.defer_loading": tool.defer_loading === true,
+  };
+  if (Array.isArray(tool.allowed_callers)) {
+    metadata["codex.outer.allowed_callers"] = [...tool.allowed_callers];
+  }
+  if (tool.output_schema && typeof tool.output_schema === "object") {
+    metadata["codex.outer.output_schema"] = portableToolSchema(tool.output_schema);
+  }
+  return metadata;
+}
+
 function portableToolSchema(value) {
   if (Array.isArray(value)) return value.map((item) => portableToolSchema(item));
   if (!value || typeof value !== "object") return value;
@@ -132,7 +146,8 @@ function visitTool(tool, namespace, declarations) {
       // These declarations never execute inside Copilot. Codex remains the
       // approval and execution boundary, so a duplicate Copilot prompt is not useful.
       skipPermission: true,
-      defer: "never",
+      defer: tool.defer_loading === true ? "auto" : "never",
+      metadata: portableToolMetadata(tool),
     },
   });
 }
@@ -276,13 +291,40 @@ function historyEntry(item, attachments, contextStats, sourceIndex = -1) {
   if (!item || typeof item !== "object") return null;
 
   if (item.type === "message") {
-    return {
+    const entry = {
       role: item.role ?? "unknown",
       content: stringifyMessageContent(item.content, attachments, contextStats, {
         role: item.role ?? "unknown",
         sourceIndex,
         instruction: ["developer", "system"].includes(item.role),
       }),
+    };
+    if (entry.role === "assistant" && typeof item.phase === "string" && item.phase) {
+      entry.phase = item.phase;
+    }
+    return entry;
+  }
+
+  if (item.type === "reasoning") {
+    const summary = Array.isArray(item.summary)
+      ? item.summary
+        .filter((part) => part?.type === "summary_text" && typeof part.text === "string")
+        .map((part) => part.text)
+        .join("\n")
+      : "";
+    const readableContent = Array.isArray(item.content)
+      ? item.content
+        .filter((part) => ["reasoning_text", "summary_text"].includes(part?.type))
+        .map((part) => String(part.text ?? ""))
+        .filter(Boolean)
+        .join("\n")
+      : "";
+    const visibleReasoning = summary || readableContent;
+    if (!visibleReasoning) return null;
+    return {
+      role: "assistant_reasoning",
+      id: item.id ?? null,
+      content: visibleReasoning,
     };
   }
 
@@ -538,32 +580,104 @@ function buildConversationPrompt(transcript, latestUserEcho) {
   ].join("\n\n");
 }
 
+function normalizedPositiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function serializedContextMeasurement({
+  systemContent,
+  prompt,
+  serializedToolDefinitions = "[]",
+  toolDefinitionChars = null,
+  maxSerializedTextChars = null,
+  maxSerializedTextTokens = null,
+  countTokens = null,
+}) {
+  const normalizedSystem = String(systemContent ?? "");
+  const normalizedPrompt = String(prompt ?? "");
+  const normalizedTools = String(serializedToolDefinitions ?? "[]");
+  const measuredToolChars = normalizedPositiveNumber(toolDefinitionChars);
+  const measurement = {
+    promptChars: normalizedPrompt.length,
+    systemChars: normalizedSystem.length,
+    toolDefinitionChars: measuredToolChars ?? normalizedTools.length,
+    serializedTextChars: 0,
+    maxSerializedTextChars: normalizedPositiveNumber(maxSerializedTextChars),
+  };
+  measurement.serializedTextChars = measurement.promptChars
+    + measurement.systemChars
+    + measurement.toolDefinitionChars;
+
+  const tokenLimit = normalizedPositiveNumber(maxSerializedTextTokens);
+  if (tokenLimit && typeof countTokens === "function") {
+    const serializedTextTokens = Number(countTokens(
+      [normalizedSystem, normalizedPrompt, normalizedTools].join("\n"),
+    ));
+    if (Number.isFinite(serializedTextTokens) && serializedTextTokens >= 0) {
+      measurement.serializedTextTokens = Math.ceil(serializedTextTokens);
+      measurement.maxSerializedTextTokens = tokenLimit;
+      measurement.budgetMode = "tokens";
+      return measurement;
+    }
+  }
+
+  measurement.budgetMode = "characters";
+  return measurement;
+}
+
+function measurementFitsBudget(measurement, targetRatio = 1) {
+  if (measurement.budgetMode === "tokens") {
+    return measurement.serializedTextTokens
+      <= Math.floor(measurement.maxSerializedTextTokens * targetRatio);
+  }
+  if (!measurement.maxSerializedTextChars) return true;
+  return measurement.serializedTextChars
+    <= Math.floor(measurement.maxSerializedTextChars * targetRatio);
+}
+
 function compactTranscriptWithinBudget({
   transcript,
   latestUserEcho,
   systemContent,
   contextStats,
   maxSerializedTextChars,
+  maxSerializedTextTokens,
+  countTokens,
+  serializedToolDefinitions,
   toolDefinitionChars,
+  useHistoryCompaction = true,
 }) {
   const fullPrompt = buildConversationPrompt(transcript, latestUserEcho);
   contextStats.retainedHistoryEntries = transcript.length;
-  const maxChars = Number(maxSerializedTextChars);
-  const schemaChars = Number.isFinite(Number(toolDefinitionChars))
-    ? Math.max(0, Number(toolDefinitionChars))
-    : 2;
-  if (!Number.isFinite(maxChars) || maxChars <= 0) return fullPrompt;
-
-  const targetSerializedTextChars = Math.floor(
-    maxChars * HISTORY_COMPACTION_TARGET_RATIO,
-  );
-  const targetPromptChars = targetSerializedTextChars
-    - systemContent.length
-    - schemaChars;
+  const measurementFor = (prompt) => serializedContextMeasurement({
+    systemContent,
+    prompt,
+    serializedToolDefinitions,
+    toolDefinitionChars,
+    maxSerializedTextChars,
+    maxSerializedTextTokens,
+    countTokens,
+  });
+  const fullMeasurement = measurementFor(fullPrompt);
   contextStats.preCompactionPromptChars = fullPrompt.length;
-  contextStats.targetSerializedTextChars = targetSerializedTextChars;
-  if (fullPrompt.length <= targetPromptChars) return fullPrompt;
-  if (transcript.length === 0 || targetPromptChars <= 0) {
+  contextStats.preCompactionSerializedTextChars = fullMeasurement.serializedTextChars;
+  contextStats.budgetMode = fullMeasurement.budgetMode;
+  if (fullMeasurement.budgetMode === "tokens") {
+    contextStats.preCompactionSerializedTextTokens = fullMeasurement.serializedTextTokens;
+    contextStats.targetSerializedTextTokens = Math.floor(
+      fullMeasurement.maxSerializedTextTokens * HISTORY_COMPACTION_TARGET_RATIO,
+    );
+  } else if (fullMeasurement.maxSerializedTextChars) {
+    contextStats.targetSerializedTextChars = Math.floor(
+      fullMeasurement.maxSerializedTextChars * HISTORY_COMPACTION_TARGET_RATIO,
+    );
+  }
+  if (!useHistoryCompaction
+    || measurementFitsBudget(fullMeasurement, HISTORY_COMPACTION_TARGET_RATIO)) {
+    return fullPrompt;
+  }
+  if (transcript.length === 0) {
     contextStats.compactionBlockedReason = "fixed_overhead";
     return fullPrompt;
   }
@@ -582,7 +696,7 @@ function compactTranscriptWithinBudget({
 
   let ledgerLimit = Math.min(
     MAX_HISTORY_COMPACTION_LEDGER_CHARS,
-    Math.max(2_048, Math.floor(targetPromptChars * 0.08)),
+    Math.max(2_048, Math.floor(fullPrompt.length * 0.08)),
   );
   const makeCandidate = (retainedIndices) => {
     const retained = [];
@@ -594,30 +708,44 @@ function compactTranscriptWithinBudget({
       ? makeHistoryCompactionEntry(omitted, ledgerLimit)
       : null;
     const candidateTranscript = ledger ? [ledger, ...retained] : retained;
+    const prompt = buildConversationPrompt(candidateTranscript, latestUserEcho);
     return {
       ledger,
+      measurement: measurementFor(prompt),
       omitted,
-      prompt: buildConversationPrompt(candidateTranscript, latestUserEcho),
+      prompt,
       retained,
     };
   };
 
   let retainedIndices = new Set(mandatoryIndices);
   let candidate = makeCandidate(retainedIndices);
-  while (candidate.prompt.length > targetPromptChars && ledgerLimit > 2_048) {
+  while (!measurementFitsBudget(candidate.measurement, HISTORY_COMPACTION_TARGET_RATIO)
+    && ledgerLimit > 2_048) {
     ledgerLimit = Math.max(2_048, Math.floor(ledgerLimit / 2));
     candidate = makeCandidate(retainedIndices);
   }
 
-  if (candidate.prompt.length <= targetPromptChars) {
-    for (let index = transcript.length - 1; index >= 0; index -= 1) {
-      if (retainedIndices.has(index)) continue;
-      const trialIndices = new Set(retainedIndices);
-      trialIndices.add(index);
+  if (measurementFitsBudget(candidate.measurement, HISTORY_COMPACTION_TARGET_RATIO)) {
+    // Retain the largest recent contiguous window that fits. Binary search
+    // bounds tokenizer work for very long Codex tasks instead of repeatedly
+    // encoding nearly identical multi-megabyte prompts.
+    let low = 0;
+    let high = transcript.length;
+    while (low < high) {
+      const startIndex = Math.floor((low + high) / 2);
+      const trialIndices = new Set(mandatoryIndices);
+      for (let index = startIndex; index < transcript.length; index += 1) {
+        trialIndices.add(index);
+      }
       const trial = makeCandidate(trialIndices);
-      if (trial.prompt.length > targetPromptChars) break;
-      retainedIndices = trialIndices;
-      candidate = trial;
+      if (measurementFitsBudget(trial.measurement, HISTORY_COMPACTION_TARGET_RATIO)) {
+        high = startIndex;
+        retainedIndices = trialIndices;
+        candidate = trial;
+      } else {
+        low = startIndex + 1;
+      }
     }
   }
 
@@ -628,7 +756,7 @@ function compactTranscriptWithinBudget({
     .reduce((total, entry) => total + JSON.stringify(entry).length, 0);
   contextStats.retainedHistoryEntries = candidate.retained.length;
   contextStats.compactionLedgerChars = JSON.stringify(candidate.ledger).length;
-  if (candidate.prompt.length > targetPromptChars) {
+  if (!measurementFitsBudget(candidate.measurement, HISTORY_COMPACTION_TARGET_RATIO)) {
     contextStats.compactionBlockedReason = "mandatory_recent_history";
   }
   return candidate.prompt;
@@ -664,10 +792,19 @@ export function buildSessionInput(
   );
   if (rootInstructions) developerInstructions.push(rootInstructions);
 
-  const inputItems = Array.isArray(body?.input) ? body.input : [];
+  const inputItems = typeof body?.input === "string"
+    ? [{
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: body.input }],
+    }]
+    : (Array.isArray(body?.input) ? body.input : []);
   for (let sourceIndex = 0; sourceIndex < inputItems.length; sourceIndex += 1) {
     const item = inputItems[sourceIndex];
     if (item?.type === "additional_tools") continue;
+    if (item?.type === "reasoning" && contextBudget.reasoningContext === "current_turn") {
+      continue;
+    }
     const entry = historyEntry(item, attachments, contextStats, sourceIndex);
     if (!entry) continue;
     if (["developer", "system"].includes(entry.role)) {
@@ -707,6 +844,10 @@ export function buildSessionInput(
     "Tool names beginning with codex__ are bridge aliases. Their descriptions identify the exact outer namespace and tool name.",
     "For an outer free-form/custom tool, pass an object with one string field named input; put the complete raw tool input in that string.",
     "Follow the outer developer instructions below, subject to GitHub Copilot service policies and the SDK safety rules that remain enabled.",
+    ...(Array.isArray(contextBudget.systemInstructions)
+      ? contextBudget.systemInstructions.filter((instruction) =>
+        typeof instruction === "string" && instruction.trim())
+      : []),
   ].join("\n");
 
   let systemContent = [
@@ -721,7 +862,11 @@ export function buildSessionInput(
     systemContent,
     contextStats,
     maxSerializedTextChars: contextBudget.maxSerializedTextChars,
+    maxSerializedTextTokens: contextBudget.maxSerializedTextTokens,
+    countTokens: contextBudget.countTokens,
+    serializedToolDefinitions: contextBudget.serializedToolDefinitions,
     toolDefinitionChars: contextBudget.toolDefinitionChars,
+    useHistoryCompaction: contextBudget.useHistoryCompaction !== false,
   });
   const maxImageAttachments = Math.max(0, Number.isFinite(Number(
     contextBudget.maxImageAttachments,
@@ -745,6 +890,15 @@ export function buildSessionInput(
   }));
   contextStats.promptChars = prompt.length;
   contextStats.systemChars = systemContent.length;
+  Object.assign(contextStats, serializedContextMeasurement({
+    systemContent,
+    prompt,
+    serializedToolDefinitions: contextBudget.serializedToolDefinitions,
+    toolDefinitionChars: contextBudget.toolDefinitionChars,
+    maxSerializedTextChars: contextBudget.maxSerializedTextChars,
+    maxSerializedTextTokens: contextBudget.maxSerializedTextTokens,
+    countTokens: contextBudget.countTokens,
+  }));
 
   return {
     systemContent,
@@ -760,24 +914,39 @@ export function buildSessionInput(
 export function assertSerializedContextWithinLimit(
   sessionInput,
   sdkTools,
-  maxSerializedTextChars,
+  contextBudget,
 ) {
-  const measurement = {
-    promptChars: String(sessionInput?.prompt ?? "").length,
-    systemChars: String(sessionInput?.systemContent ?? "").length,
-    toolDefinitionChars: JSON.stringify(Array.isArray(sdkTools) ? sdkTools : []).length,
-    serializedTextChars: 0,
-    maxSerializedTextChars,
-  };
-  measurement.serializedTextChars = measurement.promptChars
-    + measurement.systemChars
-    + measurement.toolDefinitionChars;
+  const legacySignature = typeof contextBudget === "number";
+  const normalizedBudget = legacySignature
+    ? { maxSerializedTextChars: contextBudget }
+    : (contextBudget ?? {});
+  const serializedToolDefinitions = JSON.stringify(Array.isArray(sdkTools) ? sdkTools : []);
+  const measurement = serializedContextMeasurement({
+    systemContent: sessionInput?.systemContent,
+    prompt: sessionInput?.prompt,
+    serializedToolDefinitions,
+    maxSerializedTextChars: normalizedBudget.maxSerializedTextChars,
+    maxSerializedTextTokens: normalizedBudget.maxSerializedTextTokens,
+    countTokens: normalizedBudget.countTokens,
+  });
 
-  if (measurement.serializedTextChars > maxSerializedTextChars) {
+  if (measurement.budgetMode === "tokens"
+    && measurement.serializedTextTokens > measurement.maxSerializedTextTokens) {
     throw new Error(
-      `Bridge context guard rejected ${measurement.serializedTextChars} serialized text characters; limit is ${maxSerializedTextChars}. `
+      `Bridge token context guard rejected ${measurement.serializedTextTokens} serialized text tokens; limit is ${measurement.maxSerializedTextTokens}. `
       + "Start a fresh Codex task or remove unusually large text/tool history.",
     );
+  }
+  if (measurement.budgetMode !== "tokens"
+    && measurement.maxSerializedTextChars
+    && measurement.serializedTextChars > measurement.maxSerializedTextChars) {
+    throw new Error(
+      `Bridge context guard rejected ${measurement.serializedTextChars} serialized text characters; limit is ${measurement.maxSerializedTextChars}. `
+      + "Start a fresh Codex task or remove unusually large text/tool history.",
+    );
+  }
+  if (legacySignature) {
+    delete measurement.budgetMode;
   }
   return measurement;
 }
@@ -789,6 +958,190 @@ export function normalizeReasoningEffort(value) {
   return SUPPORTED_REASONING_EFFORTS.has(requested)
     ? requested
     : DEFAULT_REASONING_EFFORT;
+}
+
+export function normalizeReasoningSummary(reasoning = {}) {
+  const effort = normalizeReasoningEffort(reasoning?.effort);
+  const requested = reasoning?.summary ?? reasoning?.generate_summary;
+  if (requested === false || requested === "none" || effort === "none") return "none";
+  if (requested === "detailed") return "detailed";
+  if (requested === true || requested === "auto" || requested === "concise") {
+    return "concise";
+  }
+  return "concise";
+}
+
+export class RequestCompatibilityError extends Error {
+  constructor(param, message) {
+    super(message);
+    this.name = "RequestCompatibilityError";
+    this.code = "unsupported_parameter";
+    this.param = param;
+    this.statusCode = 400;
+  }
+}
+
+function rejectUnsupported(param, detail) {
+  throw new RequestCompatibilityError(
+    param,
+    `The GitHub Copilot relay cannot honor ${param}${detail ? `: ${detail}` : "."}`,
+  );
+}
+
+function defaultSamplingValue(value) {
+  return value == null || Number(value) === 1;
+}
+
+function validatePortableTool(tool, param = "tools") {
+  if (!tool || typeof tool !== "object") rejectUnsupported(param, "tool declarations must be objects");
+  if (tool.type === "namespace") {
+    for (const child of Array.isArray(tool.tools) ? tool.tools : []) {
+      validatePortableTool(child, param);
+    }
+    return;
+  }
+  if (!["function", "custom"].includes(tool.type)) {
+    rejectUnsupported(
+      param,
+      `hosted tool type ${JSON.stringify(tool.type ?? "unknown")} has no outer Codex execution mapping`,
+    );
+  }
+}
+
+function validatePortableTools(body) {
+  for (const tool of Array.isArray(body?.tools) ? body.tools : []) {
+    validatePortableTool(tool);
+  }
+  for (const item of Array.isArray(body?.input) ? body.input : []) {
+    if (item?.type !== "additional_tools") continue;
+    for (const tool of Array.isArray(item.tools) ? item.tools : []) {
+      validatePortableTool(tool, "input.additional_tools");
+    }
+  }
+}
+
+function normalizeToolChoice(value) {
+  const requested = value ?? "auto";
+  if (["auto", "none", "required"].includes(requested)) return requested;
+  if (requested && typeof requested === "object"
+    && ["function", "custom"].includes(requested.type)
+    && typeof requested.name === "string"
+    && requested.name) {
+    return {
+      mode: "specific",
+      type: requested.type,
+      name: requested.name,
+      namespace: typeof requested.namespace === "string" ? requested.namespace : null,
+    };
+  }
+  rejectUnsupported(
+    "tool_choice",
+    "supported choices are auto, none, required, or a named function/custom outer tool",
+  );
+}
+
+export function resolveRequestCompatibility(body = {}) {
+  validatePortableTools(body);
+  if (body.background === true) rejectUnsupported("background", "background responses are not implemented");
+  if (body.conversation != null) rejectUnsupported("conversation", "server-side Conversations state is not implemented");
+  if (body.prompt != null) rejectUnsupported("prompt", "OpenAI-hosted prompt templates are unavailable through Copilot");
+  if (body.store === true) rejectUnsupported("store", "responses are local and are not retrievable through the OpenAI API");
+  if (body.moderation != null) rejectUnsupported("moderation", "OpenAI moderation configuration is provider-specific");
+  if (body.max_tool_calls != null) rejectUnsupported("max_tool_calls", "this limit applies to hosted tools, which remain outside the relay");
+  if (!defaultSamplingValue(body.temperature)) {
+    rejectUnsupported("temperature", "Copilot does not expose per-request sampling temperature");
+  }
+  if (!defaultSamplingValue(body.top_p)) {
+    rejectUnsupported("top_p", "Copilot does not expose per-request nucleus sampling");
+  }
+  if (body.top_logprobs != null && Number(body.top_logprobs) !== 0) {
+    rejectUnsupported("top_logprobs", "Copilot does not return token log probabilities");
+  }
+
+  const serviceTier = body.service_tier ?? null;
+  if (serviceTier != null && !["auto", "default"].includes(serviceTier)) {
+    rejectUnsupported("service_tier", `tier ${JSON.stringify(serviceTier)} has no Copilot equivalent`);
+  }
+
+  const reasoningMode = body.reasoning?.mode ?? "standard";
+  if (!["standard", null].includes(reasoningMode)) {
+    rejectUnsupported("reasoning.mode", `mode ${JSON.stringify(reasoningMode)} has no Copilot SDK equivalent`);
+  }
+  const reasoningContext = body.reasoning?.context ?? "auto";
+  if (!["auto", "all_turns", "current_turn", null].includes(reasoningContext)) {
+    rejectUnsupported("reasoning.context", `context mode ${JSON.stringify(reasoningContext)} is unknown`);
+  }
+
+  const textFormat = body.text?.format;
+  if (textFormat != null && textFormat.type !== "text") {
+    rejectUnsupported("text.format", "structured output enforcement is not implemented");
+  }
+  const textVerbosity = body.text?.verbosity ?? null;
+  if (textVerbosity != null && !["low", "medium", "high"].includes(textVerbosity)) {
+    rejectUnsupported("text.verbosity", `verbosity ${JSON.stringify(textVerbosity)} is unknown`);
+  }
+
+  const toolChoice = normalizeToolChoice(body.tool_choice);
+  const parallelToolCalls = body.parallel_tool_calls ?? true;
+  if (body.parallel_tool_calls != null && typeof body.parallel_tool_calls !== "boolean") {
+    rejectUnsupported("parallel_tool_calls", "the value must be a boolean");
+  }
+
+  const maxOutputTokens = body.max_output_tokens == null
+    ? null
+    : Number(body.max_output_tokens);
+  if (maxOutputTokens != null
+    && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0)) {
+    rejectUnsupported("max_output_tokens", "the value must be a positive integer");
+  }
+
+  const truncation = body.truncation ?? "auto";
+  if (!["auto", "disabled"].includes(truncation)) {
+    rejectUnsupported("truncation", `strategy ${JSON.stringify(truncation)} is unknown`);
+  }
+
+  const reasoningEffort = normalizeReasoningEffort(body.reasoning?.effort);
+  const reasoningSummary = normalizeReasoningSummary({
+    ...body.reasoning,
+    effort: reasoningEffort,
+  });
+  const systemInstructions = [];
+  if (!parallelToolCalls) {
+    systemInstructions.push(
+      "The outer Responses request disables parallel tool calls. Request at most one outer tool in each assistant turn, then wait for its result before requesting another.",
+    );
+  }
+  if (textVerbosity) {
+    systemInstructions.push(
+      `The outer Responses request selects ${textVerbosity} verbosity. Use ${textVerbosity} verbosity by default while preserving required facts, evidence, caveats, and next steps.`,
+    );
+  }
+  if (toolChoice === "none") {
+    systemInstructions.push("The outer Responses request disables tool use for this turn. Return a text response without requesting a tool.");
+  } else if (toolChoice === "required") {
+    systemInstructions.push("The outer Responses request requires tool use. Request at least one available outer tool before returning a final answer.");
+  } else if (toolChoice?.mode === "specific") {
+    const qualifiedTool = toolChoice.namespace
+      ? `${toolChoice.namespace}.${toolChoice.name}`
+      : toolChoice.name;
+    systemInstructions.push(
+      `The outer Responses request requires the specific ${toolChoice.type} tool ${qualifiedTool}. Request that tool before returning a final answer.`,
+    );
+  }
+
+  return {
+    maxOutputTokens,
+    parallelToolCalls,
+    reasoningContext,
+    reasoningEffort,
+    reasoningSummary,
+    serviceTier,
+    systemInstructions,
+    textVerbosity,
+    toolChoice,
+    truncation,
+    useHistoryCompaction: truncation !== "disabled",
+  };
 }
 
 export function resolveModelCompatibility(model) {
@@ -827,6 +1180,9 @@ export function resolveModelCompatibility(model) {
   return {
     contextTier: hasLongContext ? "long_context" : "default",
     maxPromptTokens,
+    maxOutputTokens: Number.isFinite(Number(limits.max_output_tokens))
+      ? Number(limits.max_output_tokens)
+      : null,
     maxContextWindowTokens: Number.isFinite(Number(limits.max_context_window_tokens))
       ? Number(limits.max_context_window_tokens)
       : null,
@@ -941,13 +1297,24 @@ export function externalToolRequestToResponseItem(metadata, eventData) {
   };
 }
 
-export function makeAssistantMessageItem(text) {
-  return {
-    id: `msg_${randomUUID().replaceAll("-", "")}`,
+export function makeAssistantMessageItem(text, { phase = null, id = null } = {}) {
+  const item = {
+    id: typeof id === "string" && id ? id : `msg_${randomUUID().replaceAll("-", "")}`,
     type: "message",
     role: "assistant",
     status: "completed",
     content: [{ type: "output_text", text: String(text ?? ""), annotations: [] }],
+  };
+  if (typeof phase === "string" && phase) item.phase = phase;
+  return item;
+}
+
+export function makeReasoningItem(text, { id = null } = {}) {
+  return {
+    id: typeof id === "string" && id ? id : `rs_${randomUUID().replaceAll("-", "")}`,
+    type: "reasoning",
+    status: "completed",
+    summary: [{ type: "summary_text", text: String(text ?? "") }],
   };
 }
 
@@ -980,9 +1347,13 @@ export function makeResponseObject({
     parallel_tool_calls: requestBody.parallel_tool_calls ?? true,
     previous_response_id: requestBody.previous_response_id ?? null,
     reasoning: requestBody.reasoning ?? { effort: null, summary: null },
+    service_tier: requestBody.service_tier ?? "default",
     store: requestBody.store ?? false,
     temperature: requestBody.temperature ?? null,
-    text: requestBody.text ?? { format: { type: "text" } },
+    text: {
+      format: { type: "text" },
+      ...(requestBody.text ?? {}),
+    },
     tool_choice: requestBody.tool_choice ?? "auto",
     tools: Array.isArray(requestBody.tools) ? requestBody.tools : [],
     top_p: requestBody.top_p ?? null,

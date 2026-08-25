@@ -8,6 +8,9 @@ const marker = "CODEX_HEARTBEAT_OK";
 const quietPeriodMs = 4_000;
 const heartbeatIntervalMs = 250;
 const codexIdleTimeoutMs = 1_000;
+const codexReasoningEffort = process.env.PROBE_CODEX_REASONING_EFFORT ?? "none";
+const codexReasoningSummary = process.env.PROBE_CODEX_REASONING_SUMMARY ?? null;
+let capturedRequestShape = null;
 const projectDirectory = path.dirname(fileURLToPath(import.meta.url));
 const codexEntrypoint = path.join(
   projectDirectory,
@@ -17,6 +20,42 @@ const codexEntrypoint = path.join(
   "bin",
   "codex.js",
 );
+
+function safeToolShape(tool) {
+  return {
+    type: tool?.type ?? null,
+    strict: tool?.strict ?? null,
+    deferLoading: tool?.defer_loading ?? null,
+    allowedCallerCount: Array.isArray(tool?.allowed_callers)
+      ? tool.allowed_callers.length
+      : 0,
+    hasOutputSchema: tool?.output_schema != null,
+    nestedToolCount: Array.isArray(tool?.tools) ? tool.tools.length : 0,
+  };
+}
+
+function summarizeToolTree(tools) {
+  const summary = {
+    total: 0,
+    namespace: 0,
+    function: 0,
+    custom: 0,
+    deferred: 0,
+    strict: 0,
+    outputSchema: 0,
+  };
+  const visit = (tool) => {
+    if (!tool || typeof tool !== "object") return;
+    summary.total += 1;
+    if (["namespace", "function", "custom"].includes(tool.type)) summary[tool.type] += 1;
+    if (tool.defer_loading === true) summary.deferred += 1;
+    if (tool.strict === true) summary.strict += 1;
+    if (tool.output_schema != null) summary.outputSchema += 1;
+    for (const child of Array.isArray(tool.tools) ? tool.tools : []) visit(child);
+  };
+  for (const tool of Array.isArray(tools) ? tools : []) visit(tool);
+  return summary;
+}
 
 function writeEvent(response, event) {
   response.write(`event: ${event.type}\n`);
@@ -61,8 +100,37 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  for await (const _chunk of request) {
-    // Drain the request before starting the deterministic quiet response.
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    capturedRequestShape = {
+      keys: Object.keys(body).sort(),
+      reasoning: body.reasoning ?? null,
+      text: body.text ?? null,
+      toolChoice: body.tool_choice ?? null,
+      parallelToolCalls: body.parallel_tool_calls ?? null,
+      maxOutputTokens: body.max_output_tokens ?? null,
+      serviceTier: body.service_tier ?? null,
+      store: body.store ?? null,
+      truncation: body.truncation ?? null,
+      include: body.include ?? null,
+      inputTypes: Array.isArray(body.input)
+        ? body.input.map((item) => item?.type ?? null)
+        : [],
+      tools: Array.isArray(body.tools) ? body.tools.map(safeToolShape) : [],
+      additionalToolGroups: Array.isArray(body.input)
+        ? body.input
+          .filter((item) => item?.type === "additional_tools")
+          .map((item) => ({
+            toolCount: Array.isArray(item.tools) ? item.tools.length : 0,
+            treeSummary: summarizeToolTree(item.tools),
+            tools: Array.isArray(item.tools) ? item.tools.map(safeToolShape) : [],
+          }))
+        : [],
+    };
+  } catch {
+    capturedRequestShape = { parseError: true };
   }
   response.writeHead(200, {
     "content-type": "text/event-stream",
@@ -105,7 +173,7 @@ try {
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
   const provider = `{ name = "Heartbeat probe", base_url = "${baseUrl}", wire_api = "responses", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = ${codexIdleTimeoutMs} }`;
-  const result = await run(process.execPath, [
+  const codexArguments = [
     codexEntrypoint,
     "exec",
     "--ignore-user-config",
@@ -120,10 +188,19 @@ try {
     "--config",
     `model_providers.heartbeat_probe=${provider}`,
     "--config",
-    'model_reasoning_effort="none"',
+    `model_reasoning_effort="${codexReasoningEffort}"`,
     "--json",
     `Return exactly ${marker}.`,
-  ], { cwd: projectDirectory });
+  ];
+  if (codexReasoningSummary) {
+    codexArguments.splice(
+      codexArguments.length - 2,
+      0,
+      "--config",
+      `model_reasoning_summary="${codexReasoningSummary}"`,
+    );
+  }
+  const result = await run(process.execPath, codexArguments, { cwd: projectDirectory });
   const ok = result.code === 0 && result.stdout.includes(marker);
   console.log(JSON.stringify({
     ok,
@@ -131,8 +208,11 @@ try {
     quietPeriodMs,
     heartbeatIntervalMs,
     codexIdleTimeoutMs,
+    codexReasoningEffort,
+    codexReasoningSummary,
     markerObserved: result.stdout.includes(marker),
     stderrLineCount: result.stderr.trim() ? result.stderr.trim().split(/\r?\n/).length : 0,
+    requestShape: capturedRequestShape,
     stderr: ok ? undefined : result.stderr.trim(),
   }, null, 2));
   if (!ok) process.exitCode = 1;

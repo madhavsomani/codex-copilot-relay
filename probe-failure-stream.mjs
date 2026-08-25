@@ -5,7 +5,10 @@ for (let index = 2; index < process.argv.length; index += 2) {
 
 const baseUrl = args.get("--url") ?? "http://127.0.0.1:4144/v1";
 const model = args.get("--model") ?? "gpt-5.6-sol";
-const chars = Math.max(1, Number.parseInt(args.get("--chars") ?? "1100000", 10));
+const tokenDenseUnits = Math.max(
+  1,
+  Number.parseInt(args.get("--token-dense-units") ?? "400000", 10),
+);
 const response = await fetch(`${baseUrl}/responses`, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -15,7 +18,9 @@ const response = await fetch(`${baseUrl}/responses`, {
     input: [{
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: "x".repeat(chars) }],
+      // Each unit is three o200k tokens. This intentionally exceeds Sol's
+      // advertised prompt-token limit without relying on the retired char guard.
+      content: [{ type: "input_text", text: "🧪".repeat(tokenDenseUnits) }],
     }],
   }),
 });
@@ -39,6 +44,7 @@ const report = {
   terminalStatus: terminal?.response?.status ?? null,
   terminalErrorCode: terminal?.response?.error?.code ?? null,
   terminalMessage: terminal?.response?.error?.message ?? null,
+  tokenDenseUnits,
 };
 console.log(JSON.stringify(report, null, 2));
 if (!report.ok) process.exitCode = 1;

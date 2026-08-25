@@ -93,6 +93,101 @@ test("emits tool items before the terminal completed event", () => {
   ]);
 });
 
+test("emits phase-aware commentary and reasoning summary events", () => {
+  const events = [];
+  const stream = new ResponsesEventStream({
+    responseId: "resp-reasoning",
+    model: "gpt-5.6-sol",
+    requestBody: { model: "gpt-5.6-sol", stream: true },
+    emit: (event) => events.push(event),
+  });
+
+  stream.start();
+  stream.appendReasoningDelta("Validated", { reasoningId: "sdk-reasoning-1" });
+  const reasoningItem = stream.finishReasoning(
+    "Validated the inputs.",
+    { reasoningId: "sdk-reasoning-1" },
+  );
+  stream.appendTextDelta("Working", {
+    messageId: "sdk-message-1",
+    phase: "commentary",
+  });
+  const commentaryItem = stream.finishText("Working on it.", {
+    messageId: "sdk-message-1",
+    phase: "commentary",
+  });
+  stream.complete([reasoningItem, commentaryItem], null);
+
+  assert.deepEqual(events.map((event) => event.type), [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_summary_part.done",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.content_part.added",
+    "response.output_text.delta",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.content_part.done",
+    "response.output_item.done",
+    "response.completed",
+  ]);
+  assert.equal(commentaryItem.phase, "commentary");
+  assert.equal(reasoningItem.summary[0].text, "Validated the inputs.");
+  assert.deepEqual(
+    events.map((event) => event.sequence_number),
+    events.map((_, index) => index),
+  );
+});
+
+test("streams outer function arguments before completing the tool item", () => {
+  const events = [];
+  const stream = new ResponsesEventStream({
+    responseId: "resp-tool-delta",
+    model: "gpt-5.6-sol",
+    requestBody: { model: "gpt-5.6-sol", stream: true },
+    emit: (event) => events.push(event),
+  });
+  stream.start();
+  stream.appendToolCallDelta('{"path":', {
+    kind: "function",
+    name: "read_file",
+    namespace: "functions",
+    toolCallId: "call-streamed",
+  });
+  stream.appendToolCallDelta('"README.md"}', { toolCallId: "call-streamed" });
+  const item = {
+    id: "temporary-final-id",
+    type: "function_call",
+    call_id: "call-streamed",
+    namespace: "functions",
+    name: "read_file",
+    arguments: '{"path":"README.md"}',
+    status: "completed",
+  };
+  stream.finishItem(item);
+  stream.complete([item], null);
+
+  assert.deepEqual(events.map((event) => event.type), [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.output_item.done",
+    "response.completed",
+  ]);
+  assert.notEqual(item.id, "temporary-final-id");
+  assert.equal(events[2].item.call_id, "call-streamed");
+  assert.equal(events[5].arguments, '{"path":"README.md"}');
+});
+
 test("emits a sequenced terminal response.failed event", () => {
   const events = [];
   const stream = new ResponsesEventStream({

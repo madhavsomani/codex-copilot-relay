@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { countModelTokens } from "./context-tokenizer.mjs";
 import {
   assertSerializedContextWithinLimit,
   buildSessionInput,
@@ -7,9 +8,13 @@ import {
   externalToolRequestToResponseItem,
   extractToolDeclarations,
   extractToolOutputs,
+  makeAssistantMessageItem,
   makeFailedResponseObject,
+  makeReasoningItem,
   normalizeReasoningEffort,
+  normalizeReasoningSummary,
   normalizeToolOutput,
+  resolveRequestCompatibility,
   resolveModelCompatibility,
 } from "./bridge-core.mjs";
 
@@ -93,6 +98,39 @@ test("removes provider-specific encrypted tool arguments for child-agent portabi
   assert.equal("encrypted" in declaration.parameters.properties.message, false);
 });
 
+test("preserves portable tool-loading and contract metadata", () => {
+  const declaration = extractToolDeclarations({
+    tools: [{
+      type: "function",
+      name: "lookup",
+      description: "Look up a record.",
+      strict: true,
+      defer_loading: true,
+      allowed_callers: ["direct"],
+      output_schema: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false,
+      },
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    }],
+  }).sdkTools[0];
+
+  assert.equal(declaration.defer, "auto");
+  assert.equal(declaration.metadata["codex.outer.strict"], true);
+  assert.deepEqual(declaration.metadata["codex.outer.allowed_callers"], ["direct"]);
+  assert.deepEqual(
+    declaration.metadata["codex.outer.output_schema"].required,
+    ["value"],
+  );
+});
+
 test("builds role-preserving session input", () => {
   const sessionInput = buildSessionInput(sampleBody, process.cwd());
   assert.match(sessionInput.systemContent, /Developer rule\./);
@@ -102,6 +140,61 @@ test("builds role-preserving session input", () => {
   assert.match(sessionInput.prompt, /A progress update by itself is not completion/);
   assert.equal(sessionInput.requiresAction, false);
   assert.doesNotMatch(sessionInput.prompt, /Run orchestration code/);
+});
+
+test("accepts the Responses shorthand string input", () => {
+  const sessionInput = buildSessionInput({
+    input: "SHORTHAND_STRING_INPUT_MUST_SURVIVE",
+  }, process.cwd());
+
+  assert.match(sessionInput.prompt, /SHORTHAND_STRING_INPUT_MUST_SURVIVE/);
+  assert.equal(sessionInput.latestUserText, "SHORTHAND_STRING_INPUT_MUST_SURVIVE");
+});
+
+test("preserves assistant phases and reasoning summaries in replayed history", () => {
+  const sessionInput = buildSessionInput({
+    input: [
+      {
+        type: "reasoning",
+        id: "rs-prior",
+        summary: [{ type: "summary_text", text: "Validated the prior state." }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "output_text", text: "I am checking the build." }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Continue." }],
+      },
+    ],
+  }, process.cwd());
+
+  assert.match(sessionInput.prompt, /"role":"assistant_reasoning"/);
+  assert.match(sessionInput.prompt, /Validated the prior state\./);
+  assert.match(sessionInput.prompt, /"phase":"commentary"/);
+});
+
+test("honors current-turn reasoning context by omitting prior reasoning summaries", () => {
+  const sessionInput = buildSessionInput({
+    input: [
+      {
+        type: "reasoning",
+        summary: [{ type: "summary_text", text: "PRIOR_REASONING_SHOULD_NOT_REPLAY" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "CURRENT_TURN_REQUEST" }],
+      },
+    ],
+  }, process.cwd(), { reasoningContext: "current_turn" });
+
+  assert.doesNotMatch(sessionInput.prompt, /PRIOR_REASONING_SHOULD_NOT_REPLAY/);
+  assert.match(sessionInput.prompt, /CURRENT_TURN_REQUEST/);
 });
 
 test("marks continuation requests as requiring real tool progress", () => {
@@ -458,6 +551,55 @@ test("compaction ledger preserves mid-task user rules and useful tool-result exc
   assert.match(sessionInput.prompt, /CRITICAL_ASSET_PATH=C:\\\\deliverables\\\\approved-final\.mp4/);
 });
 
+test("uses the model token budget instead of compacting at the legacy character guard", () => {
+  const input = [];
+  for (let index = 0; index < 10; index += 1) {
+    input.push({
+      type: "message",
+      role: index % 2 ? "assistant" : "user",
+      content: [{ type: index % 2 ? "output_text" : "input_text", text: "x".repeat(600) }],
+    });
+  }
+  input.push({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: "LATEST_TOKEN_AWARE_REQUEST" }],
+  });
+
+  const countTokens = (value) => Math.ceil(String(value).length / 4);
+  const sessionInput = buildSessionInput({ input }, process.cwd(), {
+    maxSerializedTextChars: 1_000,
+    maxSerializedTextTokens: 5_000,
+    serializedToolDefinitions: "[]",
+    countTokens,
+  });
+
+  assert.equal(sessionInput.contextStats.historyCompacted, false);
+  assert.ok(sessionInput.contextStats.serializedTextChars > 1_000);
+  assert.ok(sessionInput.contextStats.serializedTextTokens < 5_000);
+  assert.match(sessionInput.prompt, /LATEST_TOKEN_AWARE_REQUEST/);
+});
+
+test("accepts a megabyte-scale repetitive Codex history when it fits the advertised token window", () => {
+  const sessionInput = buildSessionInput({
+    input: [{
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "x".repeat(1_100_000) }],
+    }],
+  }, process.cwd(), {
+    maxSerializedTextChars: 1_000_000,
+    maxSerializedTextTokens: 922_000,
+    serializedToolDefinitions: "[]",
+    countTokens: countModelTokens,
+  });
+
+  assert.equal(sessionInput.contextStats.budgetMode, "tokens");
+  assert.equal(sessionInput.contextStats.historyCompacted, false);
+  assert.ok(sessionInput.contextStats.serializedTextChars > 1_000_000);
+  assert.ok(sessionInput.contextStats.serializedTextTokens < 922_000 * 0.9);
+});
+
 test("maps custom and function requests back to Responses items", () => {
   const declarations = extractToolDeclarations(sampleBody);
   const custom = declarations.metadata.find((item) => item.kind === "custom");
@@ -502,6 +644,74 @@ test("normalizes reasoning efforts for Copilot", () => {
   assert.equal(normalizeReasoningEffort("minimal"), "none");
   assert.equal(normalizeReasoningEffort("xhigh"), "xhigh");
   assert.equal(normalizeReasoningEffort("unknown"), "low");
+});
+
+test("normalizes Codex reasoning summaries for the Copilot SDK", () => {
+  assert.equal(normalizeReasoningSummary({ effort: "max", summary: "auto" }), "concise");
+  assert.equal(normalizeReasoningSummary({ effort: "high", generate_summary: "detailed" }), "detailed");
+  assert.equal(normalizeReasoningSummary({ effort: "none" }), "none");
+  assert.equal(normalizeReasoningSummary({ effort: "max" }), "concise");
+});
+
+test("accepts the real Codex request controls and rejects unsupported semantics", () => {
+  const compatibility = resolveRequestCompatibility({
+    reasoning: { effort: "max", summary: "auto", context: "all_turns" },
+    text: { verbosity: "low" },
+    parallel_tool_calls: false,
+    tool_choice: "auto",
+    prompt_cache_key: "thread-safe-key",
+    include: ["reasoning.encrypted_content"],
+    store: false,
+  });
+
+  assert.equal(compatibility.reasoningEffort, "max");
+  assert.equal(compatibility.reasoningSummary, "concise");
+  assert.equal(compatibility.parallelToolCalls, false);
+  assert.equal(compatibility.textVerbosity, "low");
+  assert.match(compatibility.systemInstructions.join("\n"), /at most one outer tool/i);
+  assert.match(compatibility.systemInstructions.join("\n"), /low verbosity/i);
+
+  assert.throws(
+    () => resolveRequestCompatibility({ store: true }),
+    (error) => error.code === "unsupported_parameter" && error.param === "store",
+  );
+  assert.throws(
+    () => resolveRequestCompatibility({ text: { format: { type: "json_schema" } } }),
+    (error) => error.code === "unsupported_parameter" && error.param === "text.format",
+  );
+  assert.throws(
+    () => resolveRequestCompatibility({ temperature: 0.2 }),
+    (error) => error.code === "unsupported_parameter" && error.param === "temperature",
+  );
+  assert.equal(resolveRequestCompatibility({ tool_choice: "required" }).toolChoice, "required");
+  assert.deepEqual(
+    resolveRequestCompatibility({
+      tool_choice: { type: "function", name: "lookup", namespace: "records" },
+    }).toolChoice,
+    {
+      mode: "specific",
+      type: "function",
+      name: "lookup",
+      namespace: "records",
+    },
+  );
+  assert.throws(
+    () => resolveRequestCompatibility({ tools: [{ type: "web_search_preview" }] }),
+    (error) => error.code === "unsupported_parameter" && error.param === "tools",
+  );
+});
+
+test("adds phase-aware assistant and reasoning output items", () => {
+  const commentary = makeAssistantMessageItem("Checking.", { phase: "commentary" });
+  assert.equal(commentary.phase, "commentary");
+
+  const reasoning = makeReasoningItem("Validated the inputs.");
+  assert.equal(reasoning.type, "reasoning");
+  assert.equal(reasoning.status, "completed");
+  assert.deepEqual(reasoning.summary, [{
+    type: "summary_text",
+    text: "Validated the inputs.",
+  }]);
 });
 
 test("derives long-context and image limits from Copilot model capabilities", () => {
@@ -569,6 +779,22 @@ test("rejects serialized model context above the configured guard", () => {
       maxSerializedTextChars: 3_000,
     },
   );
+});
+
+test("prefers model token limits over the legacy fallback character limit", () => {
+  const sessionInput = {
+    systemContent: "system",
+    prompt: "x".repeat(2_000),
+  };
+  const measurement = assertSerializedContextWithinLimit(sessionInput, [], {
+    maxSerializedTextChars: 1_000,
+    maxSerializedTextTokens: 1_000,
+    countTokens: (value) => Math.ceil(String(value).length / 4),
+  });
+
+  assert.ok(measurement.serializedTextChars > measurement.maxSerializedTextChars);
+  assert.ok(measurement.serializedTextTokens <= measurement.maxSerializedTextTokens);
+  assert.equal(measurement.budgetMode, "tokens");
 });
 
 test("classifies context failures as invalid prompts", () => {

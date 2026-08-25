@@ -217,8 +217,16 @@ or product changes can require updates to the relay.
 - Independent SDK session per request for overlapping Codex agents
 - Codex child-agent delegation adapter, including OpenAI-only encrypted-schema hints
 - Tool-call and tool-result continuation
+- Responses shorthand string input plus role-ordered structured input
 - Full streaming Responses lifecycle with ordered sequence numbers and terminal
   `response.completed` or `response.failed` events
+- Assistant `commentary` / `final_answer` phases, readable reasoning-summary
+  events when Copilot emits them, and incremental function/custom-tool inputs
+- `auto`, `none`, `required`, and named function/custom `tool_choice` handling
+- Portable strict/deferred/output-schema tool metadata and Copilot-native lazy
+  tool discovery for Codex declarations marked `defer_loading`
+- Early HTTP 400 errors for request controls the Copilot route cannot honestly
+  honor, instead of silently ignoring them
 - Automatic recovery from empty Copilot completions with a bounded per-turn retry limit
 - Automatic recovery when a model emits only a future-tense progress update
   instead of taking the next available tool action
@@ -232,9 +240,10 @@ or product changes can require updates to the relay.
   built-ins, config discovery, and custom instructions stay disabled
 - Historical tool images travel as image attachments instead of base64 prompt text
 - Oversized historical text tool results are bounded with head and tail context preserved
-- Aggregate history is compacted into a bounded, salience-aware continuity ledger
+- Aggregate history is compacted against the selected model's advertised prompt
+  token budget into a bounded, salience-aware continuity ledger
   that prioritizes user corrections, failures, tool inputs/results, and the latest
-  tool chain before it can overflow the configured model-context guard
+  tool chain; the legacy character ceiling is used only if no token limit is available
 - A bounded 128 MiB request envelope lets media-heavy Codex history reach the
   compactor instead of failing at the old 32 MiB HTTP-reader ceiling
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
@@ -595,6 +604,10 @@ npm run probe:stream -- --url http://127.0.0.1:4144/v1
 npm run probe:compatibility -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
 npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gpt-5.6-sol
 npm run probe:tools-relay -- --url http://127.0.0.1:4144/v1 --steps 6 --model gpt-5.6-sol
+npm run probe:deferred-tool -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
+npm run probe:reasoning-phase -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
+npm run probe:request-semantics -- --url http://127.0.0.1:4144/v1
+npm run probe:tool-choice -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-luna
 npm run probe:premature-recovery -- --url http://127.0.0.1:4144/v1
 npm run probe:delayed-tool -- --url http://127.0.0.1:4144/v1 --delay-ms 31000
 npm run probe:failure-stream -- --url http://127.0.0.1:4144/v1
@@ -607,7 +620,8 @@ Codex has a 1-second idle timeout, receives no model text for 4 seconds, and
 must remain connected through parsed heartbeat events. Together, the probes
 verify ordered streaming, abandoned-client cleanup, parallel requests, a
 multi-turn tool chain, root/developer/memory/tool-result fidelity, progress-only
-recovery, delayed outer-tool continuation, and a well-formed terminal failure.
+recovery, deferred-tool discovery, phased output, explicit compatibility errors,
+delayed outer-tool continuation, and a well-formed terminal failure.
 
 The default 13-hour outer-tool result window lets a single Codex exchange wait
 through a 12-hour local render, browser operation, or child-agent task. It does
@@ -620,7 +634,10 @@ The watchdog recovers the gateway for new calls after a process or terminal
 failure. In-memory exchanges cannot survive a relay process crash, machine
 sleep/network loss, an upstream Copilot outage, quota exhaustion, or a model
 context limit. Long-running work should still produce checkpoints and durable
-artifacts so Codex can resume safely after any external interruption.
+artifacts so Codex can resume safely after any external interruption. The
+[durable in-flight crash-resume design](docs/CRASH-RESUME-DESIGN.md) specifies
+the idempotency and crash-injection gates required before that feature can be
+enabled without risking duplicate local tool execution.
 
 The context guard limits each historical text tool result to 64 KiB. Image count
 and per-image size are taken from the selected Copilot model's advertised
@@ -630,24 +647,32 @@ outer instruction image, then older user/history images. It replaces omitted
 image markers with an explicit explanation instead of silently showing the model
 an attachment name that was not sent.
 When instructions, tool schemas, and accumulated history approach 90% of the
-configured serialized-text ceiling, the relay preserves every outer instruction,
+selected model's advertised prompt-token limit, the relay preserves every outer instruction,
 the latest user request, and the newest tool chain while replacing older history
 with a bounded continuity ledger. That ledger gives omitted user corrections and
 constraints priority and retains compact excerpts of tool inputs and results.
 Image attachments referenced only by omitted history are dropped. The selected
-dashboard record exposes retained/omitted entry and character counts, model
+dashboard record exposes retained/omitted entry, character, and token counts, model
 compatibility limits, and the terminal reports `CONTEXT OK` when compaction occurs.
 
 The hard rejection remains as a last resort when fixed instructions/tool schemas
 or the mandatory current request and newest tool chain cannot fit under the
 ceiling. Raising the limit does not increase the upstream model's context window.
 
+The relay uses a local `o200k_base` tokenizer as a budgeting estimate because
+Copilot does not expose its server-side tokenizer. A 10% reserve covers provider
+wrappers and tokenizer drift. The old `BRIDGE_MAX_SERIALIZED_CONTEXT_CHARS`
+limit remains an emergency fallback only for models that do not advertise a
+prompt-token limit; it no longer rejects a valid long-context request merely
+because its UTF-16 character count exceeds one million.
+
 Codex resends its full task envelope before the relay can compact it. Drive,
 browser, and image tools can place large base64 results in that local history, so
 the relay accepts up to 128 MiB by default and then applies the separate
-1,000,000-character model-context guard described above. The raw envelope is
+model-token context guard described above. The raw envelope is
 never forwarded unchanged to Copilot. The effective limit is reported by
-`/health` as `reliability.maxRequestBodyBytes`.
+`/health` under `reliability.contextGuard`; the local HTTP envelope is reported
+separately as `reliability.maxRequestBodyBytes`.
 
 For an unusual workload, set `BRIDGE_MAX_REQUEST_BODY_BYTES` before starting the
 relay. Values are clamped between 1 MiB and 512 MiB; the limit is deliberately
@@ -659,12 +684,28 @@ task if even the bounded envelope is exhausted.
 
 The relay preserves the Codex-side contract: system/developer instructions,
 role-ordered conversation history, function/custom/namespace tool declarations,
-tool-call continuations, reasoning effort, images within the selected model's
-limit, and streaming Responses lifecycle events. Codex still loads its own
+tool-call continuations, reasoning effort/summary configuration, assistant phase,
+images within the selected model's limit, and streaming Responses lifecycle
+events. Codex still loads its own
 memory and skills and still executes every local/browser/connector tool. The
 Copilot SDK receives those outer instructions and declaration-only tool schemas;
 its own memory and built-in tools are intentionally off so they cannot conflict
-with the desktop harness.
+with the desktop harness. The sole conditional built-in is Copilot's
+`tool_search_tool`, used only to discover outer declarations that Codex explicitly
+marked for deferred loading.
+
+| Responses capability | Relay status |
+|---|---|
+| Text input/output, streaming, usage, phases | Supported |
+| Function/custom/namespace tools and continuations | Supported; execution and approval stay in Codex |
+| Parallel independent Codex agents | Supported with one Copilot SDK session per initial request |
+| Reasoning effort | Forwarded to Copilot |
+| Readable reasoning summary | Forwarded when Copilot emits it; the provider may return reasoning usage without summary text |
+| Long context | Token-budgeted against the selected Copilot model, with salience-aware local compaction |
+| Data-URL images | Supported within the selected model's advertised image limits |
+| Stored Responses, Conversations, hosted prompts/tools, structured-output enforcement | Rejected explicitly; not silently emulated |
+| OpenAI prompt-cache identity, encrypted reasoning state, service tier, sampling/logprobs | Provider-specific and not transferable |
+| Crash recovery for an in-flight exchange | Not yet supported; watchdog recovery accepts new calls after restart |
 
 This is a compatibility relay, not byte-for-byte identity with OpenAI's native
 serving stack. Provider-side encrypted reasoning state, provider compaction,

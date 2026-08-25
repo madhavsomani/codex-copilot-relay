@@ -23,6 +23,7 @@ import {
 import { publicPricingSnapshot } from "./pricing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
+import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
 import {
   assertSerializedContextWithinLimit,
   bridgeContextDefaults,
@@ -33,11 +34,13 @@ import {
   extractToolOutputs,
   makeAssistantMessageItem,
   makeFailedResponseObject,
+  makeReasoningItem,
   makeResponseId,
   makeResponseObject,
-  normalizeReasoningEffort,
   normalizeToolOutput,
   resolveModelCompatibility,
+  resolveRequestCompatibility,
+  RequestCompatibilityError,
 } from "./bridge-core.mjs";
 
 const host = "127.0.0.1";
@@ -292,13 +295,13 @@ function openDashboardEventStream(request, response) {
   response.once("close", cleanup);
 }
 
-function errorPayload(error, code = "bridge_error") {
+function errorPayload(error, code = error?.code ?? "bridge_error") {
   return {
     error: {
       message: error instanceof Error ? error.message : String(error),
       type: "invalid_request_error",
       code,
-      param: null,
+      param: typeof error?.param === "string" ? error.param : null,
     },
   };
 }
@@ -397,14 +400,31 @@ class ResponseSink {
     recorder.setSelectedModel(this.record, model);
   }
 
-  appendTextDelta(delta) {
-    this.eventStream?.appendTextDelta(delta);
+  appendTextDelta(delta, metadata = {}) {
+    this.eventStream?.appendTextDelta(delta, metadata);
   }
 
-  finishText(text) {
+  finishText(text, metadata = {}) {
     return this.streaming
-      ? this.eventStream.finishText(text)
-      : makeAssistantMessageItem(text);
+      ? this.eventStream.finishText(text, metadata)
+      : makeAssistantMessageItem(text, {
+        id: metadata.messageId,
+        phase: metadata.phase,
+      });
+  }
+
+  appendReasoningDelta(delta, metadata = {}) {
+    this.eventStream?.appendReasoningDelta(delta, metadata);
+  }
+
+  finishReasoning(text, metadata = {}) {
+    return this.streaming
+      ? this.eventStream.finishReasoning(text, metadata)
+      : makeReasoningItem(text, { id: metadata.reasoningId });
+  }
+
+  appendToolCallDelta(delta, metadata = {}) {
+    this.eventStream?.appendToolCallDelta(delta, metadata);
   }
 
   finishItem(item) {
@@ -470,7 +490,11 @@ class ResponseSink {
       this.eventStream.fail(failedResponse);
       this.response.end();
     } else {
-      sendJson(this.response, 500, payload);
+      sendJson(
+        this.response,
+        Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+        payload,
+      );
     }
   }
 }
@@ -489,6 +513,9 @@ class Exchange {
     this.pendingCalls = new Map();
     this.lastToolMessage = null;
     this.streamedContent = "";
+    this.streamedReasoning = "";
+    this.currentMessageMetadata = {};
+    this.completedReasoningTexts = new Set();
     this.responseItems = [];
     this.pendingFinalMessage = null;
     this.usageEvents = [];
@@ -527,6 +554,10 @@ class Exchange {
     this.responseItems = [];
     this.pendingFinalMessage = null;
     this.usageEvents = [];
+    this.streamedContent = "";
+    this.streamedReasoning = "";
+    this.currentMessageMetadata = {};
+    this.completedReasoningTexts = new Set();
     this.prematureGuard.reset();
     this.armModelDeadline();
     sink.setUsageProvider(() => this.currentUsage());
@@ -561,6 +592,8 @@ class Exchange {
 
   beginTurn({ resetBlankRetries = true } = {}) {
     this.streamedContent = "";
+    this.streamedReasoning = "";
+    this.currentMessageMetadata = {};
     this.blankGuard.expectResponse({ resetRetries: resetBlankRetries });
     this.armModelDeadline();
   }
@@ -580,6 +613,44 @@ class Exchange {
 
     if (event.type === "assistant.turn_start") {
       this.streamedContent = "";
+      this.streamedReasoning = "";
+      this.currentMessageMetadata = {};
+      return;
+    }
+
+    if (event.type === "assistant.message_start") {
+      this.currentMessageMetadata = {
+        messageId: event.data?.messageId,
+        phase: event.data?.phase,
+      };
+      return;
+    }
+
+    if (event.type === "assistant.reasoning_delta") {
+      const delta = event.data?.deltaContent;
+      if (typeof delta === "string") {
+        this.streamedReasoning += delta;
+        this.sink?.appendReasoningDelta(delta, {
+          reasoningId: event.data?.reasoningId,
+        });
+      }
+      return;
+    }
+
+    if (event.type === "assistant.reasoning") {
+      const content = typeof event.data?.content === "string" && event.data.content
+        ? event.data.content
+        : this.streamedReasoning;
+      if (content && !this.completedReasoningTexts.has(content)) {
+        const item = this.sink?.finishReasoning(content, {
+          reasoningId: event.data?.reasoningId,
+        });
+        if (item && !this.responseItems.some((candidate) => candidate.id === item.id)) {
+          this.responseItems.push(item);
+        }
+        this.completedReasoningTexts.add(content);
+      }
+      this.streamedReasoning = "";
       return;
     }
 
@@ -587,12 +658,42 @@ class Exchange {
       const delta = event.data?.deltaContent;
       if (typeof delta === "string") {
         this.streamedContent += delta;
-        this.sink?.appendTextDelta(delta);
+        this.sink?.appendTextDelta(delta, this.currentMessageMetadata);
+      }
+      return;
+    }
+
+    if (event.type === "assistant.tool_call_delta") {
+      const metadata = this.toolMetadata.get(event.data?.name);
+      if (metadata && typeof event.data?.inputDelta === "string") {
+        this.sink?.appendToolCallDelta(event.data.inputDelta, {
+          kind: metadata.kind,
+          name: metadata.name,
+          namespace: metadata.namespace,
+          toolCallId: event.data?.toolCallId,
+        });
       }
       return;
     }
 
     if (event.type === "assistant.message") {
+      const messageMetadata = {
+        messageId: event.data?.messageId ?? this.currentMessageMetadata.messageId,
+        phase: event.data?.phase ?? this.currentMessageMetadata.phase,
+      };
+      if (typeof event.data?.reasoningText === "string"
+        && event.data.reasoningText
+        && !this.completedReasoningTexts.has(event.data.reasoningText)) {
+        const reasoningItem = this.sink?.finishReasoning(event.data.reasoningText, {
+          reasoningId: `${messageMetadata.messageId ?? event.id ?? "message"}-reasoning`,
+        });
+        if (reasoningItem
+          && !this.responseItems.some((candidate) => candidate.id === reasoningItem.id)) {
+          this.responseItems.push(reasoningItem);
+        }
+        this.completedReasoningTexts.add(event.data.reasoningText);
+        this.streamedReasoning = "";
+      }
       const decision = this.blankGuard.observeAssistantMessage(
         event.data,
         this.streamedContent,
@@ -600,8 +701,13 @@ class Exchange {
       this.streamedContent = "";
 
       if (decision.kind === "tool_calls") {
+        if (this.pendingFinalMessage?.item
+          && !this.responseItems.some((item) => item.id === this.pendingFinalMessage.item.id)) {
+          this.responseItems.push(this.pendingFinalMessage.item);
+        }
+        this.pendingFinalMessage = null;
         const messageItem = decision.content && this.sink
-          ? this.sink.finishText(decision.content)
+          ? this.sink.finishText(decision.content, messageMetadata)
           : null;
         this.lastToolMessage = {
           ...event.data,
@@ -625,11 +731,16 @@ class Exchange {
       if (!this.sink) {
         throw new Error("Copilot produced a final answer without an active Codex request.");
       }
+      if (this.pendingFinalMessage?.item
+        && !this.responseItems.some((item) => item.id === this.pendingFinalMessage.item.id)) {
+        this.responseItems.push(this.pendingFinalMessage.item);
+      }
       this.pendingFinalMessage = {
         content: decision.content,
         eventData: event.data,
-        item: this.sink.finishText(decision.content),
+        item: this.sink.finishText(decision.content, messageMetadata),
       };
+      this.currentMessageMetadata = {};
       return;
     }
 
@@ -691,6 +802,15 @@ class Exchange {
       this.blankGuard.clearPending();
       this.streamedContent = "";
       return;
+    }
+
+    if (this.streamedReasoning) {
+      const reasoningItem = this.sink.finishReasoning(this.streamedReasoning);
+      if (reasoningItem
+        && !this.responseItems.some((candidate) => candidate.id === reasoningItem.id)) {
+        this.responseItems.push(reasoningItem);
+      }
+      this.streamedReasoning = "";
     }
 
     if (this.pendingFinalMessage) {
@@ -952,44 +1072,124 @@ quotaRefreshTimer = setInterval(() => void refreshCopilotQuota({ force: true }),
 quotaRefreshTimer.unref?.();
 
 function resolveModel(requestedModel) {
-  if (typeof requestedModel === "string" && availableModelIds.has(requestedModel)
-    && requestedModel.startsWith("gpt-")) {
-    return requestedModel;
+  if (typeof requestedModel === "string" && requestedModel) {
+    if (availableModelIds.has(requestedModel) && requestedModel.startsWith("gpt-")) {
+      return requestedModel;
+    }
+    throw new RequestCompatibilityError(
+      "model",
+      `Model ${JSON.stringify(requestedModel)} is not exposed by the authenticated GitHub Copilot account.`,
+    );
   }
 
   return defaultModel;
 }
 
-async function startExchange(body, sink) {
+function selectSessionTools(declarations, toolChoice) {
+  if (toolChoice === "none") return [];
+  if (toolChoice?.mode === "specific") {
+    const matches = declarations.metadata.filter((metadata) =>
+      metadata.kind === toolChoice.type
+      && metadata.name === toolChoice.name
+      && (toolChoice.namespace == null || metadata.namespace === toolChoice.namespace));
+    if (matches.length !== 1) {
+      const detail = matches.length === 0
+        ? "the named tool is not present in this request"
+        : "the name is ambiguous; include its namespace";
+      throw new RequestCompatibilityError(
+        "tool_choice",
+        `The requested tool ${JSON.stringify(toolChoice.name)} cannot be selected because ${detail}.`,
+      );
+    }
+    const selected = declarations.sdkTools.find((tool) =>
+      tool.name === matches[0].internalName);
+    return selected ? [{ ...selected, defer: "never" }] : [];
+  }
+  if (toolChoice === "required" && declarations.sdkTools.length === 0) {
+    throw new RequestCompatibilityError(
+      "tool_choice",
+      "tool_choice is required, but the request does not declare an outer tool.",
+    );
+  }
+  return declarations.sdkTools;
+}
+
+function resolveRelayRequest(body) {
+  const requestCompatibility = resolveRequestCompatibility(body);
   const declarations = extractToolDeclarations(body);
-  const toolDefinitionChars = JSON.stringify(declarations.sdkTools).length;
-  const reasoningEffort = normalizeReasoningEffort(body?.reasoning?.effort);
+  const sessionTools = selectSessionTools(declarations, requestCompatibility.toolChoice);
   const model = resolveModel(body?.model);
   const modelCompatibility = resolveModelCompatibility(modelsById.get(model));
+  if (requestCompatibility.maxOutputTokens
+    && modelCompatibility.maxOutputTokens
+    && requestCompatibility.maxOutputTokens > modelCompatibility.maxOutputTokens) {
+    throw new RequestCompatibilityError(
+      "max_output_tokens",
+      `Requested ${requestCompatibility.maxOutputTokens} output tokens, but ${model} advertises a maximum of ${modelCompatibility.maxOutputTokens}.`,
+    );
+  }
+  return {
+    ...requestCompatibility,
+    declarations,
+    model,
+    modelCompatibility,
+    sessionTools,
+  };
+}
+
+async function startExchange(body, sink, requestCompatibility) {
+  const declarations = requestCompatibility.declarations;
+  const sessionTools = requestCompatibility.sessionTools;
+  const serializedToolDefinitions = JSON.stringify(sessionTools);
+  const toolDefinitionChars = serializedToolDefinitions.length;
+  const reasoningEffort = requestCompatibility.reasoningEffort;
+  const model = requestCompatibility.model;
+  const modelCompatibility = requestCompatibility.modelCompatibility;
   const sessionInput = buildSessionInput(body, fallbackWorkingDirectory, {
     maxSerializedTextChars: maxSerializedContextChars,
+    maxSerializedTextTokens: modelCompatibility.maxPromptTokens,
+    countTokens: countModelTokens,
+    serializedToolDefinitions,
     toolDefinitionChars,
+    useHistoryCompaction: requestCompatibility.useHistoryCompaction,
+    reasoningContext: requestCompatibility.reasoningContext,
+    systemInstructions: requestCompatibility.systemInstructions,
     maxImageAttachments: modelCompatibility.maxImageAttachments,
     maxAttachmentBase64Chars: modelCompatibility.maxAttachmentBase64Chars,
     maxSingleAttachmentBase64Chars:
       modelCompatibility.maxSingleAttachmentBase64Chars,
   });
+  if (requestCompatibility.toolChoice === "none") sessionInput.requiresAction = false;
+  if (requestCompatibility.toolChoice === "required"
+    || requestCompatibility.toolChoice?.mode === "specific") {
+    sessionInput.requiresAction = true;
+  }
   Object.assign(
     sessionInput.contextStats,
     assertSerializedContextWithinLimit(
       sessionInput,
-      declarations.sdkTools,
-      maxSerializedContextChars,
+      sessionTools,
+      {
+        maxSerializedTextChars: maxSerializedContextChars,
+        maxSerializedTextTokens: modelCompatibility.maxPromptTokens,
+        countTokens: countModelTokens,
+      },
     ),
   );
   sink.setModel(model);
+
+  const hasDeferredTools = sessionTools.some((tool) => tool.defer === "auto");
+  const modelCapabilities = requestCompatibility.maxOutputTokens
+    ? { limits: { max_output_tokens: requestCompatibility.maxOutputTokens } }
+    : undefined;
 
   const session = await client.createSession({
     clientName: "codex-copilot-responses-bridge",
     model,
     contextTier: modelCompatibility.contextTier,
     reasoningEffort,
-    reasoningSummary: "none",
+    reasoningSummary: requestCompatibility.reasoningSummary,
+    modelCapabilities,
     streaming: true,
     includeSubAgentStreamingEvents: false,
     workingDirectory: sessionInput.workingDirectory,
@@ -1013,9 +1213,14 @@ async function startExchange(body, sink) {
       backgroundCompactionThreshold: 0.8,
       bufferExhaustionThreshold: 0.95,
     },
-    tools: declarations.sdkTools,
-    availableTools: declarations.sdkTools.length ? ["custom:*"] : [],
-    excludedTools: ["builtin:*", "mcp:*"],
+    tools: sessionTools,
+    toolSearch: hasDeferredTools ? { enabled: true, deferThreshold: 1 } : { enabled: false },
+    availableTools: sessionTools.length
+      ? (hasDeferredTools
+          ? ["custom:*", "builtin:tool_search_tool"]
+          : ["custom:*"])
+      : [],
+    excludedTools: hasDeferredTools ? ["mcp:*"] : ["builtin:*", "mcp:*"],
     systemMessage: {
       mode: "replace",
       content: sessionInput.systemContent,
@@ -1029,7 +1234,7 @@ async function startExchange(body, sink) {
     (value) => exchanges.delete(value),
     {
       requiresAction: sessionInput.requiresAction,
-      toolCount: declarations.sdkTools.length,
+      toolCount: sessionTools.length,
     },
   );
   exchanges.add(exchange);
@@ -1038,6 +1243,13 @@ async function startExchange(body, sink) {
     phase: "initial",
     model,
     reasoningEffort,
+    reasoningSummary: requestCompatibility.reasoningSummary,
+    requestCompatibility: {
+      parallelToolCalls: requestCompatibility.parallelToolCalls,
+      textVerbosity: requestCompatibility.textVerbosity,
+      toolChoice: requestCompatibility.toolChoice,
+      truncation: requestCompatibility.truncation,
+    },
     workingDirectory: sessionInput.workingDirectory,
     prompt: sessionInput.prompt,
     systemContent: sessionInput.systemContent,
@@ -1048,7 +1260,8 @@ async function startExchange(body, sink) {
     },
     contextStats: sessionInput.contextStats,
     compatibility: modelCompatibility,
-    toolCount: declarations.sdkTools.length,
+    toolCount: sessionTools.length,
+    deferredToolCount: sessionTools.filter((tool) => tool.defer === "auto").length,
   });
   if (sessionInput.contextStats.historyCompacted
     || sessionInput.contextStats.imageAttachments > 0
@@ -1063,7 +1276,8 @@ async function startExchange(body, sink) {
     responseId: sink.responseId,
     model,
     reasoningEffort,
-    toolCount: declarations.sdkTools.length,
+    reasoningSummary: requestCompatibility.reasoningSummary,
+    toolCount: sessionTools.length,
     workingDirectory: sessionInput.workingDirectory,
   });
 
@@ -1129,6 +1343,7 @@ const server = http.createServer(async (request, response) => {
       compatibility: {
         contextTier: defaultModelCompatibility.contextTier,
         maxPromptTokens: defaultModelCompatibility.maxPromptTokens,
+        maxOutputTokens: defaultModelCompatibility.maxOutputTokens,
         maxContextWindowTokens: defaultModelCompatibility.maxContextWindowTokens,
         maxPromptImages: defaultModelCompatibility.maxImageAttachments,
         maxPromptImageBase64Chars:
@@ -1136,8 +1351,13 @@ const server = http.createServer(async (request, response) => {
         outerCodexInstructions: "forwarded",
         outerCodexTools: "declaration-only; execution remains in Codex",
         outerCodexMemory: "forwarded through request instructions",
+        assistantMessagePhase: "preserved",
+        readableReasoningSummaries: "forwarded when emitted by Copilot",
+        streamedToolArguments: true,
+        deferredOuterTools: "supported through Copilot tool search",
+        unsupportedRequestSemantics: "rejected before streaming with HTTP 400",
         copilotNativeMemory: false,
-        copilotBuiltInTools: false,
+        copilotBuiltInTools: "disabled except tool_search_tool for deferred outer declarations",
       },
       reliability: {
         blankCompletionRetriesPerTurn: maxBlankCompletionRetries,
@@ -1153,6 +1373,12 @@ const server = http.createServer(async (request, response) => {
         sdkAutomaticContextCompaction: true,
         contextGuard: {
           ...bridgeContextDefaults,
+          budgetMode: defaultModelCompatibility.maxPromptTokens
+            ? "model_tokens"
+            : "fallback_characters",
+          tokenizer: tokenizerCompatibility,
+          maxPromptTokens: defaultModelCompatibility.maxPromptTokens,
+          legacyFallbackMaxSerializedTextChars: maxSerializedContextChars,
           imageAttachments: defaultModelCompatibility.maxImageAttachments,
           attachmentBase64Chars:
             defaultModelCompatibility.maxAttachmentBase64Chars,
@@ -1268,6 +1494,20 @@ const server = http.createServer(async (request, response) => {
   }
 
   const body = parsedBody.body;
+  let requestCompatibility;
+  try {
+    requestCompatibility = resolveRelayRequest(body);
+  } catch (error) {
+    const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
+    const code = typeof error?.code === "string" ? error.code : "invalid_request_error";
+    log("bridge.request_rejected", {
+      statusCode,
+      code,
+      param: error?.param ?? null,
+      receivedBytes: parsedBody.bytes,
+    });
+    return sendJson(response, statusCode, errorPayload(error, code));
+  }
   const record = recorder.start({
     requestPath: url.pathname,
     body,
@@ -1281,7 +1521,7 @@ const server = http.createServer(async (request, response) => {
     if (toolOutputs.length) {
       await continueExchange(body, sink, toolOutputs);
     } else {
-      await startExchange(body, sink);
+      await startExchange(body, sink, requestCompatibility);
     }
   } catch (error) {
     sink.fail(error);
