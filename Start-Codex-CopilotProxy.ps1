@@ -4,7 +4,9 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-5.6-luna'
+    [string]$Model = 'gpt-5.6-luna',
+
+    [switch]$DeferUpdateWhenBusy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,7 +70,14 @@ function Stop-OutdatedManagedProxy {
             throw 'The existing relay does not report active exchanges. Refusing an unsafe update restart.'
         }
         if ([int]$current.activeExchanges -gt 0) {
-            throw "Relay update $reportedVersion -> $ExpectedVersion is ready, but $($current.activeExchanges) exchange(s) are still active. Let those Codex tasks reach a checkpoint, then run Start or Repair again."
+            $message = "Relay update $reportedVersion -> $ExpectedVersion is ready, but $($current.activeExchanges) exchange(s) are still active."
+            if ($DeferUpdateWhenBusy) {
+                return [pscustomobject]@{
+                    Stopped = $false
+                    Message = "Update deferred: $message The healthy current relay will stay available and the watchdog will promote the update after those exchanges finish."
+                }
+            }
+            throw "$message Let those Codex tasks reach a checkpoint, then run Start or Repair again."
         }
         if ($sample -lt 2) { Start-Sleep -Milliseconds 500 }
     }
@@ -94,7 +103,10 @@ function Stop-OutdatedManagedProxy {
     if (Test-LocalPortInUse -LocalPort $Port) {
         throw "The outdated relay stopped, but port $Port did not become available."
     }
-    Write-Output "Stopped idle relay version $reportedVersion so version $ExpectedVersion can start."
+    return [pscustomobject]@{
+        Stopped = $true
+        Message = "Stopped idle relay version $reportedVersion so version $ExpectedVersion can start."
+    }
 }
 
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
@@ -116,7 +128,11 @@ if ($existingHealth -and $existingHealth.ok -and $existingHealth.model -eq $Mode
         Write-Output "Codex Copilot proxy version $expectedVersion is already healthy on http://127.0.0.1:$Port using $Model."
         exit 0
     }
-    Stop-OutdatedManagedProxy -Health $existingHealth -ExpectedVersion $expectedVersion
+    $updateResult = Stop-OutdatedManagedProxy -Health $existingHealth -ExpectedVersion $expectedVersion
+    Write-Output $updateResult.Message
+    if (-not $updateResult.Stopped) {
+        exit 0
+    }
 }
 
 if (Test-LocalPortInUse -LocalPort $Port) {

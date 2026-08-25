@@ -91,6 +91,19 @@ try {
     if ($persistentStartText -notmatch 'for \(\$sample = 0; \$sample -lt 3; \$sample\+\+\)') {
         throw 'Persistent startup does not require a stable idle window before an update restart.'
     }
+    if ($persistentStartText -notmatch 'DeferUpdateWhenBusy' -or $persistentStartText -notmatch 'Update deferred') {
+        throw 'Persistent startup cannot keep a healthy older relay available while an update waits for active exchanges.'
+    }
+
+    $enableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Enable-Codex-CopilotProxy.ps1') -Raw
+    if ($enableText -notmatch 'DeferUpdateWhenBusy') {
+        throw 'Enable/repair does not opt into a non-destructive deferred relay update.'
+    }
+
+    $watchText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Watch-Codex-CopilotProxy.ps1') -Raw
+    if ($watchText -notmatch 'package\.json' -or $watchText -notmatch 'activeExchanges' -or $watchText -notmatch 'version') {
+        throw 'The watchdog cannot promote a deferred relay update after exchanges become idle.'
+    }
 
     [IO.File]::WriteAllLines($configPath, $originalLines, [Text.UTF8Encoding]::new($false))
     $state = Set-CodexCopilotConfig -ConfigPath $configPath -Port 4144 -Model 'gpt-5.6-luna'

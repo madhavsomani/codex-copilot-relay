@@ -69,7 +69,10 @@ try {
         $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
     }
 
-    & $startScript -Port $Port -Model $Model
+    # A healthy older relay can still own Codex tool continuations. Keep it
+    # available, finish enablement, and let the watchdog promote the on-disk
+    # update once the retained exchanges reach zero.
+    & $startScript -Port $Port -Model $Model -DeferUpdateWhenBusy
     $proxyStarted = $true
 
     $autoStart = $null

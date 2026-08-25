@@ -13,6 +13,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $bridgeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $startScript = Join-Path $bridgeRoot 'Start-Codex-CopilotProxy.ps1'
+$packagePath = Join-Path $bridgeRoot 'package.json'
 $consoleScript = [IO.Path]::GetFullPath((Join-Path $bridgeRoot 'Show-Codex-CopilotGateway.ps1'))
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $pidPath = Join-Path $runtimeDirectory 'codex-copilot-watchdog.pid'
@@ -24,6 +25,12 @@ $auxiliaryLogPaths = @(
     (Join-Path $runtimeDirectory 'proxy.stderr.log')
 )
 $maxAuxiliaryLogBytes = 32MB
+$expectedVersion = if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
+    [string]((Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json).version)
+}
+else {
+    throw "Bridge package metadata not found: $packagePath"
+}
 $mutex = [Threading.Mutex]::new($false, "Local\CodexCopilotBridgeWatchdog_$Port")
 $ownsMutex = $false
 
@@ -135,6 +142,26 @@ try {
             }
             catch {
                 Write-WatchdogLog "Recovery failed: $($_.Exception.Message)"
+            }
+        }
+        elseif (
+            [string]$health.version -ne $expectedVersion -and
+            ($health.PSObject.Properties.Name -contains 'activeExchanges') -and
+            [int]$health.activeExchanges -eq 0
+        ) {
+            try {
+                $previousVersion = if ([string]::IsNullOrWhiteSpace([string]$health.version)) {
+                    'legacy-unversioned'
+                }
+                else {
+                    [string]$health.version
+                }
+                $startOutput = (& $startScript -Port $Port -Model $Model 2>&1 | Out-String).Trim()
+                Write-WatchdogLog "Deferred update promoted $previousVersion -> $expectedVersion. $startOutput"
+                $health = Get-WatchedHealth
+            }
+            catch {
+                Write-WatchdogLog "Deferred update promotion failed: $($_.Exception.Message)"
             }
         }
         if ($health -and $health.ok -and $health.model -eq $Model -and -not (Test-GatewayConsoleProcess)) {
