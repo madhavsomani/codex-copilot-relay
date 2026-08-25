@@ -384,7 +384,13 @@ exchanges.
 The Node process loads the bridge and dashboard modules at startup. After a
 `git pull`, restart the relay to activate a newer dashboard or server build;
 refreshing the browser alone cannot load code that the old process never read.
-Wait for active work to reach a checkpoint, then run:
+The **Start or Repair Codex Copilot Bridge** Desktop shortcut compares the
+running `/health` version with `package.json`. It refuses to interrupt active
+exchanges and, after three consecutive idle checks, replaces an outdated
+managed process automatically. Run the shortcut once active work reaches a
+checkpoint.
+
+The equivalent manual sequence is:
 
 ```powershell
 .\Stop-Codex-CopilotWatchdog.ps1

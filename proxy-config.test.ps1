@@ -84,6 +84,14 @@ try {
         }
     }
 
+    $persistentStartText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Start-Codex-CopilotProxy.ps1') -Raw
+    if ($persistentStartText -notmatch 'package\.json' -or $persistentStartText -notmatch 'activeExchanges') {
+        throw 'Persistent startup does not detect outdated relay code or guard active exchanges.'
+    }
+    if ($persistentStartText -notmatch 'for \(\$sample = 0; \$sample -lt 3; \$sample\+\+\)') {
+        throw 'Persistent startup does not require a stable idle window before an update restart.'
+    }
+
     [IO.File]::WriteAllLines($configPath, $originalLines, [Text.UTF8Encoding]::new($false))
     $state = Set-CodexCopilotConfig -ConfigPath $configPath -Port 4144 -Model 'gpt-5.6-luna'
     $enabledText = [IO.File]::ReadAllText($configPath)

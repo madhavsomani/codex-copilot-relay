@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $bridgeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverPath = Join-Path $bridgeRoot 'server.mjs'
+$packagePath = Join-Path $bridgeRoot 'package.json'
 $backupScript = Join-Path $bridgeRoot 'Backup-Codex-CopilotTelemetry.ps1'
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $pidPath = Join-Path $runtimeDirectory 'codex-copilot-proxy.pid'
@@ -46,11 +47,76 @@ function Get-ProxyHealth {
     }
 }
 
+function Stop-OutdatedManagedProxy {
+    param(
+        [Parameter(Mandatory)][psobject]$Health,
+        [Parameter(Mandatory)][string]$ExpectedVersion
+    )
+
+    $reportedVersion = if ($Health.PSObject.Properties.Name -contains 'version') {
+        [string]$Health.version
+    }
+    else {
+        'legacy-unversioned'
+    }
+    for ($sample = 0; $sample -lt 3; $sample++) {
+        $current = if ($sample -eq 0) { $Health } else { Get-ProxyHealth }
+        if (-not ($current -and $current.ok -and $current.model -eq $Model)) {
+            throw 'The existing relay changed state during the safe-update check. Run Start or Repair again.'
+        }
+        if (-not ($current.PSObject.Properties.Name -contains 'activeExchanges')) {
+            throw 'The existing relay does not report active exchanges. Refusing an unsafe update restart.'
+        }
+        if ([int]$current.activeExchanges -gt 0) {
+            throw "Relay update $reportedVersion -> $ExpectedVersion is ready, but $($current.activeExchanges) exchange(s) are still active. Let those Codex tasks reach a checkpoint, then run Start or Repair again."
+        }
+        if ($sample -lt 2) { Start-Sleep -Milliseconds 500 }
+    }
+
+    if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
+        throw "The outdated relay is healthy, but its managed PID file is missing: $pidPath"
+    }
+    $pidText = ([string](Get-Content -LiteralPath $pidPath -Raw)).Trim()
+    $proxyPid = 0
+    if (-not [int]::TryParse($pidText, [ref]$proxyPid)) {
+        throw "The outdated relay PID file is invalid: $pidPath"
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$proxyPid" -ErrorAction SilentlyContinue
+    if (-not ($process -and $process.Name -eq 'node.exe' -and ([string]$process.CommandLine) -like "*$serverPath*")) {
+        throw 'The outdated relay PID does not point to this bridge. Refusing to stop another process.'
+    }
+    Stop-Process -Id $proxyPid -Force
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        if (-not (Test-LocalPortInUse -LocalPort $Port)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (Test-LocalPortInUse -LocalPort $Port) {
+        throw "The outdated relay stopped, but port $Port did not become available."
+    }
+    Write-Output "Stopped idle relay version $reportedVersion so version $ExpectedVersion can start."
+}
+
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
+$expectedVersion = if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
+    [string]((Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json).version)
+}
+else {
+    throw "Bridge package metadata not found: $packagePath"
+}
 $existingHealth = Get-ProxyHealth
 if ($existingHealth -and $existingHealth.ok -and $existingHealth.model -eq $Model) {
-    Write-Output "Codex Copilot proxy already healthy on http://127.0.0.1:$Port using $Model."
-    exit 0
+    $existingVersion = if ($existingHealth.PSObject.Properties.Name -contains 'version') {
+        [string]$existingHealth.version
+    }
+    else {
+        'legacy-unversioned'
+    }
+    if ($existingVersion -eq $expectedVersion) {
+        Write-Output "Codex Copilot proxy version $expectedVersion is already healthy on http://127.0.0.1:$Port using $Model."
+        exit 0
+    }
+    Stop-OutdatedManagedProxy -Health $existingHealth -ExpectedVersion $expectedVersion
 }
 
 if (Test-LocalPortInUse -LocalPort $Port) {
