@@ -84,42 +84,39 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     pre { margin: 0; padding: 11px; max-height: 205px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #080e1c; color: #d8e6fb; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .empty { padding: 34px 18px; text-align: center; color: var(--muted); }
     .error { color: var(--bad); }
-    .header-actions { display: flex; align-items: center; gap: 9px; }
+    .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+    .version-badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(84,224,209,.3); border-radius: 99px; padding: 7px 10px; color: var(--muted); background: rgba(84,224,209,.07); font-size: 10px; }
+    .version-badge strong { color: var(--cyan); font: 700 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
     .live-badge { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 99px; padding: 8px 11px; color: var(--muted); background: rgba(10,18,33,.8); font-size: 11px; }
     .live-badge.connected { color: var(--good); border-color: rgba(109,221,154,.42); }
     .live-badge .dot { background: var(--warn); box-shadow: 0 0 12px var(--warn); }
     .live-badge.connected .dot { background: var(--good); box-shadow: 0 0 12px var(--good); }
-    .command-grid { display: grid; grid-template-columns: minmax(250px,.66fr) minmax(620px,1.7fr) minmax(270px,.72fr); grid-template-areas: "insights architecture inspector"; gap: 12px; margin-bottom: 15px; align-items: stretch; }
+    .command-grid { display: grid; grid-template-columns: minmax(250px,.66fr) minmax(620px,1.7fr) minmax(270px,.72fr); grid-template-areas: "insights architecture inspector"; gap: 12px; margin-bottom: 15px; align-items: start; }
     .command-grid > .architecture { grid-area: architecture; }
     .command-grid > .insight-stack { grid-area: insights; }
     .command-grid > .live-inspector { grid-area: inspector; }
-    .architecture { overflow: hidden; position: relative; min-height: 400px; }
+    .architecture { overflow: hidden; position: relative; min-height: 0; }
     .architecture::before { content: ""; position: absolute; width: 260px; height: 260px; right: 8%; top: 17%; border-radius: 50%; background: rgba(84,224,209,.08); filter: blur(70px); pointer-events: none; }
     .architecture-body { padding: 17px; position: relative; }
     .network-viewport { overflow-x: auto; padding: 2px 0 12px; scrollbar-width: thin; }
     .network-stage { min-width: 720px; border: 1px solid rgba(48,73,109,.74); border-radius: 15px; background: radial-gradient(circle at 61% 39%, rgba(84,224,209,.08), transparent 15rem), linear-gradient(180deg, rgba(5,10,19,.94), rgba(8,15,28,.86)); overflow: hidden; }
     .traffic-map { width: 100%; min-width: 720px; height: 292px; display: block; overflow: hidden; }
-    .route-line { fill: none; stroke-width: 2.7; stroke-dasharray: 1 11; stroke-linecap: round; }
-    .route-line.outbound { stroke: #2d94ff; opacity: .78; filter: drop-shadow(0 0 4px rgba(45,148,255,.75)); }
-    .route-line.response { stroke: #58e59b; opacity: .68; filter: drop-shadow(0 0 4px rgba(88,229,155,.62)); }
-    .route-line.secondary.outbound { stroke: #9a75ff; opacity: .46; }
-    .route-line.secondary.response { stroke: #ffd27a; opacity: .42; }
-    .network-node { color: var(--accent); transition: opacity .2s ease; }
-    .network-node .node-shell { fill: #0b1425; stroke: #536984; stroke-width: 1.6; transition: stroke .2s ease, fill .2s ease; }
-    .network-node .node-aura { fill: currentColor; opacity: 0; transition: opacity .2s ease; }
+    .route-line { fill: none; stroke-width: 2; stroke-linecap: round; opacity: .52; }
+    .route-line.main { stroke: url(#main-route-gradient); filter: drop-shadow(0 0 4px rgba(84,224,209,.22)); }
+    .route-line.tool { stroke: url(#tool-route-gradient); opacity: .32; }
+    .network-node { color: var(--accent); }
+    .network-node .node-shell { fill: #0b1425; stroke: #536984; stroke-width: 1.6; }
     .network-node .node-glyph { fill: none; stroke: #b8c6d9; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .network-node.active .node-shell { stroke: currentColor; fill: #101e34; }
-    .network-node.active .node-aura { opacity: .12; }
-    .network-node.response { color: var(--good); }
     .network-node[data-node="model"] { color: var(--violet); }
     .network-node[data-node="tools"] { color: var(--warn); }
     .network-label { fill: var(--text); font-size: 13px; font-weight: 700; text-anchor: middle; }
     .network-meta { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: .035em; }
     .traffic-legend { fill: var(--muted); font-size: 9px; }
     .traffic-counter { fill: rgba(10,20,36,.86); stroke: #344b6a; }
-    .traffic-packet { color: var(--accent); pointer-events: none; }
-    .traffic-packet .halo { fill: currentColor; opacity: .2; }
-    .traffic-packet .core { fill: currentColor; stroke: rgba(255,255,255,.9); stroke-width: .8; }
+    .traffic-packet { color: var(--accent); pointer-events: none; filter: drop-shadow(0 0 7px currentColor); }
+    .traffic-packet .packet-tail { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; opacity: .38; }
+    .traffic-packet .packet-body { fill: #081323; stroke: currentColor; stroke-width: 1.25; }
+    .traffic-packet .packet-label { fill: #f7fbff; font-size: 7px; font-weight: 800; letter-spacing: .07em; text-anchor: middle; dominant-baseline: middle; }
     .flow-legend { fill: var(--muted); font-size: 9px; }
     .flow-footer { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border-top: 1px solid var(--line); padding-top: 14px; }
     .event-copy { min-width: 0; }
@@ -129,7 +126,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .active-strip { margin-top: 12px; display: flex; gap: 7px; overflow-x: auto; min-height: 29px; }
     .call-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); background: #0b1325; font-size: 10px; }
     .call-chip strong { color: var(--text); }
-    .call-color { width: 7px; height: 7px; border-radius: 50%; background: var(--call-color, var(--accent)); box-shadow: 0 0 8px var(--call-color, var(--accent)); }
+    .call-color { width: 3px; height: 12px; border-radius: 2px; background: var(--call-color, var(--accent)); box-shadow: 0 0 7px var(--call-color, var(--accent)); }
     .insight-stack { display: grid; gap: 14px; }
     .insight { min-height: 0; }
     .insight-body { padding: 15px 16px; }
@@ -173,7 +170,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .event-empty { padding: 20px 10px; color: var(--muted); text-align: center; font-size: 10px; }
     @media (max-width: 1370px) { .command-grid { grid-template-columns: minmax(650px,1.5fr) minmax(300px,.7fr); grid-template-areas: "architecture inspector" "insights insights"; } .insight-stack { grid-template-columns: repeat(2,1fr); } }
     @media (max-width: 1250px) { .kpis { grid-template-columns: repeat(3, 1fr); } .charts { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 1050px) { .command-grid { grid-template-columns: 1fr; grid-template-areas: "architecture" "inspector" "insights"; } .live-inspector { min-height: auto; } }
+    @media (max-width: 1150px) { .command-grid { grid-template-columns: 1fr; grid-template-areas: "architecture" "inspector" "insights"; } .live-inspector { min-height: auto; } }
     @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .detail { min-height: auto; } }
     @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; } .section-nav { order: 3; width: 100%; overflow-x: auto; } .kpis, .charts, .insight-stack { grid-template-columns: repeat(2, 1fr); } .chart { min-height: 220px; } .architecture-body { padding: 12px; } }
     @media (max-width: 430px) { .kpis, .charts { grid-template-columns: 1fr; } }
@@ -189,7 +186,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <p class="subtitle">Usage, cost, architecture, and live request playback · local and dependency-free</p>
         <p class="byline">Created by <a href="https://www.linkedin.com/in/madhavsomani" target="_blank" rel="noopener noreferrer" aria-label="Madhav Somani on LinkedIn">Madhav Somani</a><span aria-hidden="true">↗</span></p>
       </div>
-      <div class="header-actions"><nav class="section-nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#relay-architecture">Relay</a><a href="#analytics">Analytics</a><a href="#history">Requests</a></nav><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
+      <div class="header-actions"><nav class="section-nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#relay-architecture">Relay</a><a href="#analytics">Analytics</a><a href="#history">Requests</a></nav><span class="version-badge">Relay <strong id="relay-version">—</strong></span><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
     </div>
   </header>
   <main>
@@ -204,55 +201,51 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </section>
     <section class="command-grid">
       <article class="panel architecture" id="relay-architecture">
-        <div class="panel-head"><div><h2>Live relay architecture</h2><span class="tiny">Every pulse is driven by a real loopback telemetry event</span></div><span class="phase" id="flow-phase">IDLE</span></div>
+        <div class="panel-head"><div><h2>Live request journey</h2><span class="tiny">One capsule represents one real prompt, response, or tool handoff</span></div><span class="phase" id="flow-phase">IDLE</span></div>
         <div class="architecture-body">
           <div class="network-viewport">
             <div class="network-stage">
               <svg class="traffic-map idle" id="traffic-map" viewBox="0 0 840 310" role="img" aria-labelledby="traffic-map-title traffic-map-description">
                 <title id="traffic-map-title">Live concurrent Codex relay traffic</title>
-                <desc id="traffic-map-description">A dotted network map where each colored moving packet represents one real Codex call traveling through the local relay, GitHub Copilot, a GPT model, or an outer Codex tool.</desc>
+                <desc id="traffic-map-description">A continuous request map where each labeled capsule represents one real Codex call traveling through the local relay, GitHub Copilot, a GPT model, or an outer Codex tool.</desc>
                 <defs>
-                  <path id="route-codex-relay" d="M132 148 C178 148 211 148 250 148"></path>
-                  <path id="route-relay-copilot" d="M350 137 C397 125 435 94 470 82"></path>
-                  <path id="route-copilot-model" d="M570 84 C627 89 676 121 717 140"></path>
-                  <path id="route-relay-tools" d="M350 160 C404 177 443 217 470 232"></path>
-                  <path id="route-tools-model" d="M570 232 C631 224 678 187 720 160"></path>
+                  <linearGradient id="main-route-gradient" gradientUnits="userSpaceOnUse" x1="132" y1="148" x2="717" y2="148"><stop offset="0" stop-color="#2d94ff"></stop><stop offset=".52" stop-color="#54e0d1"></stop><stop offset="1" stop-color="#a98cff"></stop></linearGradient>
+                  <linearGradient id="tool-route-gradient" gradientUnits="userSpaceOnUse" x1="132" y1="148" x2="717" y2="156"><stop offset="0" stop-color="#69b7ff"></stop><stop offset=".55" stop-color="#ffd27a"></stop><stop offset="1" stop-color="#a98cff"></stop></linearGradient>
+                  <path id="route-main-journey" d="M132 148 C178 148 211 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
+                  <path id="route-tool-journey" d="M132 148 C205 148 270 148 350 160 C405 178 460 252 570 232 C620 222 650 185 717 157"></path>
                 </defs>
                 <g aria-hidden="true">
-                  <use href="#route-codex-relay" class="route-line outbound" transform="translate(0 -3)"></use><use href="#route-codex-relay" class="route-line response" transform="translate(0 3)"></use>
-                  <use href="#route-relay-copilot" class="route-line outbound" transform="translate(0 -3)"></use><use href="#route-relay-copilot" class="route-line response" transform="translate(0 3)"></use>
-                  <use href="#route-copilot-model" class="route-line outbound" transform="translate(0 -3)"></use><use href="#route-copilot-model" class="route-line response" transform="translate(0 3)"></use>
-                  <use href="#route-relay-tools" class="route-line secondary outbound" transform="translate(0 -3)"></use><use href="#route-relay-tools" class="route-line secondary response" transform="translate(0 3)"></use>
-                  <use href="#route-tools-model" class="route-line secondary outbound" transform="translate(0 -3)"></use><use href="#route-tools-model" class="route-line secondary response" transform="translate(0 3)"></use>
+                  <use href="#route-main-journey" class="route-line main"></use>
+                  <use href="#route-tool-journey" class="route-line tool"></use>
                 </g>
                 <g id="traffic-packets" aria-hidden="true"></g>
                 <g class="network-node" data-node="codex" transform="translate(82 148)">
-                  <circle class="node-aura" r="54"></circle><rect class="node-shell" x="-48" y="-42" width="96" height="84" rx="18"></rect>
+                  <rect class="node-shell" x="-48" y="-42" width="96" height="84" rx="18"></rect>
                   <g class="node-glyph"><rect x="-22" y="-19" width="35" height="30" rx="4"></rect><path d="M-13 19 H22 M22 19 V-11 H14"></path><circle cx="-31" cy="-19" r="3"></circle><circle cx="-31" cy="-7" r="3"></circle><circle cx="-31" cy="5" r="3"></circle></g>
                   <text class="network-label" y="61">Codex App</text><text class="network-meta" y="77">TASKS + CHILD AGENTS</text>
                 </g>
                 <g class="network-node" data-node="relay" transform="translate(300 148)">
-                  <circle class="node-aura" r="56"></circle><rect class="node-shell" x="-50" y="-44" width="100" height="88" rx="18"></rect>
+                  <rect class="node-shell" x="-50" y="-44" width="100" height="88" rx="18"></rect>
                   <g class="node-glyph"><rect x="-21" y="-25" width="42" height="50" rx="5"></rect><path d="M-12 -15 H12 M-12 -6 H12 M-12 3 H12 M-12 12 H12"></path><circle cx="14" cy="-15" r="1.5"></circle><circle cx="14" cy="-6" r="1.5"></circle><circle cx="14" cy="3" r="1.5"></circle><circle cx="14" cy="12" r="1.5"></circle></g>
                   <text class="network-label" y="63">Local Relay</text><text class="network-meta" id="relay-address" y="79">127.0.0.1:4144</text>
                 </g>
                 <g class="network-node" data-node="copilot" transform="translate(520 82)">
-                  <circle class="node-aura" r="52"></circle><rect class="node-shell" x="-48" y="-38" width="96" height="76" rx="18"></rect>
+                  <rect class="node-shell" x="-48" y="-38" width="96" height="76" rx="18"></rect>
                   <g class="node-glyph"><path d="M-24 3 C-24 -14 -10 -24 0 -15 C10 -24 24 -14 24 3 V14 C17 22 8 20 0 14 C-8 20 -17 22 -24 14 Z"></path><path d="M-9 -1 L-2 6 M9 -1 L2 6"></path><circle cx="-11" cy="-4" r="2"></circle><circle cx="11" cy="-4" r="2"></circle></g>
                   <text class="network-label" y="56">GitHub Copilot</text><text class="network-meta" y="72">OFFICIAL SDK</text>
                 </g>
                 <g class="network-node" data-node="model" transform="translate(760 148)">
-                  <circle class="node-aura" r="53"></circle><circle class="node-shell" r="43"></circle>
+                  <circle class="node-shell" r="43"></circle>
                   <g class="node-glyph"><circle r="22"></circle><path d="M-14 -11 C-3 -19 12 -14 15 -3 C18 8 8 19 -4 18 C-16 17 -22 4 -17 -7 M-19 7 C-8 1 3 5 8 15 M-5 -18 C0 -7 9 -3 20 -5"></path></g>
                   <text class="network-label" y="62">GPT Model</text><text class="network-meta" y="78">REMOTE INFERENCE</text>
                 </g>
                 <g class="network-node" data-node="tools" transform="translate(520 232)">
-                  <circle class="node-aura" r="48"></circle><rect class="node-shell" x="-48" y="-34" width="96" height="68" rx="17"></rect>
+                  <rect class="node-shell" x="-48" y="-34" width="96" height="68" rx="17"></rect>
                   <g class="node-glyph"><path d="M-21 -8 H-6 L0 -17 L7 -8 H21 V14 H-21 Z"></path><path d="M-12 2 H12 M-12 10 H5"></path></g>
                   <text class="network-label" y="53">Codex tools</text><text class="network-meta" y="69">OUTER APP EXECUTES</text>
                 </g>
-                <g transform="translate(17 18)"><rect class="traffic-counter" width="165" height="25" rx="12.5"></rect><circle cx="14" cy="12.5" r="3.5" fill="#69b7ff"></circle><text class="traffic-legend" id="traffic-count" x="24" y="16">idle · each color is one call</text></g>
-                <g transform="translate(610 21)" aria-hidden="true"><circle cx="0" cy="0" r="3" fill="#2d94ff"></circle><text class="flow-legend" x="8" y="3">request outbound</text><circle cx="103" cy="0" r="3" fill="#58e59b"></circle><text class="flow-legend" x="111" y="3">response streaming</text></g>
+                <g transform="translate(17 18)"><rect class="traffic-counter" width="165" height="25" rx="12.5"></rect><rect x="10" y="8" width="8" height="9" rx="4.5" fill="#69b7ff"></rect><text class="traffic-legend" id="traffic-count" x="24" y="16">idle · labeled request journeys</text></g>
+                <g transform="translate(602 14)" aria-hidden="true"><rect x="0" y="0" width="46" height="14" rx="7" fill="#0b1d31" stroke="#2d94ff"></rect><text class="flow-legend" x="23" y="10" text-anchor="middle">PROMPT</text><rect x="59" y="0" width="46" height="14" rx="7" fill="#0b1d31" stroke="#58e59b"></rect><text class="flow-legend" x="82" y="10" text-anchor="middle">STREAM</text></g>
               </svg>
             </div>
           </div>
@@ -318,7 +311,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     const MAX_TRAFFIC_PACKETS = 96;
     const MAX_LIVE_EVENTS = 16;
     const TRAFFIC_COLORS = ["#69b7ff", "#54e0d1", "#a98cff", "#ffd27a", "#ff8398", "#6ddd9a", "#ff9f6e", "#8fd3ff"];
-    const TRAFFIC_LANES = [-8, -4, 0, 4, 8];
+    const TRAFFIC_LANES = [-28, -14, 0, 14, 28];
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const $ = (id) => document.getElementById(id);
     const fmt = (value) => value === null || value === undefined ? "—" : String(value);
@@ -476,7 +469,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     function ensureLiveCall(id, model, phase) {
       const prior = state.liveCalls.get(id);
-      const visual = prior || callVisual(id);
+      const baseVisual = prior || callVisual(id);
+      const usedLanes = new Set([...state.liveCalls.values()].filter(call => call.id !== id).map(call => call.lane));
+      const preferredLaneIndex = Math.max(0, TRAFFIC_LANES.indexOf(baseVisual.lane));
+      const orderedLanes = TRAFFIC_LANES.map((_, offset) => TRAFFIC_LANES[(preferredLaneIndex + offset) % TRAFFIC_LANES.length]);
+      const visual = prior || { ...baseVisual, lane: orderedLanes.find(lane => !usedLanes.has(lane)) ?? baseVisual.lane };
       const call = { id, model, phase, color: visual.color, lane: visual.lane };
       state.liveCalls.delete(id);
       state.liveCalls.set(id, call);
@@ -486,7 +483,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function renderActiveCalls() {
       const root = $("active-calls"); root.replaceChildren();
       const calls = [...state.liveCalls.values()].reverse();
-      setText("traffic-count", calls.length ? number(calls.length) + (calls.length === 1 ? " call visible" : " calls visible") : "idle · each color is one call");
+      setText("traffic-count", calls.length ? number(calls.length) + (calls.length === 1 ? " journey visible" : " journeys visible") : "idle · labeled request journeys");
       if (!calls.length) { const empty = document.createElement("span"); empty.className = "call-chip"; empty.textContent = "No calls in flight"; root.appendChild(empty); return; }
       for (const call of calls) {
         const chip = document.createElement("span"); chip.className = "call-chip";
@@ -529,49 +526,42 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("inspector-tools", number(record.toolCalls || 0));
       $("inspector-status").className = status === "failed" ? "live-bad" : status === "completed" ? "live-good" : "";
     }
-    function launchTrafficPacket(pathId, call, options = {}) {
+    function launchJourneyPacket(pathId, call, options = {}) {
       if (reducedMotion.matches) return;
       const layer = $("traffic-packets");
       if (!layer) return;
       while (layer.childElementCount >= MAX_TRAFFIC_PACKETS) layer.firstElementChild.remove();
-      const reverse = Boolean(options.reverse), delay = Number(options.delay) || 0;
-      const packet = svgElement("g", { class: "traffic-packet", "data-call": String(call.id).slice(-32), transform: "translate(0 " + call.lane + ")" });
+      const reverse = Boolean(options.reverse);
+      const seconds = Math.max(.8, Number(options.seconds) || 2.25);
+      const labelText = String(options.label || "PROMPT").slice(0, 8).toUpperCase();
+      const packet = svgElement("g", { class: "traffic-packet", "data-call": String(call.id).slice(-32), "data-kind": labelText.toLowerCase() });
       packet.style.color = options.color || call.color;
-      packet.appendChild(svgElement("circle", { class: "halo", r: 9 }));
-      packet.appendChild(svgElement("circle", { class: "core", r: 3.8 }));
-      const motion = svgElement("animateMotion", { dur: ".95s", begin: "indefinite", fill: "freeze", rotate: "auto", calcMode: "spline", keyTimes: "0;1", keySplines: ".2 .8 .2 1", keyPoints: reverse ? "1;0" : "0;1" });
+      const capsule = svgElement("g", { transform: "translate(0 " + call.lane + ")" });
+      capsule.appendChild(svgElement("path", { class: "packet-tail", d: "M-33 0 H-25 M25 0 H33" }));
+      capsule.appendChild(svgElement("rect", { class: "packet-body", x: -25, y: -7, width: 50, height: 14, rx: 7 }));
+      const label = svgElement("text", { class: "packet-label", x: 0, y: .5 });
+      label.textContent = labelText;
+      capsule.appendChild(label);
+      packet.appendChild(capsule);
+      const motion = svgElement("animateMotion", { dur: seconds + "s", begin: "indefinite", fill: "freeze", rotate: "auto", calcMode: "spline", keyTimes: "0;1", keySplines: ".2 .75 .2 1", keyPoints: reverse ? "1;0" : "0;1" });
       motion.appendChild(svgElement("mpath", { href: "#" + pathId }));
       packet.appendChild(motion); layer.appendChild(packet);
-      setTimeout(() => { if (packet.isConnected && typeof motion.beginElement === "function") motion.beginElement(); }, delay);
-      setTimeout(() => packet.remove(), delay + 1125);
-    }
-    function launchTrafficSequence(call, steps, color) {
-      for (const step of steps) launchTrafficPacket(step.path, call, { reverse: step.reverse, delay: step.delay, color });
+      if (typeof motion.beginElement === "function") motion.beginElement();
+      setTimeout(() => packet.remove(), seconds * 1000 + 180);
     }
     function launchTrafficForEvent(event, call) {
-      if (event.type === "relay.received") launchTrafficSequence(call, [{ path: "route-codex-relay", delay: 0 }]);
-      if (event.type === "relay.forwarded") launchTrafficSequence(call, [{ path: "route-relay-copilot", delay: 0 }, { path: "route-copilot-model", delay: 170 }]);
-      if (event.type === "relay.usage") launchTrafficSequence(call, [{ path: "route-copilot-model", reverse: true, delay: 0 }]);
-      if (event.type === "relay.tool_requested") launchTrafficSequence(call, [{ path: "route-tools-model", reverse: true, delay: 0 }, { path: "route-relay-tools", reverse: true, delay: 150 }, { path: "route-codex-relay", reverse: true, delay: 300 }]);
-      if (event.type === "relay.tool_resolved") launchTrafficSequence(call, [{ path: "route-codex-relay", delay: 0 }, { path: "route-relay-tools", delay: 150 }, { path: "route-tools-model", delay: 300 }]);
-      if (event.type === "relay.completed") launchTrafficSequence(call, [{ path: "route-copilot-model", reverse: true, delay: 0 }, { path: "route-relay-copilot", reverse: true, delay: 160 }, { path: "route-codex-relay", reverse: true, delay: 320 }]);
-      if (event.type === "relay.failed") launchTrafficSequence(call, [{ path: "route-relay-copilot", reverse: true, delay: 0 }, { path: "route-codex-relay", reverse: true, delay: 160 }], "#ff8398");
+      if (event.type === "relay.forwarded") launchJourneyPacket("route-main-journey", call, { label: "PROMPT" });
+      if (event.type === "relay.tool_requested") launchJourneyPacket("route-tool-journey", call, { label: "TOOL", reverse: true });
+      if (event.type === "relay.tool_resolved") launchJourneyPacket("route-tool-journey", call, { label: "RESULT" });
+      if (event.type === "relay.completed") launchJourneyPacket("route-main-journey", call, { label: "STREAM", reverse: true });
+      if (event.type === "relay.failed") launchJourneyPacket("route-main-journey", call, { label: "ERROR", reverse: true, color: "#ff8398" });
     }
     function setFlowPhase(phase, title, detail) {
       const stage = $("traffic-map");
       stage.setAttribute("class", "traffic-map " + phase);
-      for (const node of stage.querySelectorAll(".network-node")) node.classList.remove("active", "response");
-      const activate = (name, response) => { const node = stage.querySelector('[data-node="' + name + '"]'); if (node) { node.classList.add("active"); if (response) node.classList.add("response"); } };
-      if (phase === "request") { activate("codex"); activate("relay"); }
-      if (phase === "forward") { activate("relay"); activate("copilot"); activate("model"); }
-      if (phase === "process") { activate("copilot"); activate("model"); }
-      if (phase === "tool-return") { activate("model"); activate("tools"); activate("relay"); activate("codex", true); }
-      if (phase === "tool-forward") { activate("codex"); activate("relay"); activate("tools"); activate("model"); }
-      if (phase === "response") { activate("model"); activate("copilot"); activate("relay"); activate("codex", true); }
-      if (phase === "failed") { activate("relay"); activate("codex", true); }
       setText("flow-phase", phase.toUpperCase().replace("-", " ")); setText("live-event", title); setText("live-event-detail", detail);
       clearTimeout(state.flowTimer);
-      state.flowTimer = setTimeout(() => { stage.setAttribute("class", "traffic-map idle"); for (const node of stage.querySelectorAll(".network-node")) node.classList.remove("active", "response"); setText("flow-phase", "IDLE"); }, 2200);
+      state.flowTimer = setTimeout(() => { stage.setAttribute("class", "traffic-map idle"); setText("flow-phase", "IDLE"); }, 2600);
     }
     function handleLiveEvent(event) {
       const record = event.record || {}, id = String(record.id || "unknown"), model = record.selectedModel || record.requestedModel || event.model || "model";
@@ -608,6 +598,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       chartFrame($("daily-chart"), data.analytics?.daily || [], ["completed", "failed"], ["#6ddd9a", "#ff8398"], "bars");
       renderModels(data.analytics?.models || []);
       renderPricing(data); renderQuota(data); renderKpis(data); setText("active-exchanges", number(data.activeExchanges || 0) + " exchanges");
+      setText("relay-version", data.relayVersion ? "v" + String(data.relayVersion).replace(/^v/i, "") : "unknown");
       setText("updated", "updated " + new Date().toLocaleTimeString()); $("updated").className = "pill";
     }
     function renderRows() {

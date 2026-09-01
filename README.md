@@ -497,11 +497,12 @@ The dashboard is a local command center as well as a history viewer:
   use the existing hourly, daily, and retained-call telemetry. There are no
   fabricated seats, users, accounts, or subscription charges.
 - `/dashboard/events` is a loopback-only Server-Sent Events feed. Real request
-  phases animate Codex → Local Relay → GitHub Copilot → GPT Model, then the
-  return stream animates back to Codex. Each simultaneous call receives a stable
-  color/lane and its own SVG packet; tool calls branch through outer Codex. The
-  dependency-free renderer uses no per-frame JavaScript, honors reduced-motion,
-  and bounds itself to 64 visible calls and 96 transient packets.
+  phases animate one labeled `PROMPT` capsule across the continuous Codex →
+  Local Relay → GitHub Copilot → GPT Model route, then one `STREAM` capsule
+  returns to Codex. Tool handoffs use a compact branch. Simultaneous calls keep
+  stable colors and lanes. The dependency-free renderer uses no per-frame
+  JavaScript, honors reduced-motion, and bounds itself to 64 visible calls and
+  96 transient capsules.
 - A live request inspector shows the latest real call ID, model, phase, measured
   usage, latency, API-equivalent estimate, route, and outer-tool count. Its
   newest-first event log is capped at 16 rows in memory, even when many calls
