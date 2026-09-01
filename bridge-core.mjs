@@ -215,6 +215,16 @@ function stringifyContentPiece(piece, attachments, contextStats, attachmentConte
     return String(piece.text ?? "");
   }
   if (piece.type === "encrypted_content") {
+    // Codex uses this field name for plaintext parent/child collaboration payloads.
+    // The outer agent_message item is the trust boundary; provider reasoning and
+    // ordinary message ciphertext must continue to use the opaque fallback below.
+    if (
+      attachmentContext.localAgentMessage
+      && typeof piece.encrypted_content === "string"
+      && piece.encrypted_content.length > 0
+    ) {
+      return piece.encrypted_content;
+    }
     return "[Provider-encrypted content is unavailable to the Copilot relay.]";
   }
   if (piece.type === "refusal") return String(piece.refusal ?? "");
@@ -337,6 +347,7 @@ function historyEntry(item, attachments, contextStats, sourceIndex = -1) {
       content: stringifyMessageContent(item.content, attachments, contextStats, {
         role: "user",
         sourceIndex,
+        localAgentMessage: true,
       }),
     };
   }

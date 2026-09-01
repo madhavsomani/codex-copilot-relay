@@ -227,22 +227,62 @@ test("marks continuation requests as requiring real tool progress", () => {
   assert.match(sessionInput.prompt, /request the next necessary outer tool in this same turn/i);
 });
 
-test("treats the latest child-agent message as the active request", () => {
+test("preserves Codex collaboration payloads in local agent messages", () => {
+  const cases = [
+    ["NEW_TASK", "Reply exactly CHILD_NEW_TASK_OK."],
+    ["MESSAGE", "Reply exactly CHILD_MESSAGE_OK."],
+    ["FINAL_ANSWER", `FINAL_ANSWER_${"x".repeat(8_192)}`],
+  ];
+
+  for (const [messageType, payload] of cases) {
+    const body = {
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Spawn two child agents." }],
+        },
+        {
+          type: "agent_message",
+          author: messageType === "FINAL_ANSWER" ? "/root/child_one" : "/root",
+          recipient: messageType === "FINAL_ANSWER" ? "/root" : "/root/child_one",
+          content: [
+            { type: "input_text", text: `Message Type: ${messageType}\nPayload:\n` },
+            { type: "encrypted_content", encrypted_content: payload },
+          ],
+        },
+      ],
+    };
+
+    const sessionInput = buildSessionInput(body, process.cwd());
+    assert.equal(
+      sessionInput.latestUserText,
+      `Message Type: ${messageType}\nPayload:\n\n${payload}`,
+    );
+    assert.match(sessionInput.prompt, /"source":"agent_message"/);
+    assert.ok(sessionInput.prompt.includes(payload));
+    assert.doesNotMatch(
+      sessionInput.prompt,
+      /Provider-encrypted content is unavailable to the Copilot relay/,
+    );
+  }
+});
+
+test("keeps provider-encrypted message content opaque outside local agent messages", () => {
+  const providerCiphertext = "provider-ciphertext-must-not-be-forwarded";
   const body = {
     input: [
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "Spawn two child agents." }],
+        content: [
+          { type: "input_text", text: "Visible request." },
+          { type: "encrypted_content", encrypted_content: providerCiphertext },
+        ],
       },
       {
-        type: "agent_message",
-        author: "/root",
-        recipient: "/root/child_one",
-        content: [
-          { type: "input_text", text: "Message Type: NEW_TASK" },
-          { type: "input_text", text: "Reply exactly CHILD_ONE_OK." },
-        ],
+        type: "reasoning",
+        encrypted_content: providerCiphertext,
       },
     ],
   };
@@ -250,10 +290,9 @@ test("treats the latest child-agent message as the active request", () => {
   const sessionInput = buildSessionInput(body, process.cwd());
   assert.equal(
     sessionInput.latestUserText,
-    "Message Type: NEW_TASK\nReply exactly CHILD_ONE_OK.",
+    "Visible request.\n[Provider-encrypted content is unavailable to the Copilot relay.]",
   );
-  assert.match(sessionInput.prompt, /"source":"agent_message"/);
-  assert.match(sessionInput.prompt, /Latest outer user request[\s\S]*CHILD_ONE_OK/);
+  assert.ok(!sessionInput.prompt.includes(providerCiphertext));
 });
 
 test("moves historical tool images out of the text prompt", () => {

@@ -616,6 +616,7 @@ npm run probe:deferred-tool -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-so
 npm run probe:reasoning-phase -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
 npm run probe:request-semantics -- --url http://127.0.0.1:4144/v1
 npm run probe:tool-choice -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-luna
+npm run probe:agent-message -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-luna
 npm run probe:premature-recovery -- --url http://127.0.0.1:4144/v1
 npm run probe:delayed-tool -- --url http://127.0.0.1:4144/v1 --delay-ms 31000
 npm run probe:failure-stream -- --url http://127.0.0.1:4144/v1
@@ -629,7 +630,8 @@ must remain connected through parsed heartbeat events. Together, the probes
 verify ordered streaming, abandoned-client cleanup, parallel requests, a
 multi-turn tool chain, root/developer/memory/tool-result fidelity, progress-only
 recovery, deferred-tool discovery, phased output, explicit compatibility errors,
-delayed outer-tool continuation, and a well-formed terminal failure.
+local parent/child-agent message fidelity, delayed outer-tool continuation, and
+a well-formed terminal failure.
 
 The default 13-hour outer-tool result window lets a single Codex exchange wait
 through a 12-hour local render, browser operation, or child-agent task. It does
@@ -707,6 +709,7 @@ marked for deferred loading.
 | Text input/output, streaming, usage, phases | Supported |
 | Function/custom/namespace tools and continuations | Supported; execution and approval stay in Codex |
 | Parallel independent Codex agents | Supported with one Copilot SDK session per initial request |
+| Local Codex parent/child-agent messages | Supported in both directions; Codex collaboration payloads are preserved while provider-encrypted reasoning stays opaque |
 | Reasoning effort | Forwarded to Copilot |
 | Readable reasoning summary | Forwarded when Copilot emits it; the provider may return reasoning usage without summary text |
 | Long context | Token-budgeted against the selected Copilot model, with salience-aware local compaction |

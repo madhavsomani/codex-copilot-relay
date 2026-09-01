@@ -1,6 +1,6 @@
 {
   "name": "codex-copilot-relay",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "private": true,
   "description": "Unofficial localhost OpenAI Responses compatibility relay from Codex custom providers to the official GitHub Copilot SDK.",
   "main": "server.mjs",
@@ -18,6 +18,7 @@
     "probe:deferred-tool": "node probe-deferred-tool.mjs",
     "probe:request-semantics": "node probe-request-semantics.mjs",
     "probe:tool-choice": "node probe-tool-choice.mjs",
+    "probe:agent-message": "node probe-agent-message.mjs",
     "probe:codex-heartbeat": "node probe-codex-heartbeat.mjs",
     "probe:client-disconnect": "node probe-client-disconnect.mjs",
     "start": "node server.mjs",
