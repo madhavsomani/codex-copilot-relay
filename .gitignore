@@ -12,3 +12,5 @@ codex-home/
 Thumbs.db
 .vscode/
 .idea/
+.playwright-cli/
+output/

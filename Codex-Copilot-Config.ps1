@@ -605,12 +605,29 @@ function Start-CodexCopilotAutoStart {
         [Parameter(Mandatory)][int]$Port,
         [Parameter(Mandatory)]
         [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-        [string]$Model
+        [string]$Model,
+        [switch]$RestartRunning
     )
 
     $taskName = Get-CodexCopilotScheduledTaskName
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($task -and (Test-CodexCopilotTaskTargetsScript -Task $task -ScriptPath $WatchScript)) {
+        if ($RestartRunning -and $task.State -eq 'Running') {
+            Stop-ScheduledTask -TaskName $taskName
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+                Start-Sleep -Milliseconds 100
+                $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if (-not $task -or $task.State -ne 'Running') {
+                    break
+                }
+            }
+            if (-not $task) {
+                throw "Scheduled task '$taskName' disappeared while its watchdog was being refreshed."
+            }
+            if ($task.State -eq 'Running') {
+                throw "Scheduled task '$taskName' did not stop before its watchdog refresh."
+            }
+        }
         if ($task.State -ne 'Running') {
             Start-ScheduledTask -TaskName $taskName
         }

@@ -285,6 +285,32 @@ function usageCounterChanges(usage) {
   };
 }
 
+function modelUsageCounterChanges(usage) {
+  return {
+    sdkApiCalls: finiteNumber(usage?.sdkApiCalls),
+    inputTokens: finiteNumber(usage?.inputTokens),
+    outputTokens: finiteNumber(usage?.outputTokens),
+    cacheReadTokens: finiteNumber(usage?.cacheReadTokens),
+    cacheWriteTokens: finiteNumber(usage?.cacheWriteTokens),
+    reasoningTokens: finiteNumber(usage?.reasoningTokens),
+    totalNanoAiu: finiteNumber(usage?.totalNanoAiu),
+    copilotCostUnits: finiteNumber(usage?.copilotCostUnits),
+    apiDurationMs: finiteNumber(usage?.apiDurationMs),
+    apiEquivalentUsd: finiteNumber(usage?.apiEquivalentUsd),
+  };
+}
+
+function incrementUsageModels(metrics, usage, fallbackModel) {
+  const normalized = normalizedUsageSummary(usage);
+  if (!normalized.metered) return;
+  const rows = normalized.models.length
+    ? normalized.models
+    : [{ ...normalized, model: modelName(fallbackModel) }];
+  for (const row of rows) {
+    incrementModel(metrics, row.model, modelUsageCounterChanges(row));
+  }
+}
+
 function incrementRollup(metrics, at, changes, fallback) {
   const hourlyKey = hourKey(at, fallback);
   const dailyKey = dayKey(at, fallback);
@@ -500,18 +526,24 @@ export class ProxyRecorder {
         incrementRollup(this.metrics, record.completedAt ?? record.receivedAt, statusChanges, fallback);
         incrementModel(this.metrics, record.selectedModel ?? record.requestedModel, {
           [record.status]: 1,
-          ...usageChanges,
+          ...(record.usage?.metered ? { meteredCalls: 1 } : { unmeteredCalls: 1 }),
         });
+        incrementUsageModels(
+          this.metrics,
+          record.usage,
+          record.selectedModel ?? record.requestedModel,
+        );
       }
     }
     this.metrics.baseline.unmeteredBefore = this.metrics.lifetime.unmeteredCalls;
   }
 
-  updateMetrics(at, changes, model, modelChanges = {}) {
+  updateMetrics(at, changes, model, modelChanges = {}, usage = null) {
     const fallback = this.now();
     addCounters(this.metrics.lifetime, changes);
     incrementRollup(this.metrics, at, changes, fallback);
     incrementModel(this.metrics, model, modelChanges);
+    if (usage) incrementUsageModels(this.metrics, usage, model);
     this.metrics.updatedAt = fallback.toISOString();
     this.persistMetrics();
   }
@@ -652,6 +684,7 @@ export class ProxyRecorder {
     this.emit("relay.usage", record, {
       usage: {
         model: modelName(usage?.model),
+        sdkApiCalls: safeUsage.sdkApiCalls,
         inputTokens: safeUsage.inputTokens,
         outputTokens: safeUsage.outputTokens,
         cacheReadTokens: safeUsage.cacheReadTokens,
@@ -687,8 +720,8 @@ export class ProxyRecorder {
       ...usageChanges,
     }, record.selectedModel ?? record.requestedModel, {
       [finalStatus]: 1,
-      ...usageChanges,
-    });
+      ...(record.usage.metered ? { meteredCalls: 1 } : { unmeteredCalls: 1 }),
+    }, record.usage);
     this.persist(record);
     this.rebalanceDetails();
     this.emit(`relay.${finalStatus}`, record);
@@ -868,6 +901,7 @@ export class ProxyRecorder {
       maxDetailedRecords: this.detailedLimit,
       startedAt: this.startedAt,
       metricsCreatedAt: this.metrics.createdAt,
+      metricsUpdatedAt: this.metrics.updatedAt,
       metricsBaseline: this.metrics.baseline,
       summary: this.summary(),
       analytics: this.analytics(),

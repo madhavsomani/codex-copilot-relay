@@ -17,9 +17,9 @@ Codex and the official GitHub Copilot SDK.
 
 </div>
 
-![Codex Copilot Relay dashboard showing four genuine concurrent requests moving through Codex, the local relay, GitHub Copilot, and a GPT model](docs/images/dashboard-live-concurrency.png)
+![Relay Control Room showing concurrent request and response data glyphs moving through Codex, the local relay, GitHub Copilot, and a GPT model](docs/images/dashboard-live-concurrency.png)
 
-<p align="center"><sub>A real four-request concurrency run captured from the dependency-free local dashboard. No mock traffic or fabricated metrics.</sub></p>
+<p align="center"><sub>A real end-to-end SDK validation call captured from the dependency-free local dashboard. No mock traffic or fabricated metrics.</sub></p>
 
 ## Keep Codex. Change the inference path.
 
@@ -40,7 +40,8 @@ SDK.
   compaction, and a 13-hour outer-tool continuation window protect legitimate
   long-running work.
 - **Observable without a cloud dashboard:** inspect live request flow, outcomes,
-  models, sanitized history, usage, quota, storage, and API-equivalent estimates.
+  models, sanitized history, measured SDK usage, quota, storage, and an optional
+  public-API benchmark.
 - **Reversible on Windows:** one shortcut enables or repairs the gateway; a
   second shortcut stops it and restores the exact original `config.toml`.
 
@@ -78,12 +79,12 @@ telemetry.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/dashboard-overview.png" alt="Relay overview with lifetime calls, success rate, latency, estimated API-equivalent cost, Copilot credits, entitlement, and architecture" /></td>
-    <td width="50%"><img src="docs/images/dashboard-analytics.png" alt="Relay analytics with traffic charts, model mileage, bounded storage, and recent call history" /></td>
+    <td width="50%"><img src="docs/images/dashboard-overview.png" alt="Relay Control Room with operational KPIs, live fabric, measured model usage, and Copilot entitlement" /></td>
+    <td width="50%"><img src="docs/images/dashboard-analytics.png" alt="Relay analytics with traffic charts, bounded storage, and recent call history" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>Overview, entitlement, pricing reference, and live request inspector</sub></td>
-    <td align="center"><sub>Traffic history, model mileage, bounded storage, and recent calls</sub></td>
+    <td align="center"><sub>Live fabric, exact SDK usage, entitlement, and request inspector</sub></td>
+    <td align="center"><sub>Traffic history, bounded storage, and recent calls</sub></td>
   </tr>
 </table>
 
@@ -384,6 +385,10 @@ exchanges.
 The Node process loads the bridge and dashboard modules at startup. After a
 `git pull`, restart the relay to activate a newer dashboard or server build;
 refreshing the browser alone cannot load code that the old process never read.
+Every deployable runtime or dashboard change must bump the version in both
+`package.json` and `package-lock.json`, then start or repair the watchdog. The
+watchdog reads its expected version once when it starts, so arbitrary file edits
+and an unchanged version never deploy automatically.
 The **Start or Repair Codex Copilot Bridge** Desktop shortcut compares the
 running `/health` version with `package.json`. If an older healthy process still
 owns active tool continuations, repair completes without rolling the Codex
@@ -491,35 +496,53 @@ With the persistent relay running:
 
 The dashboard is a local command center as well as a history viewer:
 
-- The overview starts with six source-backed KPIs: lifetime calls, actual
-  completion rate, measured average latency, API-equivalent estimate, Copilot
-  AI-credit mileage, and currently active exchanges. Lightweight SVG sparklines
-  use the existing hourly, daily, and retained-call telemetry. There are no
-  fabricated seats, users, accounts, or subscription charges.
+- The overview starts with four source-backed operational KPIs: lifetime calls,
+  actual completion rate, measured average latency, and resumable SDK exchanges.
+  The active-session headline includes exchanges paused for outer Codex tools; a
+  secondary count shows only currently streaming HTTP responses.
+- A responsive three-column control room keeps compact measured usage and
+  Copilot entitlement on the left, the live relay fabric in the center, and the
+  request inspector on the right. Traffic and outcome charts sit directly below
+  the surfaces they explain, then collapse to balanced two- and one-column
+  layouts without fixed empty rows. The 24-hour plot uses a compact viewport so
+  its full graph remains visible in the documented 1440 x 1100 overview.
+- Exact input tokens, output tokens, and SDK model calls remain prominent. The
+  local API is sampled on every five-second poll and after SSE activity, and the
+  panel separately shows when durable metrics last changed. Lightweight SVG
+  sparklines use existing hourly, daily, and retained-call telemetry. There are
+  no fabricated seats, users, accounts, or subscription charges.
 - `/dashboard/events` is a loopback-only Server-Sent Events feed. Real request
-  phases animate one labeled `PROMPT` capsule across the continuous Codex →
-  Local Relay → GitHub Copilot → GPT Model route, then one `STREAM` capsule
-  returns to Codex. Tool handoffs use a compact branch. Simultaneous calls keep
-  stable colors and lanes. The dependency-free renderer uses no per-frame
-  JavaScript, honors reduced-motion, and bounds itself to 64 visible calls and
-  96 transient capsules.
+  phases move one small upright document glyph across the continuous Codex →
+  Local Relay → GitHub Copilot → selected GPT model route; responses return as
+  a three-line stream glyph and tool handoffs use a bracket glyph on the compact
+  branch. No moving words, rotating capsules, thick neon beams, or per-node blink
+  sequence cross the diagram. Simultaneous calls keep stable colors and five
+  collision-resistant lanes; red is reserved for failures. The dependency-free
+  renderer uses no per-frame JavaScript, honors reduced-motion, and bounds itself
+  to 64 visible calls and 48 transient glyphs.
 - A live request inspector shows the latest real call ID, model, phase, measured
-  usage, latency, API-equivalent estimate, route, and outer-tool count. Its
+  tokens, SDK model-call count, latency, route, and outer-tool count. Its
   newest-first event log is capped at 16 rows in memory, even when many calls
   stream concurrently.
 - GitHub's SDK `assistant.usage` events provide exact per-model input, output,
   cache-read, cache-write, reasoning, nano-AIU, and model-cost-unit metrics. The
-  relay stores only the safe numeric aggregate, never provider tracing IDs.
+  relay treats each event as one SDK model call, stores only safe numeric
+  aggregates, never persists provider tracing IDs, and attributes per-model
+  totals to the model named by the event rather than the relay fallback model.
 - GitHub's SDK `account.getQuota` supplies `chat`, `completions`, and
   `premium_interactions` entitlement snapshots. Refresh is fail-soft and never
   blocks model traffic. The SDK does not expose the user's subscription purchase
   price, so the dashboard does not invent one.
-- The **OpenAI API-equivalent estimate** multiplies measured per-call text tokens
-  by a source-dated snapshot of OpenAI's standard public list prices. Cached input,
-  GPT-5.6 cache writes, and documented >272K long-context multipliers are applied
-  per model call. It excludes tool charges, regional/service-tier differences,
-  taxes, and any unmetered calls, and is explicitly **not an OpenAI charge, a
-  GitHub charge, savings, or a Copilot invoice**.
+- The compact **Public API benchmark** is the fourth measured-usage tile beside
+  input tokens, output tokens, and SDK model calls. It multiplies live measured
+  per-call text tokens by a source-dated static reference of OpenAI's standard
+  public list prices. Its date is explicitly a rate-reference date, not
+  telemetry age.
+  Cached input, GPT-5.6 cache writes, and documented >272K long-context
+  multipliers are applied per model call. It excludes tool charges,
+  regional/service-tier differences, taxes, and any unmetered calls, and is
+  explicitly **hypothetical—not an OpenAI charge, a GitHub charge, savings, or
+  a Copilot invoice**.
 
 The persistent launcher always pins telemetry to the repository's ignored
 `runtime` directory, regardless of the shell's inherited environment. Before a
@@ -555,10 +578,10 @@ The dashboard uses two storage tiers by default:
 - Lifetime received, replayed, completed, failed, tool, byte, and latency
   counters live in a separate atomic metrics file and never decrease when old
   detail is compacted or when **Clear detailed history** is used.
-- Exact token, AI-credit, model-cost-unit, SDK-call, and API-equivalent cost
+- Exact token, nano-AIU, model-multiplier, SDK-call, and public-benchmark
   counters share that durable metrics file and survive process restart.
 - Hourly rollups cover 31 days, daily rollups cover up to 10 years, and model
-  totals feed dependency-free SVG/CSS charts.
+  totals feed the dependency-free model ledger and SVG/CSS charts.
 - The dashboard API returns lightweight indexes; a detailed body is fetched
   only when a recent detailed row is selected.
 
@@ -724,6 +747,23 @@ serving stack. Provider-side encrypted reasoning state, provider compaction,
 quotas, service policy, and hosted-only tools cannot be transferred between
 OpenAI and GitHub. The same model name can therefore still show small behavioral
 differences even when the visible Codex contract is preserved.
+
+### Why Codex can still ask for permission
+
+The relay changes inference routing; it does not replace Codex, Windows, the
+browser, or connector security boundaries. With `approval_policy = "never"` and
+`sandbox_mode = "danger-full-access"`, ordinary local shell and file work should
+not produce Codex command-approval prompts in a newly opened task. Existing tasks
+may retain the policy they loaded at creation, so reopen the task after changing
+`config.toml`.
+
+Separate consent can still be required for Windows UAC, browser camera/location
+access, OAuth/login, connector authorization, publishing or sending content,
+purchases, destructive cloud actions, and transmission of sensitive data. A
+plain assistant message such as “may I proceed?” is a model clarification, not a
+native permission dialog. ChatGPT mobile/cloud tasks also do not inherit the
+desktop Codex `config.toml`. These boundaries remain enforced whether the model
+request uses the native OpenAI provider or this relay.
 
 ## Security model
 

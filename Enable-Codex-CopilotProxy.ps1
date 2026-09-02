@@ -21,6 +21,7 @@ $repairScript = Join-Path $bridgeRoot 'Repair-Codex-CopilotProxy.ps1'
 $disableScript = Join-Path $bridgeRoot 'Disable-Codex-CopilotProxy.ps1'
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $statePath = Join-Path $runtimeDirectory 'codex-copilot-proxy.state.json'
+$proxyPidPath = Join-Path $runtimeDirectory 'codex-copilot-proxy.pid'
 $backupPath = Join-Path $runtimeDirectory 'config.toml.pre-copilot.bak'
 if (-not (Test-Path -LiteralPath $configHelper)) {
     throw "Config helper not found: $configHelper"
@@ -72,14 +73,36 @@ try {
     # A healthy older relay can still own Codex tool continuations. Keep it
     # available, finish enablement, and let the watchdog promote the on-disk
     # update once the retained exchanges reach zero.
+    $proxyPidBeforeStart = 0
+    if (Test-Path -LiteralPath $proxyPidPath -PathType Leaf) {
+        [int]::TryParse(
+            ([string](Get-Content -LiteralPath $proxyPidPath -Raw)).Trim(),
+            [ref]$proxyPidBeforeStart
+        ) | Out-Null
+    }
     & $startScript -Port $Port -Model $Model -DeferUpdateWhenBusy
-    $proxyStarted = $true
+    $proxyPidAfterStart = 0
+    if (Test-Path -LiteralPath $proxyPidPath -PathType Leaf) {
+        [int]::TryParse(
+            ([string](Get-Content -LiteralPath $proxyPidPath -Raw)).Trim(),
+            [ref]$proxyPidAfterStart
+        ) | Out-Null
+    }
+    $proxyStarted = $proxyPidAfterStart -gt 0 -and $proxyPidAfterStart -ne $proxyPidBeforeStart
 
     $autoStart = $null
     if (-not $SkipStartup) {
         $autoStart = Install-CodexCopilotAutoStart -WatchScript $watchScript -Port $Port -Model $Model
         $autoStartInstalled = $true
-        Start-CodexCopilotAutoStart -WatchScript $watchScript -Port $Port -Model $Model | Out-Null
+        # The watchdog caches package.json's expected version once at startup.
+        # Recycle only the managed watchdog so deferred exchanges stay alive while
+        # the fresh watchdog waits to promote the staged relay version.
+        & $stopWatchdogScript | Out-Null
+        Start-CodexCopilotAutoStart `
+            -WatchScript $watchScript `
+            -Port $Port `
+            -Model $Model `
+            -RestartRunning | Out-Null
         $watchdogStarted = $true
     }
 

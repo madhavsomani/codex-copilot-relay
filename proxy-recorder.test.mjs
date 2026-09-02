@@ -48,6 +48,7 @@ test("records bounded sanitized input, Copilot replay, and output data", () => {
     assert.equal(snapshot.summary.replayed, 1);
     assert.equal(snapshot.summary.completed, 1);
     assert.equal(snapshot.summary.toolCalls, 1);
+    assert.ok(Number.isFinite(Date.parse(snapshot.metricsUpdatedAt)));
     assert.equal(snapshot.records[0].selectedModel, "gpt-5.6-luna");
     const persisted = fs.readFileSync(filePath, "utf8");
     assert.doesNotMatch(persisted, /do-not-store-this/);
@@ -273,6 +274,7 @@ test("persists exact SDK token and cost mileage and emits safe live phases", () 
     assert.equal(snapshot.summary.cacheReadTokens, 200);
     assert.equal(snapshot.summary.reasoningTokens, 25);
     assert.equal(snapshot.summary.totalNanoAiu, 5_000_000);
+    assert.equal(snapshot.summary.aiCredits, 0.005);
     assert.equal(snapshot.summary.apiEquivalentUsd, 0.0052);
     assert.equal(snapshot.summary.meteringCoveragePercent, 100);
     assert.equal(snapshot.records[0].usage.apiEquivalentUsd, 0.0052);
@@ -283,6 +285,57 @@ test("persists exact SDK token and cost mileage and emits safe live phases", () 
       "relay.completed",
     ]);
     assert.doesNotMatch(JSON.stringify(liveEvents), /do not emit me|private/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("attributes SDK usage to the model reported by each assistant usage event", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-copilot-recorder-"));
+  const filePath = path.join(directory, "events.jsonl");
+  const metricsFilePath = path.join(directory, "metrics.json");
+  try {
+    const recorder = new ProxyRecorder({ filePath, metricsFilePath });
+    const record = recorder.start({
+      requestPath: "/v1/responses",
+      inputBytes: 50,
+      streaming: true,
+      body: { model: "gpt-5.6-sol", input: "multi-model" },
+    });
+    recorder.finish(record, {
+      status: "completed",
+      selectedModel: "gpt-5.6-sol",
+      usage: {
+        metered: true,
+        sdkApiCalls: 2,
+        inputTokens: 300,
+        outputTokens: 30,
+        cacheReadTokens: 75,
+        cacheWriteTokens: 10,
+        reasoningTokens: 6,
+        totalNanoAiu: 30_000_000,
+        copilotCostUnits: 1.25,
+        apiDurationMs: 500,
+        apiEquivalentUsd: 0.03,
+        models: [
+          { model: "gpt-5.6-sol", sdkApiCalls: 1, inputTokens: 100, outputTokens: 10, cacheReadTokens: 25, cacheWriteTokens: 10, reasoningTokens: 4, totalNanoAiu: 20_000_000, copilotCostUnits: 1, apiDurationMs: 300, apiEquivalentUsd: 0.02 },
+          { model: "gpt-5.6-luna", sdkApiCalls: 1, inputTokens: 200, outputTokens: 20, cacheReadTokens: 50, cacheWriteTokens: 0, reasoningTokens: 2, totalNanoAiu: 10_000_000, copilotCostUnits: 0.25, apiDurationMs: 200, apiEquivalentUsd: 0.01 },
+        ],
+      },
+    });
+
+    const snapshot = recorder.snapshot({ includeDetails: false });
+    const byModel = new Map(snapshot.analytics.models.map((model) => [model.model, model]));
+    assert.equal(snapshot.summary.sdkApiCalls, 2);
+    assert.equal(snapshot.summary.inputTokens, 300);
+    assert.equal(snapshot.summary.outputTokens, 30);
+    assert.equal(byModel.get("gpt-5.6-sol").sdkApiCalls, 1);
+    assert.equal(byModel.get("gpt-5.6-sol").inputTokens, 100);
+    assert.equal(byModel.get("gpt-5.6-luna").sdkApiCalls, 1);
+    assert.equal(byModel.get("gpt-5.6-luna").inputTokens, 200);
+    assert.equal(byModel.get("gpt-5.6-luna").outputTokens, 20);
+    assert.equal(byModel.get("gpt-5.6-sol").completed, 1);
+    assert.equal(byModel.get("gpt-5.6-luna").completed, 0);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

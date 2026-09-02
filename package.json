@@ -1,6 +1,6 @@
 {
   "name": "codex-copilot-relay",
-  "version": "1.3.3",
+  "version": "1.3.9",
   "private": true,
   "description": "Unofficial localhost OpenAI Responses compatibility relay from Codex custom providers to the official GitHub Copilot SDK.",
   "main": "server.mjs",

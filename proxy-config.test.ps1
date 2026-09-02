@@ -99,6 +99,62 @@ try {
     if ($enableText -notmatch 'DeferUpdateWhenBusy') {
         throw 'Enable/repair does not opt into a non-destructive deferred relay update.'
     }
+    $installIndex = $enableText.IndexOf('Install-CodexCopilotAutoStart')
+    $searchStart = [Math]::Max(0, $installIndex)
+    $recycleIndex = $enableText.IndexOf('& $stopWatchdogScript', $searchStart)
+    $restartIndex = $enableText.IndexOf('Start-CodexCopilotAutoStart', $searchStart)
+    if (
+        $installIndex -lt 0 -or
+        $recycleIndex -lt $installIndex -or
+        $restartIndex -lt $recycleIndex -or
+        $enableText.Substring($restartIndex, [Math]::Min(300, $enableText.Length - $restartIndex)) -notmatch 'RestartRunning'
+    ) {
+        throw 'Enable/repair does not recycle the managed watchdog after staging a new expected version.'
+    }
+
+    $fakeWatchScript = Join-Path $tempDirectory 'Watch-Codex-CopilotProxy.ps1'
+    $script:fakeTaskState = 'Running'
+    $script:fakeTaskStopCount = 0
+    $script:fakeTaskStartCount = 0
+    function Get-ScheduledTask {
+        param([string]$TaskName, $ErrorAction)
+
+        return [pscustomobject]@{
+            State = $script:fakeTaskState
+            Actions = @([pscustomobject]@{
+                Execute = 'powershell.exe'
+                Arguments = "-NoProfile -File `"$fakeWatchScript`" -Port 4144 -Model gpt-5.6-sol"
+            })
+        }
+    }
+    function Stop-ScheduledTask {
+        param([string]$TaskName)
+
+        $script:fakeTaskStopCount++
+        $script:fakeTaskState = 'Ready'
+    }
+    function Start-ScheduledTask {
+        param([string]$TaskName)
+
+        $script:fakeTaskStartCount++
+        $script:fakeTaskState = 'Running'
+    }
+    try {
+        Start-CodexCopilotAutoStart `
+            -WatchScript $fakeWatchScript `
+            -Port 4144 `
+            -Model 'gpt-5.6-sol' `
+            -RestartRunning | Out-Null
+        if ($script:fakeTaskStopCount -ne 1 -or $script:fakeTaskStartCount -ne 1) {
+            throw 'Restarting auto-recovery did not stop and relaunch the already-running managed watchdog.'
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath Function:Get-ScheduledTask -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath Function:Stop-ScheduledTask -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath Function:Start-ScheduledTask -ErrorAction SilentlyContinue
+        Remove-Variable -Name fakeTaskState, fakeTaskStopCount, fakeTaskStartCount -Scope Script -ErrorAction SilentlyContinue
+    }
 
     $watchText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Watch-Codex-CopilotProxy.ps1') -Raw
     if ($watchText -notmatch 'package\.json' -or $watchText -notmatch 'activeExchanges' -or $watchText -notmatch 'version') {

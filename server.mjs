@@ -220,7 +220,9 @@ function telemetryStorage() {
 
 function dashboardSnapshot() {
   const snapshot = recorder.snapshot({ includeDetails: false });
+  snapshot.sampledAt = new Date().toISOString();
   snapshot.relayVersion = relayVersion;
+  snapshot.defaultModel = defaultModel;
   snapshot.storage = telemetryStorage();
   snapshot.activeExchanges = exchanges.size;
   snapshot.copilot = {
