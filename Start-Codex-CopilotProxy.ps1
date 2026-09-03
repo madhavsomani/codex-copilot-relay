@@ -6,7 +6,9 @@ param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
     [string]$Model = 'gpt-5.6-luna',
 
-    [switch]$DeferUpdateWhenBusy
+    [switch]$DeferUpdateWhenBusy,
+
+    [switch]$RecoverDeadBackend
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +21,7 @@ $pidPath = Join-Path $runtimeDirectory 'codex-copilot-proxy.pid'
 $stdoutLog = Join-Path $runtimeDirectory 'proxy.stdout.log'
 $processStdoutLog = Join-Path $runtimeDirectory 'proxy.process.stdout.log'
 $stderrLog = Join-Path $runtimeDirectory 'proxy.stderr.log'
+. (Join-Path $bridgeRoot 'sdk-process-health.ps1')
 
 function Test-LocalPortInUse {
     param([int]$LocalPort)
@@ -42,11 +45,52 @@ function Test-LocalPortInUse {
 
 function Get-ProxyHealth {
     try {
-        return Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+        return Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5
     }
     catch {
         return $null
     }
+}
+
+function Stop-ConfirmedDeadLegacyBackend {
+    if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $stderrLog -PathType Leaf)) {
+        throw 'Cannot prove a dead legacy backend without its managed PID and CLI crash log.'
+    }
+    $managedPid = 0
+    if (-not [int]::TryParse(([string](Get-Content -LiteralPath $pidPath -Raw)).Trim(), [ref]$managedPid)) {
+        throw 'Invalid managed relay PID; refusing recovery.'
+    }
+    for ($sample = 0; $sample -lt 3; $sample++) {
+        $health = Get-ProxyHealth
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$managedPid" -ErrorAction Stop
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$managedPid" -ErrorAction Stop)
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+        if (-not $health -or -not $process -or $listeners.Count -ne 1) {
+            throw 'Cannot prove exclusive ownership of the dead relay listener.'
+        }
+        $proof = Test-LegacyDeadCopilotEvidence `
+            -Health $health -RelayProcess $process -Children $children `
+            -ServerPath $serverPath -ListenerPid ([int]$listeners[0]) `
+            -CrashLogText (Get-Content -LiteralPath $stderrLog -Raw) `
+            -CrashLogWrittenAt (Get-Item -LiteralPath $stderrLog).LastWriteTime
+        if (-not $proof) {
+            throw 'Dead Copilot backend is not proven. Healthy or supervised sessions will not be force-restarted.'
+        }
+        if ($sample -lt 2) { Start-Sleep -Milliseconds 500 }
+    }
+    & $backupScript -RuntimeDirectory $runtimeDirectory -Reason 'dead-sdk-recovery' -Keep 8 -MaxTotalMiB 512 | Out-Null
+    $crashCopy = Join-Path $runtimeDirectory ("sdk-crash-$(Get-Date -Format 'yyyyMMdd-HHmmss').log")
+    Copy-Item -LiteralPath $stderrLog -Destination $crashCopy
+    Stop-Process -Id $managedPid -Force -ErrorAction Stop
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        if (-not (Test-LocalPortInUse -LocalPort $Port)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (Test-LocalPortInUse -LocalPort $Port) { throw 'Dead relay stopped but its port is still occupied.' }
+    Write-Output "Recovered confirmed dead legacy SDK parent PID $managedPid. Telemetry and crash evidence preserved; stale exchanges were already lost with the CLI worker."
 }
 
 function Stop-OutdatedManagedProxy {
@@ -117,6 +161,10 @@ else {
     throw "Bridge package metadata not found: $packagePath"
 }
 $existingHealth = Get-ProxyHealth
+if ($RecoverDeadBackend) {
+    Stop-ConfirmedDeadLegacyBackend
+    $existingHealth = $null
+}
 if ($existingHealth -and $existingHealth.ok -and $existingHealth.model -eq $Model) {
     $existingVersion = if ($existingHealth.PSObject.Properties.Name -contains 'version') {
         [string]$existingHealth.version

@@ -14,3 +14,6 @@ Thumbs.db
 .idea/
 .playwright-cli/
 output/
+report.*.json
+*.heapsnapshot
+*.dmp

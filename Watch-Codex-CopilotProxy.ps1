@@ -47,7 +47,7 @@ function Write-WatchdogLog {
 
 function Get-WatchedHealth {
     try {
-        return Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+        return Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5
     }
     catch {
         return $null
@@ -130,11 +130,21 @@ try {
 
     Set-Content -LiteralPath $pidPath -Value ([string]$PID) -Encoding ascii
     Write-WatchdogLog "Watchdog started for 127.0.0.1:$Port using $Model (PID $PID)."
+    $lastSdkState = ''
 
     while ($true) {
         Limit-AuxiliaryLogs
         $health = Get-WatchedHealth
-        if (-not ($health -and $health.ok -and $health.model -eq $Model)) {
+        if ($health -and $health.model -eq $Model -and $health.sdk -and -not $health.ok) {
+            # The Node supervisor owns SDK replacement and invalidation. Do not
+            # launch a second HTTP process or kill resumable work on a slow ping.
+            $sdkState = [string]$health.sdk.state
+            if ($sdkState -ne $lastSdkState) {
+                Write-WatchdogLog "SDK readiness is $sdkState; the relay supervisor owns backend recovery."
+            }
+            $lastSdkState = $sdkState
+        }
+        elseif (-not ($health -and $health.ok -and $health.model -eq $Model)) {
             try {
                 $startOutput = (& $startScript -Port $Port -Model $Model 2>&1 | Out-String).Trim()
                 Write-WatchdogLog "Recovery succeeded. $startOutput"
@@ -164,6 +174,7 @@ try {
                 Write-WatchdogLog "Deferred update promotion failed: $($_.Exception.Message)"
             }
         }
+        if ($health -and $health.ok) { $lastSdkState = '' }
         if ($health -and $health.ok -and $health.model -eq $Model -and -not (Test-GatewayConsoleProcess)) {
             try {
                 $consolePid = Start-GatewayConsole

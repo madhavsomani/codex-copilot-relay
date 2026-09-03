@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
+import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
 import { DASHBOARD_HTML } from "./dashboard.mjs";
 import {
   BlankCompletionGuard,
@@ -83,6 +84,9 @@ const copilotSessionIdleTimeoutSeconds = environmentInteger(
   0,
   7 * 24 * 60 * 60,
 );
+const maxCopilotSessions = environmentInteger("BRIDGE_MAX_COPILOT_SESSIONS", 64, 2, 128);
+const recycleAfterSessions = environmentInteger("BRIDGE_SDK_RECYCLE_AFTER_SESSIONS", 128, 8, 4096);
+const sdkProbeIntervalMs = environmentInteger("BRIDGE_SDK_PROBE_INTERVAL_MS", 10_000, 500, 60_000);
 const maxBlankCompletionRetries = environmentInteger(
   "BRIDGE_MAX_BLANK_COMPLETION_RETRIES",
   2,
@@ -179,6 +183,7 @@ let quotaRefreshTimer = null;
 const exchanges = new Set();
 const exchangesByCallId = new Map();
 const exchangesByResponseId = new Map();
+let sdkRuntime;
 
 function localFileSize(filePath) {
   try {
@@ -223,6 +228,7 @@ function dashboardSnapshot() {
   snapshot.sampledAt = new Date().toISOString();
   snapshot.relayVersion = relayVersion;
   snapshot.defaultModel = defaultModel;
+  snapshot.sdk = sdkRuntime.snapshot();
   snapshot.storage = telemetryStorage();
   snapshot.activeExchanges = exchanges.size;
   snapshot.copilot = {
@@ -516,8 +522,10 @@ class Exchange {
   constructor(session, model, toolMetadata, cleanup, {
     requiresAction = false,
     toolCount = 0,
+    generation = 0,
   } = {}) {
     this.session = session;
+    this.generation = generation;
     this.model = model;
     this.toolMetadata = toolMetadata;
     this.cleanupCallback = cleanup;
@@ -553,7 +561,7 @@ class Exchange {
     });
     this.armModelDeadline();
 
-    session.on((event) => {
+    this.unsubscribe = session.on((event) => {
       Promise.resolve(this.handleEvent(event)).catch((error) => this.fail(error));
     });
   }
@@ -613,7 +621,9 @@ class Exchange {
 
   async handleEvent(event) {
     if (this.done) return;
-    this.armModelDeadline();
+    // Background SDK events must not shorten or perpetually extend an outer
+    // tool's bounded continuation lease.
+    if (this.sink && !this.sink.closed) this.armModelDeadline();
 
     if (event.type === "assistant.usage") {
       const usage = normalizeAssistantUsage(event.data);
@@ -995,44 +1005,80 @@ class Exchange {
       message: error instanceof Error ? error.message : String(error),
     });
     this.sink?.fail(error, code, this.currentUsage());
+    void sdkRuntime.reportFailure(error, this.generation);
     void this.session.abort().catch(() => {});
     void this.disconnect();
+  }
+
+  detach() {
+    this.deadline.stop();
+    this.unsubscribe?.();
+    for (const callId of this.pendingCalls.keys()) exchangesByCallId.delete(callId);
+    this.pendingCalls.clear();
+    for (const [responseId, exchange] of exchangesByResponseId) {
+      if (exchange === this) exchangesByResponseId.delete(responseId);
+    }
+    sdkRuntime.release(this.session);
+    this.cleanupCallback(this);
+  }
+
+  backendLost(error) {
+    this.done = true;
+    this.disconnecting = true;
+    try {
+      this.sink?.fail(error, "copilot_connection_lost", this.currentUsage());
+    } finally {
+      this.detach();
+    }
   }
 
   async disconnect() {
     if (this.disconnecting) return;
     this.disconnecting = true;
     this.deadline.stop();
-    for (const callId of this.pendingCalls.keys()) exchangesByCallId.delete(callId);
-    for (const [responseId, exchange] of exchangesByResponseId) {
-      if (exchange === this) exchangesByResponseId.delete(responseId);
-    }
     try {
-      await this.session.disconnect();
+      await bounded(() => this.session.disconnect(), 5_000, "SDK session cleanup");
     } catch (error) {
       log("session.disconnect_error", {
         message: error instanceof Error ? error.message : String(error),
       });
+      void sdkRuntime.reportFailure(error, this.generation);
     } finally {
-      this.cleanupCallback(this);
+      this.detach();
     }
   }
 }
 
-const client = new CopilotClient({
-  mode: "copilot-cli",
-  logLevel: "error",
-  useLoggedInUser: true,
-  workingDirectory: fallbackWorkingDirectory,
-  sessionIdleTimeoutSeconds: copilotSessionIdleTimeoutSeconds,
+sdkRuntime = new CopilotRuntime({
+  createClient: () => new CopilotClient({
+    mode: "copilot-cli",
+    logLevel: "error",
+    useLoggedInUser: true,
+    workingDirectory: fallbackWorkingDirectory,
+    sessionIdleTimeoutSeconds: copilotSessionIdleTimeoutSeconds,
+  }),
+  maxSessions: maxCopilotSessions,
+  recycleAfterSessions,
+  probeIntervalMs: sdkProbeIntervalMs,
+  log,
+  onLost(generation, error) {
+    let invalidated = 0;
+    for (const exchange of [...exchanges]) {
+      if (exchange.generation !== generation) continue;
+      try { exchange.backendLost(error); }
+      catch (cleanupError) { log("sdk.exchange_cleanup_error", { message: String(cleanupError?.message ?? cleanupError) }); }
+      invalidated++;
+    }
+    log("sdk.exchanges_invalidated", { generation, count: invalidated });
+  },
 });
 
-await client.start();
-const models = await client.listModels();
+await sdkRuntime.start();
+const models = await (await sdkRuntime.ready()).listModels();
 const availableModelIds = new Set(models.map((model) => model.id));
 const modelsById = new Map(models.map((model) => [model.id, model]));
 if (!availableModelIds.has(requestedDefaultModel)) {
-  await client.stop();
+  await sdkRuntime.stop();
   throw new Error(`The authenticated GitHub Copilot account does not expose ${requestedDefaultModel}.`);
 }
 const defaultModel = requestedDefaultModel;
@@ -1058,7 +1104,8 @@ async function refreshCopilotQuota({ force = false } = {}) {
   };
   quotaRefreshPromise = (async () => {
     try {
-      const result = await client.rpc.account.getQuota({});
+      const client = await sdkRuntime.ready();
+      const result = await bounded(() => client.rpc.account.getQuota({}), 10_000, "SDK quota lookup");
       copilotQuota = {
         ...normalizeQuotaResult(result, new Date().toISOString()),
         lastAttemptAt: new Date().toISOString(),
@@ -1196,7 +1243,7 @@ async function startExchange(body, sink, requestCompatibility) {
     ? { limits: { max_output_tokens: requestCompatibility.maxOutputTokens } }
     : undefined;
 
-  const session = await client.createSession({
+  const { session, generation } = await sdkRuntime.createSession({
     clientName: "codex-copilot-responses-bridge",
     model,
     contextTier: modelCompatibility.contextTier,
@@ -1248,9 +1295,14 @@ async function startExchange(body, sink, requestCompatibility) {
     {
       requiresAction: sessionInput.requiresAction,
       toolCount: sessionTools.length,
+      generation,
     },
   );
   exchanges.add(exchange);
+  if (!sdkRuntime.isCurrent(generation)) {
+    exchange.backendLost(new Error("Copilot worker changed before the prompt was sent. Please retry."));
+    throw new Error("Copilot worker changed before the prompt was sent. Please retry.");
+  }
   if (!exchange.attachSink(sink)) return;
   recorder.replay(sink.record, {
     phase: "initial",
@@ -1347,8 +1399,10 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${host}:${port}`}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
+    const sdk = await sdkRuntime.checkHealth();
     return sendJson(response, 200, {
-      ok: true,
+      ok: sdk.ok,
+      sdk,
       version: relayVersion,
       provider: "github-copilot-sdk",
       model: defaultModel,
@@ -1380,6 +1434,9 @@ const server = http.createServer(async (request, response) => {
         exchangeTimeoutMode: "sliding",
         outerToolTimeoutMs: toolResultTimeoutMs,
         copilotSessionIdleTimeoutSeconds,
+        maxCopilotSessions,
+        sdkProbeIntervalMs,
+        sdkRecycleAfterSessions: recycleAfterSessions,
         sseHeartbeatIntervalMs,
         sseHeartbeatFormat: "response.in_progress",
         responsesStreamingLifecycle: "full",
@@ -1561,7 +1618,7 @@ async function shutdown(signal) {
   if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
   await Promise.allSettled([...exchanges].map((exchange) => exchange.disconnect()));
-  await client.stop();
+  await sdkRuntime.stop();
   process.exit(0);
 }
 

@@ -27,6 +27,10 @@ jobs:
         shell: powershell
         run: .\proxy-config.test.ps1
       - if: runner.os == 'Windows'
+        name: Dead SDK recovery safety tests
+        shell: powershell
+        run: .\sdk-process-health.test.ps1
+      - if: runner.os == 'Windows'
         name: Parse every PowerShell script
         shell: powershell
         run: |

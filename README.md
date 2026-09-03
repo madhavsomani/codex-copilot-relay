@@ -113,11 +113,15 @@ flowchart LR
     HTTP["HTTP router<br/>server.mjs"]
     Core["Protocol and context adapter<br/>bridge-core.mjs"]
     Exchange["Exchange registry<br/>one SDK session per initial request"]
+    Supervisor["SDK worker supervisor<br/>copilot-runtime.mjs"]
     Stream["Responses stream adapter<br/>ordered SSE and heartbeats"]
     Recorder["Sanitized recorder<br/>metrics and live events"]
     Dashboard["Embedded dashboard"]
 
     HTTP --> Core --> Exchange
+    Exchange -- "session admission" --> Supervisor
+    HTTP -. "readiness ping" .-> Supervisor
+    Supervisor -. "invalidate dead generation" .-> Exchange
     Exchange --> Stream --> HTTP
     HTTP --> Recorder
     Exchange --> Recorder
@@ -132,6 +136,7 @@ flowchart LR
   CLI["Copilot CLI server<br/>JSON-RPC"]
   Service["GitHub Copilot service<br/>entitled GPT model"]
   Exchange <--> SDK
+  Supervisor -. "own, probe, replace" .-> SDK
   SDK <--> CLI
   CLI <--> Service
 
@@ -262,6 +267,8 @@ or product changes can require updates to the relay.
   public standard text-token prices; estimates are never presented as charges
 - Visible Windows Terminal event stream
 - Watchdog recovery for both the relay and visible terminal
+- SDK-aware readiness, automatic dead-worker replacement, bounded session
+  admission, and idle-only worker recycling
 - Two-click enable/restore workflow for Codex `config.toml`
 - SHA-256-verified, current-user-only full-config backup
 
@@ -376,7 +383,8 @@ npm run probe:concurrency -- --url http://127.0.0.1:4144/v1 --count 4 --model gp
 
 Open <http://127.0.0.1:4144/dashboard> to inspect sanitized local request and
 tool-call activity, lifetime traffic mileage, model usage, outcomes, and bounded
-disk use. A healthy relay reports `sseHeartbeatFormat` as
+disk use. A healthy relay reports `ok: true` and `sdk.ok: true`, reports
+`sseHeartbeatFormat` as
 `response.in_progress`, reports its telemetry policy, and accepts concurrent
 exchanges.
 
@@ -630,7 +638,9 @@ session.
 ```powershell
 npm test
 .\proxy-config.test.ps1
+.\sdk-process-health.test.ps1
 npm run probe:codex-heartbeat
+npm run probe:sdk-recovery -- --model gpt-5.6-luna
 npm run probe:client-disconnect -- --url http://127.0.0.1:4144 --model gpt-5.6-sol
 npm run probe:stream -- --url http://127.0.0.1:4144/v1
 npm run probe:compatibility -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
@@ -657,6 +667,12 @@ recovery, deferred-tool discovery, phased output, explicit compatibility errors,
 local parent/child-agent message fidelity, delayed outer-tool continuation, and
 a well-formed terminal failure.
 
+`probe:sdk-recovery` is an opt-in Windows crash test. It starts its own relay on
+an ephemeral loopback port, holds a tool continuation, kills only that relay's
+verified Copilot worker during a second streaming request, and verifies automatic
+replacement, dead-session cleanup, terminal SSE failure, streaming, a tool chain,
+and four parallel requests. It never targets the persistent relay on port 4144.
+
 The default 13-hour outer-tool result window lets a single Codex exchange wait
 through a 12-hour local render, browser operation, or child-agent task. It does
 not create artificial follow-up turns after Codex has genuinely completed a
@@ -665,13 +681,53 @@ service policy. Override it with `BRIDGE_TOOL_RESULT_TIMEOUT_MS` if a different
 local ceiling is required.
 
 The watchdog recovers the gateway for new calls after a process or terminal
-failure. In-memory exchanges cannot survive a relay process crash, machine
+failure. An in-process SDK supervisor also recovers when the Copilot CLI worker
+dies while the HTTP gateway remains alive. `/health` now pings the SDK and reports
+`ok`, `sdk.state`, `sdk.generation`, session counts, and recovery/recycle counters;
+an HTTP 200 alone is not a readiness check. A closed SDK connection triggers one
+replacement shared by concurrent callers. Interrupted streams receive a terminal
+`response.failed` event with the failure cause instead of waiting indefinitely.
+Only sessions belonging to the dead worker are invalidated. Session creation can
+retry once before any prompt is sent; prompts and tool side effects are never
+silently replayed. Retry or continue the interrupted Codex task after recovery.
+
+To bound retained-session pressure, at most 64 SDK sessions (including concurrent
+allocations) are admitted by default. Additional new requests receive a retryable
+503 while existing tool continuations are preserved. A worker is recycled after
+128 created sessions or six hours, **only when no sessions or allocations remain**.
+These are pressure controls, not a guarantee against every upstream memory leak.
+Overrides: `BRIDGE_MAX_COPILOT_SESSIONS` (2-128),
+`BRIDGE_SDK_RECYCLE_AFTER_SESSIONS` (8-4096), and
+`BRIDGE_SDK_PROBE_INTERVAL_MS` (500-60000; default 10000). A slow ping marks the
+backend degraded; it is not by itself permission to kill healthy resumable work.
+
+In-memory exchanges cannot survive a relay process crash, machine
 sleep/network loss, an upstream Copilot outage, quota exhaustion, or a model
 context limit. Long-running work should still produce checkpoints and durable
 artifacts so Codex can resume safely after any external interruption. The
 [durable in-flight crash-resume design](docs/CRASH-RESUME-DESIGN.md) specifies
 the idempotency and crash-injection gates required before that feature can be
 enabled without risking duplicate local tool execution.
+
+### Recovering a pre-supervisor release after a confirmed CLI heap crash
+
+Normal updates wait for active exchanges to finish. Old releases can retain stale
+exchange counts after the CLI exits with `JavaScript heap out of memory`. For that
+specific legacy failure, the following guarded recovery is available:
+
+```powershell
+.\Stop-Codex-CopilotWatchdog.ps1
+.\Start-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-5.6-sol -RecoverDeadBackend
+.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-5.6-sol -NoDashboard
+```
+
+Use your configured model in place of the example. The recovery refuses to stop
+the listener unless repeated checks prove that this repository owns the process,
+the CLI logged a fatal heap crash after startup, and no worker remains. It backs
+up telemetry and preserves the crash log before replacing the already-broken
+parent. It refuses this exception for supervised releases and live workers; do
+not use it as a force-update flag. The normal stop/restore shortcut remains the
+way to return Codex to its original provider configuration.
 
 The context guard limits each historical text tool result to 64 KiB. Image count
 and per-image size are taken from the selected Copilot model's advertised
@@ -740,7 +796,8 @@ marked for deferred loading.
 | Data-URL images | Supported within the selected model's advertised image limits |
 | Stored Responses, Conversations, hosted prompts/tools, structured-output enforcement | Rejected explicitly; not silently emulated |
 | OpenAI prompt-cache identity, encrypted reasoning state, service tier, sampling/logprobs | Provider-specific and not transferable |
-| Crash recovery for an in-flight exchange | Not yet supported; watchdog recovery accepts new calls after restart |
+| SDK worker crash recovery | Automatic replacement and new-call recovery; interrupted in-memory exchanges require a Codex retry/continue |
+| Durable in-flight crash resume | Not yet supported; no silent replay of prompts or side effects |
 
 This is a compatibility relay, not byte-for-byte identity with OpenAI's native
 serving stack. Provider-side encrypted reasoning state, provider compaction,
@@ -779,6 +836,8 @@ request uses the native OpenAI provider or this relay.
   outside the local machine.
 - `runtime/`, `node_modules/`, logs, PIDs, event history, and config backups are
   ignored and must never be committed.
+- Node diagnostic reports, heap snapshots, and crash dumps are also ignored;
+  they can contain environment secrets and must not be attached to public issues.
 - Disable the relay when it is not needed.
 
 ## Terms and project status
