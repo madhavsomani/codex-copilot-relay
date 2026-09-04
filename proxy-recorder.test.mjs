@@ -5,6 +5,19 @@ import path from "node:path";
 import test from "node:test";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
 
+test("records structured relay failures with their actual message and code", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-error-test-"));
+  try {
+    const recorder = new ProxyRecorder({ filePath: path.join(directory, "events.jsonl") });
+    const record = recorder.start({ body: {model:"test"}, inputBytes: 1, streaming: true });
+    recorder.finish(record, { status: "failed", error: {
+      message: "Relay session capacity reached", code: "relay_session_capacity", type: "server_error",
+    } });
+    assert.equal(record.error.message, "Relay session capacity reached");
+    assert.equal(record.error.code, "relay_session_capacity");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("records bounded sanitized input, Copilot replay, and output data", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-copilot-recorder-"));
   const filePath = path.join(directory, "events.jsonl");

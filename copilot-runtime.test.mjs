@@ -134,6 +134,23 @@ test("idle recycling bounds worker lifetime but never rotates retained sessions"
   await runtime.stop();
 });
 
+test("a 12-hour tool wait survives the worker-age threshold; recycle waits for release", async () => {
+  let clock=0;
+  const { runtime, clients } = fixture({ now: () => clock });
+  await runtime.start();
+  const lease=await runtime.createSession({});
+  for(let hour=1;hour<=12;hour++) {
+    clock=hour*60*60*1000;
+    assert.equal((await runtime.checkHealth()).ok,true);
+    assert.equal(clients.length,1);
+    assert.equal(runtime.snapshot().activeSessions,1);
+  }
+  runtime.release(lease.session);
+  await runtime.ready();
+  assert.equal(clients.length,2);
+  await runtime.stop();
+});
+
 test("shutdown cannot be undone by an in-progress recovery", async () => {
   let releaseStart;
   const { runtime, clients } = fixture();

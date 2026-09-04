@@ -112,7 +112,7 @@ flowchart LR
   subgraph Relay["Node relay on 127.0.0.1:4144"]
     HTTP["HTTP router<br/>server.mjs"]
     Core["Protocol and context adapter<br/>bridge-core.mjs"]
-    Exchange["Exchange registry<br/>one SDK session per initial request"]
+    Exchange["Exchange registry<br/>task-owned SDK sessions"]
     Supervisor["SDK worker supervisor<br/>copilot-runtime.mjs"]
     Stream["Responses stream adapter<br/>ordered SSE and heartbeats"]
     Recorder["Sanitized recorder<br/>metrics and live events"]
@@ -641,6 +641,7 @@ npm test
 .\sdk-process-health.test.ps1
 npm run probe:codex-heartbeat
 npm run probe:sdk-recovery -- --model gpt-5.6-luna
+npm run probe:session-churn -- --model gpt-5.6-luna --rounds 80
 npm run probe:client-disconnect -- --url http://127.0.0.1:4144 --model gpt-5.6-sol
 npm run probe:stream -- --url http://127.0.0.1:4144/v1
 npm run probe:compatibility -- --url http://127.0.0.1:4144/v1 --model gpt-5.6-sol
@@ -673,6 +674,13 @@ verified Copilot worker during a second streaming request, and verifies automati
 replacement, dead-session cleanup, terminal SSE failure, streaming, a tool chain,
 and four parallel requests. It never targets the persistent relay on port 4144.
 
+`probe:session-churn` starts a separate two-slot relay, holds one slow tool, and
+replaces the other task's history 80 times (configurable with `--rounds`). It must
+never exceed two retained SDK sessions, must resume both final tool results, and
+must recycle the worker only after both tasks release it. Unit tests additionally
+exercise 1,001 history replacements, 10,000 response lookups, and a simulated
+12-hour wait. These are regression tests, not a claim of a real 12-hour soak run.
+
 The default 13-hour outer-tool result window lets a single Codex exchange wait
 through a 12-hour local render, browser operation, or child-agent task. It does
 not create artificial follow-up turns after Codex has genuinely completed a
@@ -700,6 +708,25 @@ Overrides: `BRIDGE_MAX_COPILOT_SESSIONS` (2-128),
 `BRIDGE_SDK_RECYCLE_AFTER_SESSIONS` (8-4096), and
 `BRIDGE_SDK_PROBE_INTERVAL_MS` (500-60000; default 10000). A slow ping marks the
 backend degraded; it is not by itself permission to kill healthy resumable work.
+
+Codex can abandon a pending tool call when it compacts its history, accepts a
+steering message, or receives inter-agent input. Starting another SDK session
+without retiring that old wait used to consume a slot for the full 13-hour lease.
+The relay now keys sessions by Codex's `thread-id` / `client_metadata.thread_id`
+(with auxiliary request kinds kept separate). A **fresh request** from the same
+task retires its obsolete parked session before admission; an ordinary matching
+tool result continues the existing session. Active streams and other tasks' tool
+waits are never evicted to make room. Child agents cannot accidentally continue a
+parent's pending call copied into their history. Anonymous clients retain the
+bounded legacy behavior and should send a distinct UUID thread identity per task.
+Do not reuse a parent identity for concurrent child agents.
+
+Only the latest response lookup is retained per exchange. `/health` exposes
+`exchangeStates` (streaming, waiting-for-tools, identified tasks, anonymous
+sessions), plus `sdk.availableSessionSlots` and `sdk.canAcceptNewSessions`.
+Backend liveness and admission capacity are separate: a healthy worker can be
+fully occupied by legitimate tool waits. Dashboard errors retain their actual
+message and code rather than displaying `[object Object]`.
 
 In-memory exchanges cannot survive a relay process crash, machine
 sleep/network loss, an upstream Copilot outage, quota exhaustion, or a model

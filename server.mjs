@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
+import { requestOwner, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
 import { DASHBOARD_HTML } from "./dashboard.mjs";
 import {
   BlankCompletionGuard,
@@ -181,6 +182,7 @@ let quotaRefreshPromise = null;
 let quotaRefreshTimer = null;
 
 const exchanges = new Set();
+const ownership = new ExchangeOwnership(exchanges);
 const exchangesByCallId = new Map();
 const exchangesByResponseId = new Map();
 let sdkRuntime;
@@ -523,9 +525,11 @@ class Exchange {
     requiresAction = false,
     toolCount = 0,
     generation = 0,
+    owner = null,
   } = {}) {
     this.session = session;
     this.generation = generation;
+    this.owner = owner;
     this.model = model;
     this.toolMetadata = toolMetadata;
     this.cleanupCallback = cleanup;
@@ -954,7 +958,7 @@ class Exchange {
       : this.usageFromEvent(this.lastToolMessage);
     const responseId = this.sink.responseId;
     this.sink.complete(output, usage, relayUsage);
-    exchangesByResponseId.set(responseId, this);
+    rememberResponse(exchangesByResponseId, this, responseId);
     this.sink = null;
     this.lastToolMessage = null;
     this.streamedContent = "";
@@ -1197,7 +1201,7 @@ function resolveRelayRequest(body) {
   };
 }
 
-async function startExchange(body, sink, requestCompatibility) {
+async function startExchange(body, sink, requestCompatibility, owner = null) {
   const declarations = requestCompatibility.declarations;
   const sessionTools = requestCompatibility.sessionTools;
   const serializedToolDefinitions = JSON.stringify(sessionTools);
@@ -1243,6 +1247,10 @@ async function startExchange(body, sink, requestCompatibility) {
     ? { limits: { max_output_tokens: requestCompatibility.maxOutputTokens } }
     : undefined;
 
+  if (sink.closed) return;
+  const retired = await ownership.retireSuperseded(owner);
+  if (retired) log("exchange.superseded", { count: retired, reason: "fresh_task_context" });
+  if (sink.closed) return;
   const { session, generation } = await sdkRuntime.createSession({
     clientName: "codex-copilot-responses-bridge",
     model,
@@ -1296,6 +1304,7 @@ async function startExchange(body, sink, requestCompatibility) {
       requiresAction: sessionInput.requiresAction,
       toolCount: sessionTools.length,
       generation,
+      owner,
     },
   );
   exchanges.add(exchange);
@@ -1375,7 +1384,7 @@ async function continueExchange(body, sink, toolOutputs) {
 
   sink.setModel(exchange.model);
   if (!exchange.attachSink(sink)) return;
-  exchangesByResponseId.set(sink.responseId, exchange);
+  rememberResponse(exchangesByResponseId, exchange, sink.responseId);
   sink.record.continuedFrom = body.previous_response_id ?? null;
   recorder.replay(sink.record, {
     phase: "continuation",
@@ -1408,6 +1417,7 @@ const server = http.createServer(async (request, response) => {
       model: defaultModel,
       models: availableOpenAiModels,
       activeExchanges: exchanges.size,
+      exchangeStates: ownership.snapshot(),
       compatibility: {
         contextTier: defaultModelCompatibility.contextTier,
         maxPromptTokens: defaultModelCompatibility.maxPromptTokens,
@@ -1566,8 +1576,10 @@ const server = http.createServer(async (request, response) => {
 
   const body = parsedBody.body;
   let requestCompatibility;
+  let owner;
   try {
     requestCompatibility = resolveRelayRequest(body);
+    owner = requestOwner(body, request.headers);
   } catch (error) {
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
     const code = typeof error?.code === "string" ? error.code : "invalid_request_error";
@@ -1587,13 +1599,16 @@ const server = http.createServer(async (request, response) => {
   });
   const sink = new ResponseSink(response, body, record);
   try {
-    const toolOutputs = extractToolOutputs(body)
-      .filter((item) => exchangesByCallId.has(item.call_id));
-    if (toolOutputs.length) {
-      await continueExchange(body, sink, toolOutputs);
-    } else {
-      await startExchange(body, sink, requestCompatibility);
-    }
+    await ownership.run(owner, async () => {
+      if (sink.closed) return;
+      const toolOutputs = extractToolOutputs(body)
+        .filter((item) => ownsExchange(exchangesByCallId.get(item.call_id), owner));
+      if (toolOutputs.length) {
+        await continueExchange(body, sink, toolOutputs);
+      } else {
+        await startExchange(body, sink, requestCompatibility, owner);
+      }
+    });
   } catch (error) {
     sink.fail(error);
   }

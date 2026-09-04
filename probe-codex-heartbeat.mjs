@@ -106,6 +106,11 @@ const server = http.createServer(async (request, response) => {
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     capturedRequestShape = {
       keys: Object.keys(body).sort(),
+      headerNames: Object.keys(request.headers).sort(),
+      clientMetadataKeys: Object.keys(body.client_metadata ?? {}).sort(),
+      threadHeaderMatchesMetadata: request.headers["thread-id"] === body.client_metadata?.thread_id,
+      requestKind: (() => { try { return JSON.parse(request.headers["x-codex-turn-metadata"] ?? "{}").request_kind ?? null; } catch { return null; } })(),
+      turnMetadataKeys: (() => { try { return Object.keys(JSON.parse(request.headers["x-codex-turn-metadata"] ?? "{}")); } catch { return []; } })(),
       reasoning: body.reasoning ?? null,
       text: body.text ?? null,
       toolChoice: body.tool_choice ?? null,

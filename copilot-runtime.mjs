@@ -69,6 +69,8 @@ export class CopilotRuntime {
       activeSessions: this.sessions.size,
       creatingSessions: this.creating,
       maxSessions: this.maxSessions,
+      availableSessionSlots: Math.max(0, this.maxSessions - this.sessions.size - this.creating),
+      canAcceptNewSessions: this.state === "ready" && this.sessions.size + this.creating < this.maxSessions,
       sessionsCreatedThisWorker: this.created,
       recycleAfterSessions: this.recycleAfterSessions,
       recycleAfterMs: this.recycleAfterMs,

@@ -66,7 +66,8 @@ function payloadWithinLimit(value, options) {
 function safeError(error, options) {
   return payloadWithinLimit({
     name: error?.name ?? "Error",
-    message: error instanceof Error ? error.message : String(error),
+    message: typeof error?.message === "string" ? error.message : String(error),
+    ...(typeof error?.code === "string" ? { code: error.code } : {}),
   }, options);
 }
 
