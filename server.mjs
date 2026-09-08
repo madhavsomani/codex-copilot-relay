@@ -27,6 +27,12 @@ import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
 import {
+  createModelRoutingPolicy,
+  MODEL_ROUTING_LOCKED_DEFAULT,
+  MODEL_ROUTING_PER_REQUEST,
+  resolveModelRouting,
+} from "./model-routing.mjs";
+import {
   assertSerializedContextWithinLimit,
   bridgeContextDefaults,
   buildSessionInput,
@@ -60,6 +66,10 @@ const relayVersion = (() => {
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
 const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-5.6-sol";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
+const modelRoutingPolicy = createModelRoutingPolicy({
+  mode: process.env.BRIDGE_MODEL_ROUTING_MODE ?? MODEL_ROUTING_PER_REQUEST,
+  lockedReasoningEffort: process.env.BRIDGE_LOCKED_REASONING_EFFORT ?? null,
+});
 
 function environmentInteger(name, fallback, minimum, maximum) {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
@@ -1135,18 +1145,23 @@ void refreshCopilotQuota({ force: true });
 quotaRefreshTimer = setInterval(() => void refreshCopilotQuota({ force: true }), quotaRefreshIntervalMs);
 quotaRefreshTimer.unref?.();
 
-function resolveModel(requestedModel) {
-  if (typeof requestedModel === "string" && requestedModel) {
-    if (availableModelIds.has(requestedModel) && requestedModel.startsWith("gpt-")) {
-      return requestedModel;
+function resolveRouting(requestedModel, requestedReasoningEffort) {
+  const routing = resolveModelRouting({
+    requestedModel,
+    defaultModel,
+    requestedReasoningEffort,
+    policy: modelRoutingPolicy,
+  });
+  if (modelRoutingPolicy.mode === MODEL_ROUTING_PER_REQUEST && routing.requestedModel) {
+    if (availableModelIds.has(routing.requestedModel) && routing.requestedModel.startsWith("gpt-")) {
+      return routing;
     }
     throw new RequestCompatibilityError(
       "model",
-      `Model ${JSON.stringify(requestedModel)} is not exposed by the authenticated GitHub Copilot account.`,
+      `Model ${JSON.stringify(routing.requestedModel)} is not exposed by the authenticated GitHub Copilot account.`,
     );
   }
-
-  return defaultModel;
+  return routing;
 }
 
 function selectSessionTools(declarations, toolChoice) {
@@ -1182,7 +1197,8 @@ function resolveRelayRequest(body) {
   const requestCompatibility = resolveRequestCompatibility(body);
   const declarations = extractToolDeclarations(body);
   const sessionTools = selectSessionTools(declarations, requestCompatibility.toolChoice);
-  const model = resolveModel(body?.model);
+  const modelRouting = resolveRouting(body?.model, requestCompatibility.reasoningEffort);
+  const model = modelRouting.selectedModel;
   const modelCompatibility = resolveModelCompatibility(modelsById.get(model));
   if (requestCompatibility.maxOutputTokens
     && modelCompatibility.maxOutputTokens
@@ -1197,6 +1213,8 @@ function resolveRelayRequest(body) {
     declarations,
     model,
     modelCompatibility,
+    modelRouting,
+    reasoningEffort: modelRouting.reasoningEffort,
     sessionTools,
   };
 }
@@ -1324,6 +1342,7 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
       toolChoice: requestCompatibility.toolChoice,
       truncation: requestCompatibility.truncation,
     },
+    modelRouting: requestCompatibility.modelRouting,
     workingDirectory: sessionInput.workingDirectory,
     prompt: sessionInput.prompt,
     systemContent: sessionInput.systemContent,
@@ -1418,6 +1437,14 @@ const server = http.createServer(async (request, response) => {
       models: availableOpenAiModels,
       activeExchanges: exchanges.size,
       exchangeStates: ownership.snapshot(),
+      routing: {
+        mode: modelRoutingPolicy.mode,
+        lockedModel: modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT
+          ? defaultModel
+          : null,
+        lockedReasoningEffort: modelRoutingPolicy.lockedReasoningEffort,
+        requestedModelPreserved: true,
+      },
       compatibility: {
         contextTier: defaultModelCompatibility.contextTier,
         maxPromptTokens: defaultModelCompatibility.maxPromptTokens,

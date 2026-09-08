@@ -41,8 +41,8 @@ try {
         if (@($state.PSObject.Properties.Name) -contains 'ConfigPath' -and -not [string]::IsNullOrWhiteSpace([string]$state.ConfigPath)) {
             $configPath = [IO.Path]::GetFullPath([string]$state.ConfigPath)
         }
-        if ([int]$state.Port -ne $Port -or [string]$state.Model -ne $Model) {
-            throw "Codex Copilot proxy is already enabled on port $($state.Port) using $($state.Model). Disable it before changing the port or model."
+        if ([int]$state.Port -ne $Port) {
+            throw "Codex Copilot proxy is already enabled on port $($state.Port). Disable it before changing the port."
         }
         $statePropertyNames = @($state.PSObject.Properties.Name)
         if ($statePropertyNames -contains 'BackupPath') {

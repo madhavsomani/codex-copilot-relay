@@ -241,6 +241,10 @@ or product changes can require updates to the relay.
 - Copilot SDK session idling disabled and automatic context compaction enabled
 - Model-advertised long-context tier selected explicitly when the authenticated
   Copilot model exposes it
+- Astra compatibility lock for Windows installations configured with
+  `gpt-6-astra`: persisted Sol/Terra choices from parent, review, and child-agent
+  tasks remain visible as `requestedModel`, while every SDK session uses Astra
+  at `xhigh`; installations configured with another model keep per-request routing
 - Outer Codex developer instructions, task memory, roles, reasoning effort, and
   tool schemas remain the source of truth; duplicate Copilot-native memory,
   built-ins, config discovery, and custom instructions stay disabled
@@ -469,6 +473,17 @@ when you do not want the Windows watchdog, use this manual flow.
    ```bash
    BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-5.6-sol node server.mjs
    ```
+
+   To make Astra the compatibility target even when an existing Codex thread
+   still sends a persisted Sol or Terra model, start with the explicit lock:
+
+   ```bash
+   BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-6-astra BRIDGE_MODEL_ROUTING_MODE=locked-default BRIDGE_LOCKED_REASONING_EFFORT=xhigh node server.mjs
+   ```
+
+   The Windows Start/Repair flow enables that lock automatically when its
+   `-Model` is `gpt-6-astra`. `/health` exposes the active routing policy, and
+   dashboard records retain both the requested and selected models.
 
 4. Update the existing top-level `model` and `model_provider` values in
    `~/.codex/config.toml`, then add the provider block once:
@@ -817,7 +832,7 @@ marked for deferred loading.
 | Function/custom/namespace tools and continuations | Supported; execution and approval stay in Codex |
 | Parallel independent Codex agents | Supported with one Copilot SDK session per initial request |
 | Local Codex parent/child-agent messages | Supported in both directions; Codex collaboration payloads are preserved while provider-encrypted reasoning stays opaque |
-| Reasoning effort | Forwarded to Copilot |
+| Reasoning effort | Forwarded to Copilot; an explicit locked-default policy can pin it for all requests |
 | Readable reasoning summary | Forwarded when Copilot emits it; the provider may return reasoning usage without summary text |
 | Long context | Token-budgeted against the selected Copilot model, with salience-aware local compaction |
 | Data-URL images | Supported within the selected model's advertised image limits |

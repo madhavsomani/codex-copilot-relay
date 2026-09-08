@@ -13,12 +13,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $bridgeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $startScript = Join-Path $bridgeRoot 'Start-Codex-CopilotProxy.ps1'
+$configHelper = Join-Path $bridgeRoot 'Codex-Copilot-Config.ps1'
 $packagePath = Join-Path $bridgeRoot 'package.json'
 $consoleScript = [IO.Path]::GetFullPath((Join-Path $bridgeRoot 'Show-Codex-CopilotGateway.ps1'))
 $runtimeDirectory = Join-Path $bridgeRoot 'runtime'
 $pidPath = Join-Path $runtimeDirectory 'codex-copilot-watchdog.pid'
 $consolePidPath = Join-Path $runtimeDirectory 'codex-copilot-console.pid'
 $logPath = Join-Path $runtimeDirectory 'watchdog.log'
+$statePath = Join-Path $runtimeDirectory 'codex-copilot-proxy.state.json'
 $maxWatchdogLogBytes = 8MB
 $auxiliaryLogPaths = @(
     (Join-Path $runtimeDirectory 'proxy.process.stdout.log'),
@@ -52,6 +54,30 @@ function Get-WatchedHealth {
     catch {
         return $null
     }
+}
+
+function Sync-WatchedConfig {
+    if (-not (Test-Path -LiteralPath $configHelper -PathType Leaf)) {
+        throw "Config helper not found: $configHelper"
+    }
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        throw "Managed state not found: $statePath"
+    }
+
+    . $configHelper
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ([int]$state.Port -ne $Port -or [string]$state.Model -ne $Model) {
+        throw "Managed state does not match watchdog target $Port/$Model."
+    }
+    Assert-CodexCopilotConfigBackup -State $state | Out-Null
+    $configPath = [IO.Path]::GetFullPath([string]$state.ConfigPath)
+    $state = Set-CodexCopilotConfig `
+        -ConfigPath $configPath `
+        -Port $Port `
+        -Model $Model `
+        -RestoreState $state
+    $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
+    return $configPath
 }
 
 function Limit-AuxiliaryLogs {
@@ -131,6 +157,8 @@ try {
     Set-Content -LiteralPath $pidPath -Value ([string]$PID) -Encoding ascii
     Write-WatchdogLog "Watchdog started for 127.0.0.1:$Port using $Model (PID $PID)."
     $lastSdkState = ''
+    $lastTransitionState = ''
+    $configSynchronized = $false
 
     while ($true) {
         Limit-AuxiliaryLogs
@@ -144,7 +172,19 @@ try {
             }
             $lastSdkState = $sdkState
         }
+        elseif (
+            $health -and $health.ok -and $health.model -ne $Model -and
+            ($health.PSObject.Properties.Name -contains 'activeExchanges') -and
+            [int]$health.activeExchanges -gt 0
+        ) {
+            $transitionState = "$($health.version)/$($health.model) -> $expectedVersion/$Model with $($health.activeExchanges) active exchange(s)"
+            if ($transitionState -ne $lastTransitionState) {
+                Write-WatchdogLog "Model transition pending: $transitionState."
+            }
+            $lastTransitionState = $transitionState
+        }
         elseif (-not ($health -and $health.ok -and $health.model -eq $Model)) {
+            $lastTransitionState = ''
             try {
                 $startOutput = (& $startScript -Port $Port -Model $Model 2>&1 | Out-String).Trim()
                 Write-WatchdogLog "Recovery succeeded. $startOutput"
@@ -175,6 +215,22 @@ try {
             }
         }
         if ($health -and $health.ok) { $lastSdkState = '' }
+        if ($health -and $health.ok -and $health.model -eq $Model) { $lastTransitionState = '' }
+        if ($health -and $health.ok -and $health.model -eq $Model) {
+            if (-not $configSynchronized) {
+                try {
+                    $configPath = Sync-WatchedConfig
+                    Write-WatchdogLog "Managed Codex route synchronized: $configPath -> 127.0.0.1:$Port -> $Model."
+                    $configSynchronized = $true
+                }
+                catch {
+                    Write-WatchdogLog "Managed Codex route synchronization failed: $($_.Exception.Message)"
+                }
+            }
+        }
+        else {
+            $configSynchronized = $false
+        }
         if ($health -and $health.ok -and $health.model -eq $Model -and -not (Test-GatewayConsoleProcess)) {
             try {
                 $consolePid = Start-GatewayConsole

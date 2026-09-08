@@ -22,6 +22,8 @@ $stdoutLog = Join-Path $runtimeDirectory 'proxy.stdout.log'
 $processStdoutLog = Join-Path $runtimeDirectory 'proxy.process.stdout.log'
 $stderrLog = Join-Path $runtimeDirectory 'proxy.stderr.log'
 . (Join-Path $bridgeRoot 'sdk-process-health.ps1')
+$expectedRoutingMode = if ($Model -eq 'gpt-6-astra') { 'locked-default' } else { 'per-request' }
+$expectedLockedReasoningEffort = if ($Model -eq 'gpt-6-astra') { 'xhigh' } else { $null }
 
 function Test-LocalPortInUse {
     param([int]$LocalPort)
@@ -50,6 +52,24 @@ function Get-ProxyHealth {
     catch {
         return $null
     }
+}
+
+function Test-ExpectedRouting {
+    param([AllowNull()][psobject]$Health)
+
+    if (-not $Health -or -not ($Health.PSObject.Properties.Name -contains 'routing') -or -not $Health.routing) {
+        return $false
+    }
+    if ([string]$Health.routing.mode -ne $expectedRoutingMode) {
+        return $false
+    }
+    if ($expectedRoutingMode -eq 'locked-default') {
+        return (
+            [string]$Health.routing.lockedModel -eq $Model -and
+            [string]$Health.routing.lockedReasoningEffort -eq $expectedLockedReasoningEffort
+        )
+    }
+    return $true
 }
 
 function Stop-ConfirmedDeadLegacyBackend {
@@ -107,14 +127,14 @@ function Stop-OutdatedManagedProxy {
     }
     for ($sample = 0; $sample -lt 3; $sample++) {
         $current = if ($sample -eq 0) { $Health } else { Get-ProxyHealth }
-        if (-not ($current -and $current.ok -and $current.model -eq $Model)) {
+        if (-not ($current -and $current.ok)) {
             throw 'The existing relay changed state during the safe-update check. Run Start or Repair again.'
         }
         if (-not ($current.PSObject.Properties.Name -contains 'activeExchanges')) {
             throw 'The existing relay does not report active exchanges. Refusing an unsafe update restart.'
         }
         if ([int]$current.activeExchanges -gt 0) {
-            $message = "Relay update $reportedVersion -> $ExpectedVersion is ready, but $($current.activeExchanges) exchange(s) are still active."
+            $message = "Relay transition $reportedVersion/$($current.model) -> $ExpectedVersion/$Model is ready, but $($current.activeExchanges) exchange(s) are still active."
             if ($DeferUpdateWhenBusy) {
                 return [pscustomobject]@{
                     Stopped = $false
@@ -149,7 +169,7 @@ function Stop-OutdatedManagedProxy {
     }
     return [pscustomobject]@{
         Stopped = $true
-        Message = "Stopped idle relay version $reportedVersion so version $ExpectedVersion can start."
+        Message = "Stopped idle relay $reportedVersion/$($Health.model) so $ExpectedVersion/$Model can start."
     }
 }
 
@@ -165,14 +185,18 @@ if ($RecoverDeadBackend) {
     Stop-ConfirmedDeadLegacyBackend
     $existingHealth = $null
 }
-if ($existingHealth -and $existingHealth.ok -and $existingHealth.model -eq $Model) {
+if ($existingHealth -and $existingHealth.ok) {
     $existingVersion = if ($existingHealth.PSObject.Properties.Name -contains 'version') {
         [string]$existingHealth.version
     }
     else {
         'legacy-unversioned'
     }
-    if ($existingVersion -eq $expectedVersion) {
+    if (
+        $existingVersion -eq $expectedVersion -and
+        $existingHealth.model -eq $Model -and
+        (Test-ExpectedRouting -Health $existingHealth)
+    ) {
         Write-Output "Codex Copilot proxy version $expectedVersion is already healthy on http://127.0.0.1:$Port using $Model."
         exit 0
     }
@@ -203,6 +227,8 @@ if ($telemetryBackup.Created) {
 $environmentNames = @(
     'BRIDGE_AUTH_TOKEN',
     'BRIDGE_DEFAULT_MODEL',
+    'BRIDGE_MODEL_ROUTING_MODE',
+    'BRIDGE_LOCKED_REASONING_EFFORT',
     'BRIDGE_PORT',
     'BRIDGE_RUNTIME_DIRECTORY',
     'BRIDGE_WORKING_DIRECTORY',
@@ -228,6 +254,13 @@ try {
     Remove-Item -LiteralPath 'Env:CODEX_COPILOT_BRIDGE_KEY' -ErrorAction SilentlyContinue
     $env:BRIDGE_PORT = [string]$Port
     $env:BRIDGE_DEFAULT_MODEL = $Model
+    $env:BRIDGE_MODEL_ROUTING_MODE = $expectedRoutingMode
+    if ($expectedLockedReasoningEffort) {
+        $env:BRIDGE_LOCKED_REASONING_EFFORT = $expectedLockedReasoningEffort
+    }
+    else {
+        Remove-Item -LiteralPath 'Env:BRIDGE_LOCKED_REASONING_EFFORT' -ErrorAction SilentlyContinue
+    }
     $env:BRIDGE_RUNTIME_DIRECTORY = $runtimeDirectory
     $env:BRIDGE_WORKING_DIRECTORY = $env:USERPROFILE
     $env:BRIDGE_EVENT_LOG_PATH = $stdoutLog
@@ -253,7 +286,10 @@ try {
             throw "The Copilot proxy exited during startup. Inspect $stderrLog."
         }
         $health = Get-ProxyHealth
-        if ($health -and $health.ok -and $health.model -eq $Model) {
+        if (
+            $health -and $health.ok -and $health.model -eq $Model -and
+            (Test-ExpectedRouting -Health $health)
+        ) {
             $ready = $true
             break
         }

@@ -94,10 +94,28 @@ try {
     if ($persistentStartText -notmatch 'DeferUpdateWhenBusy' -or $persistentStartText -notmatch 'Update deferred') {
         throw 'Persistent startup cannot keep a healthy older relay available while an update waits for active exchanges.'
     }
+    if (
+        $persistentStartText -match '\$existingHealth -and \$existingHealth\.ok -and \$existingHealth\.model -eq \$Model' -or
+        $persistentStartText -match '\$current -and \$current\.ok -and \$current\.model -eq \$Model'
+    ) {
+        throw 'Persistent startup still rejects a healthy managed relay solely because its model differs.'
+    }
+    if (
+        $persistentStartText -notmatch 'BRIDGE_MODEL_ROUTING_MODE' -or
+        $persistentStartText -notmatch 'BRIDGE_LOCKED_REASONING_EFFORT' -or
+        $persistentStartText -notmatch "gpt-6-astra'\) \{ 'locked-default'" -or
+        $persistentStartText -notmatch "gpt-6-astra'\) \{ 'xhigh'" -or
+        $persistentStartText -notmatch 'Test-ExpectedRouting'
+    ) {
+        throw 'Persistent startup does not enforce the Astra locked-default xhigh routing contract.'
+    }
 
     $enableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Enable-Codex-CopilotProxy.ps1') -Raw
     if ($enableText -notmatch 'DeferUpdateWhenBusy') {
         throw 'Enable/repair does not opt into a non-destructive deferred relay update.'
+    }
+    if ($enableText -match '\[string\]\$state\.Model -ne \$Model') {
+        throw 'Enable/repair still requires disablement before a same-port model transition.'
     }
     $installIndex = $enableText.IndexOf('Install-CodexCopilotAutoStart')
     $searchStart = [Math]::Max(0, $installIndex)
@@ -159,6 +177,13 @@ try {
     $watchText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Watch-Codex-CopilotProxy.ps1') -Raw
     if ($watchText -notmatch 'package\.json' -or $watchText -notmatch 'activeExchanges' -or $watchText -notmatch 'version') {
         throw 'The watchdog cannot promote a deferred relay update after exchanges become idle.'
+    }
+    if (
+        $watchText -notmatch 'Sync-WatchedConfig' -or
+        $watchText -notmatch 'Set-CodexCopilotConfig' -or
+        $watchText -notmatch '\$health\.model -eq \$Model'
+    ) {
+        throw 'The watchdog cannot reconcile the managed Codex route after a model transition.'
     }
 
     [IO.File]::WriteAllLines($configPath, $originalLines, [Text.UTF8Encoding]::new($false))
