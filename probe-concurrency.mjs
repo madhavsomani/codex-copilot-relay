@@ -20,7 +20,7 @@ async function probe(index) {
         role: "user",
         content: [{ type: "input_text", text: `Reply with exactly ${expected}` }],
       }],
-      reasoning: { effort: "minimal" },
+      reasoning: { effort: args.get("--reasoning") ?? "low" },
       stream: false,
     }),
   });

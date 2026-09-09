@@ -115,6 +115,8 @@ function emptyCounters() {
     copilotCostUnits: 0,
     apiDurationMs: 0,
     apiEquivalentUsd: 0,
+    pricedApiCalls: 0,
+    unpricedApiCalls: 0,
   };
 }
 
@@ -263,6 +265,8 @@ function normalizedUsageSummary(value) {
       copilotCostUnits: finiteNumber(item?.copilotCostUnits),
       apiDurationMs: finiteNumber(item?.apiDurationMs),
       apiEquivalentUsd: finiteNumber(item?.apiEquivalentUsd),
+      pricedApiCalls: finiteNumber(item?.pricedApiCalls),
+      unpricedApiCalls: finiteNumber(item?.unpricedApiCalls),
     }));
   }
   return output;
@@ -283,6 +287,8 @@ function usageCounterChanges(usage) {
     copilotCostUnits: value.copilotCostUnits,
     apiDurationMs: value.apiDurationMs,
     apiEquivalentUsd: value.apiEquivalentUsd,
+    pricedApiCalls: value.pricedApiCalls,
+    unpricedApiCalls: value.unpricedApiCalls,
   };
 }
 
@@ -298,6 +304,8 @@ function modelUsageCounterChanges(usage) {
     copilotCostUnits: finiteNumber(usage?.copilotCostUnits),
     apiDurationMs: finiteNumber(usage?.apiDurationMs),
     apiEquivalentUsd: finiteNumber(usage?.apiEquivalentUsd),
+    pricedApiCalls: finiteNumber(usage?.pricedApiCalls),
+    unpricedApiCalls: finiteNumber(usage?.unpricedApiCalls),
   };
 }
 
@@ -322,9 +330,9 @@ function incrementRollup(metrics, at, changes, fallback) {
 }
 
 function lightweightRecord(record) {
-  const errorMessage = typeof record?.error?.message === "string"
-    ? scrubString(record.error.message, 512)
-    : null;
+  const message = record?.error?.message ?? record?.errorSummary;
+  const errorMessage = typeof message === "string" ? scrubString(message, 512) : null;
+  const code = record?.error?.code ?? record?.errorCode;
   return {
     id: record.id,
     receivedAt: record.receivedAt ?? null,
@@ -343,6 +351,7 @@ function lightweightRecord(record) {
     previousResponseId: record.previousResponseId ?? null,
     continuedFrom: record.continuedFrom ?? null,
     errorSummary: errorMessage,
+    errorCode: typeof code === "string" ? scrubString(code, 120) : null,
     usage: record.usage ? normalizedUsageSummary(record.usage) : null,
     detailTier: "lightweight",
     detailAvailable: false,
@@ -827,6 +836,9 @@ export class ProxyRecorder {
       copilotCostUnits: lifetime.copilotCostUnits,
       apiDurationMs: lifetime.apiDurationMs,
       apiEquivalentUsd: lifetime.apiEquivalentUsd,
+      pricedApiCalls: lifetime.pricedApiCalls,
+      unpricedApiCalls: lifetime.unpricedApiCalls,
+      pricingUnknownApiCalls: Math.max(0, lifetime.sdkApiCalls - lifetime.pricedApiCalls - lifetime.unpricedApiCalls),
       avgLatencyMs: lifetime.latencySamples
         ? Math.round(lifetime.latencyTotalMs / lifetime.latencySamples)
         : null,

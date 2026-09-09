@@ -685,6 +685,41 @@ test("normalizes reasoning efforts for Copilot", () => {
   assert.equal(normalizeReasoningEffort("unknown"), "low");
 });
 
+test("preserves Responses easy input messages without an explicit type", () => {
+  const result = buildSessionInput({ input: [
+    { role: "developer", content: "EASY_DEVELOPER_MARKER" },
+    { role: "user", content: [{ type: "input_text", text: "EASY_USER_MARKER" }] },
+  ] });
+  assert.match(result.systemContent, /EASY_DEVELOPER_MARKER/);
+  assert.match(result.prompt, /EASY_USER_MARKER/);
+});
+
+test("live tool results forward the newest image as binary within model limits", () => {
+  const result = normalizeToolOutput({ output: [
+    { type: "input_text", text: "Inspect the latest screen" },
+    { type: "input_image", image_url: "data:image/png;base64,b2xk" },
+    { type: "input_image", image_url: "data:image/png;base64,bmV3" },
+  ] }, { maxImageAttachments: 1, maxSingleAttachmentBase64Chars: 100, maxAttachmentBase64Chars: 100 });
+  assert.equal(result.failed, false);
+  assert.equal(result.binaryResultsForLlm.length, 1);
+  assert.equal(result.binaryResultsForLlm[0].data, "bmV3");
+  assert.equal(result.binaryResultsForLlm[0].type, "image");
+  assert.equal(result.binaryResultsForLlm[0].mimeType, "image/png");
+  assert.match(result.text, /Inspect the latest screen/);
+  assert.match(result.text, /Image omitted/);
+  assert.doesNotMatch(result.text, /b2xk|bmV3|base64/);
+});
+
+test("tool image limits do not leak rejected base64 into prompt text", () => {
+  const item = { output: [{ type: "input_image", image_url: "data:image/png;base64,bmV3" }] };
+  for (const limits of [{maxImageAttachments: 0}, {maxSingleAttachmentBase64Chars: 2}, {maxAttachmentBase64Chars: 2}]) {
+    const result = normalizeToolOutput(item, limits);
+    assert.equal(result.binaryResultsForLlm, undefined);
+    assert.match(result.text, /Image omitted/);
+    assert.doesNotMatch(result.text, /bmV3/);
+  }
+});
+
 test("normalizes Codex reasoning summaries for the Copilot SDK", () => {
   assert.equal(normalizeReasoningSummary({ effort: "max", summary: "auto" }), "concise");
   assert.equal(normalizeReasoningSummary({ effort: "high", generate_summary: "detailed" }), "detailed");

@@ -5,6 +5,9 @@ for (let index = 2; index < process.argv.length; index += 2) {
 
 const baseUrl = args.get("--url") ?? "http://127.0.0.1:4144/v1";
 const cases = [
+  ...["image_generation", "computer_use_preview", "web_search", "file_search", "code_interpreter"].map(type => ({
+    name: `hosted_${type}`, body: { model: "gpt-6-astra", input: "test", tools: [{ type }] }, expectedParam: "tools",
+  })),
   {
     name: "stored_response",
     body: { model: "gpt-5.6-sol", store: true, input: "test" },

@@ -1,11 +1,22 @@
 const MODEL_BASE = "https://developers.openai.com/api/docs/models/";
 
 export const OPENAI_PRICING_SNAPSHOT = Object.freeze({
-  sourceDate: "2026-08-24",
+  sourceDate: "2026-09-09",
   currency: "USD",
   basis: "OpenAI standard API text-token list prices per 1 million tokens",
   disclaimer: "API-equivalent estimate only; not an OpenAI or GitHub charge and not a Copilot invoice.",
   models: Object.freeze({
+    "gpt-6-astra": {
+      inputUsdPerMillion: 10,
+      cachedInputUsdPerMillion: 1,
+      cacheWriteUsdPerMillion: 12.5,
+      outputUsdPerMillion: 50,
+      longContextThresholdTokens: 272_000,
+      longContextInputMultiplier: 2,
+      longContextOutputMultiplier: 1.5,
+      sourceDate: "2026-09-09",
+      sourceUrl: `${MODEL_BASE}gpt-6-astra`,
+    },
     "gpt-5-mini": {
       inputUsdPerMillion: 0.25,
       cachedInputUsdPerMillion: 0.025,
@@ -91,7 +102,7 @@ function resolvePrice(model) {
   if (exact) return { id: model, price: exact };
   const match = Object.keys(OPENAI_PRICING_SNAPSHOT.models)
     .sort((left, right) => right.length - left.length)
-    .find((id) => model.startsWith(`${id}-`));
+    .find((id) => model.startsWith(`${id}-`) && /^\d{4}-\d{2}-\d{2}$/.test(model.slice(id.length + 1)));
   return match ? { id: match, price: OPENAI_PRICING_SNAPSHOT.models[match] } : null;
 }
 
@@ -120,7 +131,7 @@ function estimateCall(event) {
     + (outputTokens * resolved.price.outputUsdPerMillion * outputMultiplier)
   ) / 1_000_000;
   return {
-    model: resolved.id,
+model: event.model,
     usd: round(usd),
     longContext,
     inputTokens,
@@ -185,7 +196,7 @@ export function publicPricingSnapshot(availableModels = []) {
     disclaimer: OPENAI_PRICING_SNAPSHOT.disclaimer,
     models: ids.map((id) => {
       const resolved = resolvePrice(id);
-      return resolved ? { id, ...resolved.price } : { id, unavailable: true };
+return resolved ? { id, sourceDate: "2026-08-24", ...resolved.price } : { id, unavailable: true };
     }),
   };
 }

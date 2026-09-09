@@ -13,7 +13,7 @@ const response = await fetch(`${baseUrl}/responses`, {
   body: JSON.stringify({
     model,
     stream: true,
-    reasoning: { effort: "none" },
+    reasoning: { effort: args.get("--reasoning") ?? "low" },
     input: [{
       type: "message",
       role: "user",
@@ -61,6 +61,7 @@ const report = {
   eventTypes: types,
   contiguousSequenceNumbers: contiguous,
   outputText,
+  error: events.at(-1)?.response?.error ?? null,
 };
 console.log(JSON.stringify(report, null, 2));
 if (!report.ok) process.exitCode = 1;

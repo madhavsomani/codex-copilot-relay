@@ -23,6 +23,7 @@ import {
   toResponsesUsage,
 } from "./copilot-telemetry.mjs";
 import { publicPricingSnapshot } from "./pricing.mjs";
+import { defaultEffort, routeEffort } from "./reasoning-routing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
@@ -64,7 +65,7 @@ const relayVersion = (() => {
   }
 })();
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
-const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-5.6-sol";
+const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-6-astra";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
 const modelRoutingPolicy = createModelRoutingPolicy({
   mode: process.env.BRIDGE_MODEL_ROUTING_MODE ?? MODEL_ROUTING_PER_REQUEST,
@@ -348,12 +349,13 @@ function authorized(request) {
 }
 
 class ResponseSink {
-  constructor(response, requestBody, record) {
+  constructor(response, requestBody, record, selectedModel, selectedEffort) {
     this.response = response;
-    this.requestBody = requestBody;
+    this.requestBody = selectedEffort ? { ...requestBody, reasoning: { ...requestBody.reasoning, effort: selectedEffort } } : requestBody;
     this.record = record;
     this.responseId = makeResponseId();
-    this.model = requestBody.model ?? "gpt-5.6-sol";
+    this.model = selectedModel ?? defaultModel;
+    recorder.setSelectedModel(record, this.model);
     this.streaming = requestBody.stream !== false;
     this.closed = false;
     this.stopHeartbeat = () => {};
@@ -378,7 +380,7 @@ class ResponseSink {
       this.eventStream = new ResponsesEventStream({
         responseId: this.responseId,
         model: this.model,
-        requestBody,
+        requestBody: this.requestBody,
         emit: (event) => writeSseEvent(response, event),
       });
       this.eventStream.start();
@@ -536,11 +538,15 @@ class Exchange {
     toolCount = 0,
     generation = 0,
     owner = null,
+    modelCompatibility = {},
+    reasoningEffort = null,
   } = {}) {
     this.session = session;
     this.generation = generation;
     this.owner = owner;
     this.model = model;
+    this.modelCompatibility = modelCompatibility;
+    this.reasoningEffort = reasoningEffort;
     this.toolMetadata = toolMetadata;
     this.cleanupCallback = cleanup;
     this.sink = null;
@@ -988,10 +994,14 @@ class Exchange {
     for (const output of outputs) {
       const call = this.pendingCalls.get(output.call_id);
       if (!call) continue;
-      const normalized = normalizeToolOutput(output);
+      const normalized = normalizeToolOutput(output, this.modelCompatibility);
       const payload = normalized.failed
         ? { requestId: call.requestId, error: normalized.text || "Outer Codex tool failed." }
-        : { requestId: call.requestId, result: normalized.text };
+        : { requestId: call.requestId, result: {
+          textResultForLlm: normalized.text,
+          resultType: "success",
+          ...(normalized.binaryResultsForLlm ? { binaryResultsForLlm: normalized.binaryResultsForLlm } : {}),
+        } };
       await this.session.rpc.tools.handlePendingToolCall(payload);
       this.armModelDeadline();
       this.pendingCalls.delete(output.call_id);
@@ -1152,7 +1162,7 @@ function resolveRouting(requestedModel, requestedReasoningEffort) {
     requestedReasoningEffort,
     policy: modelRoutingPolicy,
   });
-  if (modelRoutingPolicy.mode === MODEL_ROUTING_PER_REQUEST && routing.requestedModel) {
+  if (routing.requestedModel) {
     if (availableModelIds.has(routing.requestedModel) && routing.requestedModel.startsWith("gpt-")) {
       return routing;
     }
@@ -1200,6 +1210,11 @@ function resolveRelayRequest(body) {
   const modelRouting = resolveRouting(body?.model, requestCompatibility.reasoningEffort);
   const model = modelRouting.selectedModel;
   const modelCompatibility = resolveModelCompatibility(modelsById.get(model));
+  const effort = routeEffort(modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT
+    ? modelRouting.reasoningEffort : body.reasoning?.effort, modelsById.get(model));
+  modelRouting.requestedReasoningEffort = body.reasoning?.effort ?? null;
+  modelRouting.reasoningEffort = effort.effort;
+  modelRouting.reasoningCapped = effort.capped;
   if (requestCompatibility.maxOutputTokens
     && modelCompatibility.maxOutputTokens
     && requestCompatibility.maxOutputTokens > modelCompatibility.maxOutputTokens) {
@@ -1294,9 +1309,12 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     enableFileChangeTracking: false,
     enableSessionStore: false,
     memory: { enabled: false },
+    // Codex owns output artifacts. Keep our bounded tool text in the model context
+    // instead of replacing it with a Copilot-private temp-file reference.
+    largeOutput: { enabled: false },
     infiniteSessions: {
-      enabled: true,
-      backgroundCompactionThreshold: 0.8,
+      enabled: requestCompatibility.useHistoryCompaction,
+      backgroundCompactionThreshold: bridgeContextDefaults.aggregateTargetRatio,
       bufferExhaustionThreshold: 0.95,
     },
     tools: sessionTools,
@@ -1323,6 +1341,8 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
       toolCount: sessionTools.length,
       generation,
       owner,
+      modelCompatibility,
+      reasoningEffort,
     },
   );
   exchanges.add(exchange);
@@ -1408,6 +1428,7 @@ async function continueExchange(body, sink, toolOutputs) {
   recorder.replay(sink.record, {
     phase: "continuation",
     model: exchange.model,
+    reasoningEffort: exchange.reasoningEffort,
     previousResponseId: body.previous_response_id ?? null,
     toolOutputs,
   });
@@ -1435,6 +1456,11 @@ const server = http.createServer(async (request, response) => {
       provider: "github-copilot-sdk",
       model: defaultModel,
       models: availableOpenAiModels,
+      modelCapabilities: Object.fromEntries(availableOpenAiModels.map(id => [id, {
+        ...resolveModelCompatibility(modelsById.get(id)),
+        supportedReasoningEfforts: modelsById.get(id)?.supportedReasoningEfforts ?? [],
+        defaultReasoningEffort: defaultEffort(modelsById.get(id)),
+      }])),
       activeExchanges: exchanges.size,
       exchangeStates: ownership.snapshot(),
       routing: {
@@ -1447,6 +1473,8 @@ const server = http.createServer(async (request, response) => {
       },
       compatibility: {
         contextTier: defaultModelCompatibility.contextTier,
+        supportedReasoningEfforts: modelsById.get(defaultModel)?.supportedReasoningEfforts ?? [],
+        defaultReasoningEffort: defaultEffort(modelsById.get(defaultModel)),
         maxPromptTokens: defaultModelCompatibility.maxPromptTokens,
         maxOutputTokens: defaultModelCompatibility.maxOutputTokens,
         maxContextWindowTokens: defaultModelCompatibility.maxContextWindowTokens,
@@ -1455,6 +1483,7 @@ const server = http.createServer(async (request, response) => {
           defaultModelCompatibility.maxSingleAttachmentBase64Chars,
         outerCodexInstructions: "forwarded",
         outerCodexTools: "declaration-only; execution remains in Codex",
+        toolResultImages: "binary image results forwarded on live tool continuations within model limits",
         outerCodexMemory: "forwarded through request instructions",
         assistantMessagePhase: "preserved",
         readableReasoningSummaries: "forwarded when emitted by Copilot",
@@ -1470,6 +1499,8 @@ const server = http.createServer(async (request, response) => {
         exchangeTimeoutMs,
         exchangeTimeoutMode: "sliding",
         outerToolTimeoutMs: toolResultTimeoutMs,
+        toolResultTextMaxBytes: 65536,
+        sdkLargeOutputOffloading: false,
         copilotSessionIdleTimeoutSeconds,
         maxCopilotSessions,
         sdkProbeIntervalMs,
@@ -1479,6 +1510,9 @@ const server = http.createServer(async (request, response) => {
         responsesStreamingLifecycle: "full",
         sdkSystemMessageMode: "replace",
         sdkAutomaticContextCompaction: true,
+        sdkBackgroundCompactionThreshold: bridgeContextDefaults.aggregateTargetRatio,
+        sdkBufferExhaustionThreshold: 0.95,
+        truncationDisabled: "disables relay history compaction and SDK automatic compaction",
         contextGuard: {
           ...bridgeContextDefaults,
           budgetMode: defaultModelCompatibility.maxPromptTokens
@@ -1624,12 +1658,18 @@ const server = http.createServer(async (request, response) => {
     inputBytes: parsedBody.bytes,
     streaming: body?.stream !== false,
   });
-  const sink = new ResponseSink(response, body, record);
+  let sink;
   try {
     await ownership.run(owner, async () => {
-      if (sink.closed) return;
+      if (response.destroyed) return;
       const toolOutputs = extractToolOutputs(body)
         .filter((item) => ownsExchange(exchangesByCallId.get(item.call_id), owner));
+      // Reject overlap before sending HTTP 200/SSE; preserve the original stream.
+      if (!toolOutputs.length) await ownership.retireSuperseded(owner);
+      if (response.destroyed) return;
+      const continuation = toolOutputs.length ? exchangesByCallId.get(toolOutputs[0].call_id) : null;
+      sink = new ResponseSink(response, body, record, continuation?.model ?? requestCompatibility.model,
+        continuation?.reasoningEffort ?? requestCompatibility.reasoningEffort);
       if (toolOutputs.length) {
         await continueExchange(body, sink, toolOutputs);
       } else {
@@ -1637,7 +1677,17 @@ const server = http.createServer(async (request, response) => {
       }
     });
   } catch (error) {
-    sink.fail(error);
+    if (sink) sink.fail(error, error?.code ?? "bridge_error");
+    else {
+      recorder.finish(record, {status:"failed", error, selectedModel:requestCompatibility.model});
+      sendJson(response, Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+        errorPayload(error, error?.code ?? "bridge_error"));
+    }
+  } finally {
+    if (!sink && response.destroyed && record.status === "active") {
+      recorder.finish(record, {status:"failed", selectedModel:requestCompatibility.model,
+        error:{message:"Codex client disconnected while waiting for request admission.",code:"client_disconnected"}});
+    }
   }
 });
 

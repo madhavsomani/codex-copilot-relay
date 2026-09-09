@@ -27,6 +27,7 @@ try {
     name: selected.name,
     supportedReasoningEfforts: selected.supportedReasoningEfforts,
     defaultReasoningEffort: selected.defaultReasoningEffort,
+    capabilities: selected.capabilities,
     billing: selected.billing,
   }, null, 2)}\n`);
 } finally {

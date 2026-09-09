@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-5.6-luna',
+    [string]$Model = 'gpt-6-astra',
 
     [switch]$NoDashboard
 )

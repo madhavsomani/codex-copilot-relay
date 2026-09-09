@@ -241,10 +241,9 @@ or product changes can require updates to the relay.
 - Copilot SDK session idling disabled and automatic context compaction enabled
 - Model-advertised long-context tier selected explicitly when the authenticated
   Copilot model exposes it
-- Astra compatibility lock for Windows installations configured with
-  `gpt-6-astra`: persisted Sol/Terra choices from parent, review, and child-agent
-  tasks remain visible as `requestedModel`, while every SDK session uses Astra
-  at `xhigh`; installations configured with another model keep per-request routing
+- Astra at `xhigh` by default, with explicit Sol/Terra and other available
+  model choices honored for both parent and child tasks. Per-model catalogs
+  preserve each backend's actual context and reasoning limits.
 - Outer Codex developer instructions, task memory, roles, reasoning effort, and
   tool schemas remain the source of truth; duplicate Copilot-native memory,
   built-ins, config discovery, and custom instructions stay disabled
@@ -481,9 +480,10 @@ when you do not want the Windows watchdog, use this manual flow.
    BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-6-astra BRIDGE_MODEL_ROUTING_MODE=locked-default BRIDGE_LOCKED_REASONING_EFFORT=xhigh node server.mjs
    ```
 
-   The Windows Start/Repair flow enables that lock automatically when its
-   `-Model` is `gpt-6-astra`. `/health` exposes the active routing policy, and
-   dashboard records retain both the requested and selected models.
+   This lock is optional for manual installations. Windows Start/Repair now
+   uses per-request routing, so explicitly selected child models are honored.
+   /health exposes the policy and per-model limits; dashboard records preserve
+   requested and selected models. See [agent routing](docs/AGENT-ROUTING.md).
 
 4. Update the existing top-level `model` and `model_provider` values in
    `~/.codex/config.toml`, then add the provider block once:
@@ -813,6 +813,18 @@ Prefer connector calls that omit unneeded base64 media, and start a fresh Codex
 task if even the bounded envelope is exhausted.
 
 ## Compatibility boundary
+
+See [the compatibility matrix and context-window setup](docs/COMPATIBILITY.md)
+for the verified feature classes, hosted-tool limits, and live regression probes.
+
+Windows enable/repair now synchronizes the advertised context window and a
+generated Codex model catalog. Codex 0.147.0 otherwise clamps unknown Astra
+metadata to 272,000 tokens even when a larger context override is configured.
+The catalog preserves that Codex version's original fallback instructions and
+records Copilot's actual limits. Its generated files and cached upstream prompt
+stay in ignored runtime storage. Original configuration values remain restorable.
+OpenAI-hosted web search is disabled while this route is enabled; browser and
+connector search tools remain available. Fresh tasks must reload the configuration.
 
 The relay preserves the Codex-side contract: system/developer instructions,
 role-ordered conversation history, function/custom/namespace tool declarations,

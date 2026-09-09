@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-5.6-luna',
+    [string]$Model = 'gpt-6-astra',
 
     [ValidateRange(2, 300)]
     [int]$CheckIntervalSeconds = 10
@@ -57,6 +57,7 @@ function Get-WatchedHealth {
 }
 
 function Sync-WatchedConfig {
+    param([psobject]$ModelHealth)
     if (-not (Test-Path -LiteralPath $configHelper -PathType Leaf)) {
         throw "Config helper not found: $configHelper"
     }
@@ -71,11 +72,14 @@ function Sync-WatchedConfig {
     }
     Assert-CodexCopilotConfigBackup -State $state | Out-Null
     $configPath = [IO.Path]::GetFullPath([string]$state.ConfigPath)
+    $catalogPath = New-CodexCopilotModelCatalog -Health $ModelHealth -Model $Model -Directory $runtimeDirectory
     $state = Set-CodexCopilotConfig `
         -ConfigPath $configPath `
         -Port $Port `
         -Model $Model `
-        -RestoreState $state
+        -RestoreState $state `
+        -ModelHealth $ModelHealth `
+        -ModelCatalogPath $catalogPath
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
     return $configPath
 }
@@ -195,7 +199,7 @@ try {
             }
         }
         elseif (
-            [string]$health.version -ne $expectedVersion -and
+            ([string]$health.version -ne $expectedVersion -or [string]$health.routing.mode -ne 'per-request') -and
             ($health.PSObject.Properties.Name -contains 'activeExchanges') -and
             [int]$health.activeExchanges -eq 0
         ) {
@@ -216,10 +220,10 @@ try {
         }
         if ($health -and $health.ok) { $lastSdkState = '' }
         if ($health -and $health.ok -and $health.model -eq $Model) { $lastTransitionState = '' }
-        if ($health -and $health.ok -and $health.model -eq $Model) {
+        if ($health -and $health.ok -and $health.model -eq $Model -and [string]$health.version -eq $expectedVersion -and [string]$health.routing.mode -eq 'per-request') {
             if (-not $configSynchronized) {
                 try {
-                    $configPath = Sync-WatchedConfig
+                    $configPath = Sync-WatchedConfig -ModelHealth $health
                     Write-WatchdogLog "Managed Codex route synchronized: $configPath -> 127.0.0.1:$Port -> $Model."
                     $configSynchronized = $true
                 }

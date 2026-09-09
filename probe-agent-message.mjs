@@ -14,7 +14,7 @@ const response = await fetch(`${baseUrl}/responses`, {
   body: JSON.stringify({
     model,
     stream: true,
-    reasoning: { effort: "none" },
+    reasoning: { effort: args.get("--reasoning") ?? "low" },
     input: [{
       type: "agent_message",
       author: "/root",

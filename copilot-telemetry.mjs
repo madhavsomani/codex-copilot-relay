@@ -74,8 +74,13 @@ export function summarizeAssistantUsage(values = []) {
       copilotCostUnits: 0,
       apiDurationMs: 0,
       apiEquivalentUsd: 0,
+      pricedApiCalls: 0,
+      unpricedApiCalls: 0,
     };
     row.sdkApiCalls += 1;
+    const callEstimate = estimateOpenAiEquivalent([event]);
+    row.pricedApiCalls += callEstimate.pricedApiCalls;
+    row.unpricedApiCalls += callEstimate.unpricedApiCalls;
     for (const field of [
       "inputTokens",
       "outputTokens",

@@ -62,7 +62,7 @@ test("publishes a source-dated standard-rate catalog for every relay GPT model",
     "gpt-5.6-terra",
   ];
   const snapshot = publicPricingSnapshot(models);
-  assert.equal(snapshot.sourceDate, "2026-08-24");
+assert.equal(snapshot.sourceDate, "2026-09-09");
   assert.equal(snapshot.currency, "USD");
   assert.equal(snapshot.models.length, models.length);
   assert.ok(snapshot.models.every((model) => model.sourceUrl.startsWith("https://developers.openai.com/")));

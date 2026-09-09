@@ -301,6 +301,96 @@ function Restore-CodexCopilotConfigFromBackup {
     }
 }
 
+function Get-CodexCopilotContextSettings {
+    param([psobject]$Health, [string]$Model)
+
+    if (-not $Health -or -not $Health.ok -or [string]$Health.model -ne $Model) { return @{} }
+    $window = [long]$Health.compatibility.maxContextWindowTokens
+    $prompt = [long]$Health.compatibility.maxPromptTokens
+    if ($window -le 0 -or $prompt -le 0 -or $prompt -gt $window) { return @{} }
+    # Match the relay's 90% prompt budget, reserving room for the compaction turn.
+    $compact = [long][Math]::Floor($prompt * 0.9)
+    if ($compact -ge 100000) { $compact = [long]([Math]::Floor($compact / 10000) * 10000) }
+    return @{ model_context_window = $window; model_auto_compact_token_limit = $compact }
+}
+
+function New-CodexCopilotModelCatalog {
+    param([psobject]$Health, [string]$Model, [string]$Directory, [string]$BaseInstructions)
+
+    $settings = Get-CodexCopilotContextSettings -Health $Health -Model $Model
+    if ($settings.Count -eq 0) { return $null }
+    $reasoningEfforts = @($Health.compatibility.supportedReasoningEfforts | Where-Object { $_ })
+    $defaultEffort = $Health.compatibility.defaultReasoningEffort
+    if ($reasoningEfforts.Count -eq 0 -and -not $BaseInstructions) {
+        # Older live releases lack these health fields while a safe update is deferred.
+        $probePath = Join-Path $PSScriptRoot 'probe-sdk.mjs'
+        $metadataText = (& node $probePath --model $Model | Out-String)
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot read reasoning metadata from the authenticated Copilot SDK.' }
+        $metadata = $metadataText | ConvertFrom-Json
+        $reasoningEfforts = @($metadata.supportedReasoningEfforts)
+        $defaultEffort = $metadata.defaultReasoningEffort
+    }
+    New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+    if (-not $BaseInstructions) {
+        $package = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'node_modules/@openai/codex/package.json') -Raw | ConvertFrom-Json
+        $version = [string]$package.version
+        if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Cannot resolve a pinned Codex instruction template for this version.' }
+        $templatePath = Join-Path $Directory "codex-fallback-prompt-$version.md"
+        if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
+            # Preserve this installed Codex version's existing fallback instructions.
+            # Cache the official Apache-2.0 source locally; no account data is included.
+            $source = "https://raw.githubusercontent.com/openai/codex/rust-v$version/codex-rs/models-manager/prompt.md"
+            $download = Invoke-WebRequest -UseBasicParsing -Uri $source -TimeoutSec 30
+            if ([string]::IsNullOrWhiteSpace([string]$download.Content)) { throw 'The Codex instruction template was empty.' }
+            [IO.File]::WriteAllText($templatePath, [string]$download.Content, [Text.UTF8Encoding]::new($false))
+        }
+        $BaseInstructions = [IO.File]::ReadAllText($templatePath)
+    }
+    $locked = $Health.routing.mode -eq 'locked-default' -and $Health.routing.lockedModel -eq $Model
+    $slugs = @($Model)
+    if ($locked -or $Health.modelCapabilities) {
+        $slugs = @(@($Model) + @($Health.models) | Where-Object { $_ -like 'gpt-*' } | Select-Object -Unique)
+    }
+    $entries = foreach ($slug in $slugs) {
+        $cap = $Health.compatibility
+        if (-not $locked -and $Health.modelCapabilities) {
+            $property = $Health.modelCapabilities.PSObject.Properties[$slug]
+            if (-not $property) { continue }
+            $cap = $property.Value
+        }
+        $entryHealth = [pscustomobject]@{ok=$true; model=$slug; compatibility=$cap}
+        $entrySettings = Get-CodexCopilotContextSettings -Health $entryHealth -Model $slug
+        if ($entrySettings.Count -eq 0) { continue }
+        $efforts = @($cap.supportedReasoningEfforts | Where-Object { $_ })
+        if ($efforts.Count -eq 0) { $efforts = $reasoningEfforts }
+        $preferred = if ($slug -eq 'gpt-6-astra') { 'xhigh' } else { $cap.defaultReasoningEffort }
+        if (-not $preferred -or $efforts -notcontains $preferred) { $preferred = @('none','low','medium','high','xhigh','max' | Where-Object { $efforts -contains $_ }) | Select-Object -Last 1 }
+        $reasoningLevels = @($efforts | ForEach-Object { @{ effort = $_; description = "Copilot reasoning effort: $_" } })
+        $percent = [Math]::Min(95, [Math]::Floor(100 * [double]$cap.maxPromptTokens / [double]$entrySettings.model_context_window))
+        $backend = if ($locked) { $Model } else { $slug }
+        [ordered]@{
+            slug = $slug; display_name = $slug; description = "Codex metadata for the Copilot relay; selected backend $backend."
+            supported_reasoning_levels = $reasoningLevels; default_reasoning_level = $preferred
+            shell_type = 'default'; visibility = 'list'; supported_in_api = $true; priority = 99
+            upgrade = $null; model_messages = @{ instructions_template = $BaseInstructions }
+            support_verbosity = $true; default_verbosity = $null; apply_patch_tool_type = $null
+            truncation_policy = @{ mode = 'bytes'; limit = 65536 }; supports_parallel_tool_calls = $true
+            supports_image_detail_original = $false; context_window = $entrySettings.model_context_window
+            max_context_window = $entrySettings.model_context_window; auto_compact_token_limit = $entrySettings.model_auto_compact_token_limit
+            effective_context_window_percent = $percent; experimental_supported_tools = @()
+            input_modalities = if ($cap.maxImageAttachments -eq 0) { @('text') } else { @('text', 'image') }
+            supports_search_tool = $false; use_responses_lite = $false
+            include_skills_usage_instructions = $true; include_plugin_usage_instructions = $true; include_apps_usage_instructions = $true
+        }
+    }
+    $catalogPath = [IO.Path]::GetFullPath((Join-Path $Directory 'codex-copilot-models.json'))
+    $catalog = @{ models = @($entries) } | ConvertTo-Json -Depth 10
+    $stagingPath = $catalogPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    [IO.File]::WriteAllText($stagingPath, $catalog, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $stagingPath -Destination $catalogPath -Force
+    return $catalogPath
+}
+
 function Set-CodexCopilotConfig {
     param(
         [Parameter(Mandatory)]
@@ -313,7 +403,11 @@ function Set-CodexCopilotConfig {
         [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
         [string]$Model,
 
-        [psobject]$RestoreState
+        [psobject]$RestoreState,
+
+        [psobject]$ModelHealth,
+
+        [string]$ModelCatalogPath
     )
 
     $configDirectory = Split-Path -Parent $ConfigPath
@@ -368,6 +462,49 @@ function Set-CodexCopilotConfig {
         $lines.Insert(1, $providerLine)
     }
 
+    $contextValues = Get-CodexCopilotContextSettings -Health $ModelHealth -Model $Model
+    # Codex otherwise adds an OpenAI-hosted search declaration even to plain prompts.
+    # Browser and connector search tools are separate and remain available.
+    $contextValues['web_search'] = '"disabled"'
+    if ($ModelCatalogPath) { $contextValues['model_catalog_json'] = '"' + $ModelCatalogPath.Replace('\', '/') + '"' }
+    # Per-model catalog limits must not be shadowed by global Astra overrides.
+    if ($ModelCatalogPath -and $ModelHealth.routing.mode -eq 'per-request' -and $ModelHealth.modelCapabilities) {
+        $contextValues['model_context_window'] = $null
+        $contextValues['model_auto_compact_token_limit'] = $null
+    }
+    $managedSettings = @()
+    foreach ($key in @('model_context_window', 'model_auto_compact_token_limit', 'web_search', 'model_catalog_json')) {
+        $index = Find-CodexTopLevelKeyIndex -Lines ([string[]]$lines.ToArray()) -Key $key
+        $currentLine = if ($index -ge 0) { $lines[$index] } else { $null }
+        $savedSetting = @($savedState.ManagedSettings | Where-Object { $_.Key -eq $key }) | Select-Object -First 1
+        $desiredLine = $null
+        if ($contextValues.ContainsKey($key) -and $null -eq $contextValues[$key]) {
+            $originalLine = if ($savedSetting) { $savedSetting.OriginalLine } else { $currentLine }
+            if ($index -ge 0) { $lines.RemoveAt($index) }
+            $managedSettings += [pscustomobject]@{ Key=$key; OriginalLine=$originalLine; ManagedLine=$null }
+            continue
+        }
+        if (-not $contextValues.ContainsKey($key) -and $savedSetting -and $null -eq $savedSetting.ManagedLine -and [string]$savedState.Model -eq $Model) {
+            $managedSettings += $savedSetting
+            continue
+        }
+        if ($contextValues.ContainsKey($key)) { $desiredLine = "$key = $($contextValues[$key])" }
+        elseif ($savedSetting -and [string]$savedState.Model -eq $Model) { $desiredLine = $savedSetting.ManagedLine }
+        if ($null -ne $desiredLine) {
+            $originalLine = if ($savedSetting) { $savedSetting.OriginalLine } else { $currentLine }
+            if ($index -ge 0) { $lines[$index] = $desiredLine } else { $lines.Insert(2, $desiredLine) }
+            $managedSettings += [pscustomobject]@{ Key = $key; OriginalLine = $originalLine; ManagedLine = $desiredLine }
+        }
+        elseif ($savedSetting -and $currentLine -eq $savedSetting.ManagedLine) {
+            # Do not carry a previous model's context limit into another model.
+            if ($null -ne $savedSetting.OriginalLine) {
+                if ($index -ge 0) { $lines[$index] = [string]$savedSetting.OriginalLine }
+                else { $lines.Insert(2, [string]$savedSetting.OriginalLine) }
+            }
+            elseif ($index -ge 0) { $lines.RemoveAt($index) }
+        }
+    }
+
     $stateProperties = [ordered]@{
         ConfigPath = $ConfigPath
         ProviderId = $script:CodexCopilotProviderId
@@ -377,6 +514,7 @@ function Set-CodexCopilotConfig {
         OriginalProviderLine = $originalProviderLine
         ManagedModelLine = $modelLine
         ManagedProviderLine = $providerLine
+        ManagedSettings = $managedSettings
     }
     if ($savedState) {
         $savedPropertyNames = @($savedState.PSObject.Properties.Name)
@@ -459,6 +597,18 @@ function Restore-CodexCopilotConfig {
         $lines.RemoveAt($providerIndex)
     }
 
+    foreach ($setting in @($State.ManagedSettings)) {
+        if (-not $setting) { continue }
+        $index = Find-CodexTopLevelKeyIndex -Lines ([string[]]$lines.ToArray()) -Key $setting.Key
+        if ($index -lt 0 -and $null -eq $setting.ManagedLine) {
+            if ($null -ne $setting.OriginalLine) { $lines.Insert(0, [string]$setting.OriginalLine) }
+        }
+        elseif ($index -ge 0 -and $lines[$index] -eq $setting.ManagedLine) {
+            if ($null -ne $setting.OriginalLine) { $lines[$index] = [string]$setting.OriginalLine }
+            else { $lines.RemoveAt($index) }
+        }
+        else { $warnings.Add("$($setting.Key) was changed after proxy enablement; leaving the current value untouched.") }
+    }
     Write-CodexConfigLines -ConfigPath $ConfigPath -Lines ([string[]]$lines.ToArray())
     return $warnings.ToArray()
 }

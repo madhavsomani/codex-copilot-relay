@@ -300,7 +300,8 @@ function compactHistoryToolOutput(text, contextStats) {
 function historyEntry(item, attachments, contextStats, sourceIndex = -1) {
   if (!item || typeof item !== "object") return null;
 
-  if (item.type === "message") {
+  if (item.type === "message" || (item.type == null
+    && ["user", "assistant", "developer", "system"].includes(item.role))) {
     const entry = {
       role: item.role ?? "unknown",
       content: stringifyMessageContent(item.content, attachments, contextStats, {
@@ -1257,12 +1258,30 @@ function contentOutputToText(
   }).join("\n");
 }
 
-export function normalizeToolOutput(item) {
-  const text = contentOutputToText(item?.output);
+export function normalizeToolOutput(item, compatibility = {}) {
+  const attachments = [];
+  const contextStats = {};
+  let text = contentOutputToText(item?.output, attachments, contextStats, { role: "tool" });
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length > 65536) {
+    text = bytes.subarray(0, 32000).toString("utf8")
+      + "\n[Relay omitted the middle of an oversized tool result; request a narrower range from the outer tool.]\n"
+      + bytes.subarray(-32000).toString("utf8");
+  }
+  if (attachments.length) {
+    ({ prompt: text } = finalizeImageAttachments({
+      attachments, systemContent: "", prompt: text, contextStats,
+      maxImageAttachments: compatibility.maxImageAttachments ?? MAX_IMAGE_ATTACHMENTS,
+      maxAttachmentBase64Chars: compatibility.maxAttachmentBase64Chars ?? MAX_ATTACHMENT_BASE64_CHARS,
+      maxSingleAttachmentBase64Chars: compatibility.maxSingleAttachmentBase64Chars ?? MAX_ATTACHMENT_BASE64_CHARS,
+    }));
+  }
   const failed = item?.success === false
     || item?.status === "failed"
     || item?.status === "error";
-  return { text, failed };
+  return { text, failed, ...(attachments.length ? { binaryResultsForLlm: attachments.map(attachment => ({
+    type: "image", data: attachment.data, mimeType: attachment.mimeType, description: attachment.displayName,
+  })) } : {}) };
 }
 
 function argumentsAsJson(argumentsValue) {

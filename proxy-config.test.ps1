@@ -103,11 +103,10 @@ try {
     if (
         $persistentStartText -notmatch 'BRIDGE_MODEL_ROUTING_MODE' -or
         $persistentStartText -notmatch 'BRIDGE_LOCKED_REASONING_EFFORT' -or
-        $persistentStartText -notmatch "gpt-6-astra'\) \{ 'locked-default'" -or
-        $persistentStartText -notmatch "gpt-6-astra'\) \{ 'xhigh'" -or
+        $persistentStartText -notmatch "expectedRoutingMode = 'per-request'" -or
         $persistentStartText -notmatch 'Test-ExpectedRouting'
     ) {
-        throw 'Persistent startup does not enforce the Astra locked-default xhigh routing contract.'
+        throw 'Persistent startup must honor explicit model choices and verify routing.'
     }
 
     $enableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Enable-Codex-CopilotProxy.ps1') -Raw
@@ -228,6 +227,48 @@ try {
     }
     Restore-CodexCopilotConfig -ConfigPath $configPath -State $terraState | Out-Null
 
+    # Context overrides come from the selected live model and survive repair.
+    $contextPath = Join-Path $tempDirectory 'context-config.toml'
+    [IO.File]::WriteAllLines($contextPath, @('model = "gpt-5.6-luna"', 'model_context_window = 272000', 'model_auto_compact_token_limit = 250000'))
+    $astraHealth = [pscustomobject]@{ ok = $true; model = 'gpt-6-astra'; compatibility = [pscustomobject]@{ maxContextWindowTokens = 1000000; maxPromptTokens = 872000 } }
+    $catalogPath = New-CodexCopilotModelCatalog -Health $astraHealth -Model 'gpt-6-astra' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
+    $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
+    $entry = $catalog.models[0]
+    if ($entry.max_context_window -ne 1000000 -or $entry.effective_context_window_percent -ne 87 -or $entry.model_messages.instructions_template -ne 'CODEX_ORIGINAL_INSTRUCTIONS') { throw 'The generated catalog did not preserve instructions and real model limits.' }
+    $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $astraHealth -ModelCatalogPath $catalogPath
+    $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -RestoreState $contextState
+    $contextText = [IO.File]::ReadAllText($contextPath)
+    if ($contextText -notmatch '(?m)^model_context_window = 1000000' -or $contextText -notmatch '(?m)^model_auto_compact_token_limit = 780000' -or $contextText -notmatch '(?m)^model_catalog_json = ' -or $contextText -notmatch '(?m)^web_search = "disabled"') { throw 'Live context/catalog/search settings were not installed or did not survive repair.' }
+    $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-5.6-sol' -RestoreState $contextState
+    $contextText = [IO.File]::ReadAllText($contextPath)
+    if ($contextText -notmatch '(?m)^model_context_window = 272000' -or $contextText -notmatch '(?m)^model_auto_compact_token_limit = 250000') { throw 'A model transition leaked Astra context settings.' }
+    Restore-CodexCopilotConfig -ConfigPath $contextPath -State $contextState | Out-Null
+    [IO.File]::WriteAllLines($contextPath, @('model = "gpt-5.6-luna"'))
+    $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $astraHealth
+    $contextState = Get-CodexCopilotEmbeddedState -ConfigPath $contextPath
+    Restore-CodexCopilotConfig -ConfigPath $contextPath -State $contextState | Out-Null
+    if ([IO.File]::ReadAllText($contextPath) -match 'model_context_window|model_auto_compact_token_limit') { throw 'Rollback did not remove inserted context overrides.' }
+    if ((Get-CodexCopilotContextSettings -Health $astraHealth -Model 'gpt-5.6-sol').Count -ne 0) { throw 'Context settings used another model metadata.' }
+
+    # Different subagent models must retain their own caps, defaults and restoration.
+    $multiHealth = [pscustomobject]@{ ok=$true; model='gpt-6-astra'; models=@('gpt-6-astra','gpt-5.6-sol','gpt-5.6-terra'); routing=[pscustomobject]@{mode='per-request'}; compatibility=$astraHealth.compatibility; modelCapabilities=[pscustomobject]@{
+        'gpt-6-astra'=[pscustomobject]@{maxContextWindowTokens=1000000;maxPromptTokens=872000;supportedReasoningEfforts=@('low','high','xhigh');defaultReasoningEffort='xhigh';maxImageAttachments=1}
+        'gpt-5.6-sol'=[pscustomobject]@{maxContextWindowTokens=1050000;maxPromptTokens=922000;supportedReasoningEfforts=@('low','high','xhigh','max');defaultReasoningEffort='max';maxImageAttachments=1}
+        'gpt-5.6-terra'=[pscustomobject]@{maxContextWindowTokens=272000;maxPromptTokens=240000;supportedReasoningEfforts=@('low','high');defaultReasoningEffort='high';maxImageAttachments=0}
+    }}
+    $multiCatalogPath=New-CodexCopilotModelCatalog -Health $multiHealth -Model 'gpt-6-astra' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
+    $multiCatalog=Get-Content -LiteralPath $multiCatalogPath -Raw | ConvertFrom-Json
+    $solEntry=$multiCatalog.models | Where-Object slug -eq 'gpt-5.6-sol'
+    $terraEntry=$multiCatalog.models | Where-Object slug -eq 'gpt-5.6-terra'
+    if ($solEntry.max_context_window -ne 1050000 -or $solEntry.default_reasoning_level -ne 'max' -or $terraEntry.max_context_window -ne 272000) { throw 'Per-model metadata was replaced with Astra limits.' }
+    if (-not $solEntry.supports_parallel_tool_calls -or $solEntry.truncation_policy.limit -ne 65536) { throw 'Parallel tools or 64 KiB result budget missing.' }
+    [IO.File]::WriteAllLines($contextPath,@('model = "gpt-5.6-sol"','model_context_window = 272000','model_auto_compact_token_limit = 250000'))
+    $multiState=Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $multiHealth -ModelCatalogPath $multiCatalogPath
+    $multiState=Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -RestoreState $multiState
+    if ([IO.File]::ReadAllText($contextPath) -match '(?m)^model_(context_window|auto_compact_token_limit) =') { throw 'Global context overrides shadow per-model catalog.' }
+    Restore-CodexCopilotConfig -ConfigPath $contextPath -State $multiState | Out-Null
+    if ([IO.File]::ReadAllText($contextPath) -notmatch 'model_context_window = 272000') { throw 'Rollback lost original context override.' }
+
     # Full-file restore must preserve exact bytes, including BOM and line endings.
     $exactConfigPath = Join-Path $tempDirectory 'exact-config.toml'
     $backupPath = Join-Path $tempDirectory 'config.toml.pre-copilot.bak'
@@ -266,6 +307,9 @@ try {
 finally {
     [Environment]::SetEnvironmentVariable('CODEX_HOME', $originalCodexHome, 'Process')
     if (Test-Path -LiteralPath $tempDirectory) {
+        $resolvedTestDirectory = [IO.Path]::GetFullPath($tempDirectory)
+        $expectedTestPrefix = Join-Path ([IO.Path]::GetTempPath()) 'codex-copilot-config-test-'
+        if (-not $resolvedTestDirectory.StartsWith($expectedTestPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing to remove a directory outside this config test.' }
         Remove-Item -LiteralPath $tempDirectory -Recurse -Force
     }
 }

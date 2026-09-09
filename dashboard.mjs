@@ -406,6 +406,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <div class="metering-line"><div><div class="metering-copy" id="cost-coverage">Waiting for usage coverage…</div><div class="metrics-freshness" id="metrics-freshness">Waiting for durable metrics…</div><div class="coverage-track" title="Share of finalized relay responses with exact SDK token telemetry"><div class="coverage-fill" id="coverage-fill"></div></div></div><span class="coverage-value" id="metering-percent">0%</span></div>
           <details class="model-breakdown"><summary class="model-ledger-head"><div><strong>By model</strong><div class="tiny">Actual assistant.usage model</div></div><span class="tiny">top 4 · expand</span></summary><div class="model-ledger" id="model-usage-list"><div class="empty">No measured model calls yet.</div></div></details>
           <p class="disclaimer benchmark-footnote"><strong>Reference only:</strong> the dollar figure applies source-dated public list prices to measured SDK tokens. It is not an OpenAI or GitHub charge. <a id="price-source" href="https://developers.openai.com/api/docs/models/gpt-5.6-sol" target="_blank" rel="noopener noreferrer">Rates dated <span id="price-source-date">—</span></a>.</p>
+          <p class="disclaimer benchmark-footnote" id="price-coverage">Pricing coverage is initializing.</p>
         </div>
       </article>
       <article class="panel entitlement">
@@ -554,7 +555,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function renderPricing(data) {
       const summary = data.summary || {}, pricing = data.pricing || {};
       const coverage = Math.max(0, Math.min(100, Number(summary.meteringCoveragePercent) || 0));
-      setText("api-cost", usd(summary.apiEquivalentUsd));
+      const missingPrices = Number(summary.unpricedApiCalls || 0) + Number(summary.pricingUnknownApiCalls || 0);
+      setText("api-cost", usd(summary.apiEquivalentUsd) + (missingPrices ? "*" : ""));
+      setText("price-coverage", missingPrices
+        ? "Partial subtotal: " + number(summary.pricedApiCalls || 0) + " priced SDK calls; " + number(missingPrices) + " unpriced or legacy calls. Historical costs were not backfilled."
+        : "All measured SDK calls priced. Earlier unmetered outcomes are excluded.");
       setText("input-tokens", compact(summary.inputTokens));
       setText("output-tokens", compact(summary.outputTokens));
       setText("sdk-calls", number(summary.sdkApiCalls));
@@ -567,7 +572,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("metrics-freshness", data.metricsUpdatedAt ? "Durable through " + time(data.metricsUpdatedAt) : "Durable metrics are initializing");
       setText("price-source-date", pricing.sourceDate || "—");
       const priced = (pricing.models || []).filter((model) => !model.unavailable);
-      if (priced[0]?.sourceUrl) $("price-source").href = priced[0].sourceUrl;
+      const currentPrice = priced.find(model => model.id === data.defaultModel) || priced[0];
+      if (currentPrice?.sourceUrl) $("price-source").href = currentPrice.sourceUrl;
     }
     function renderQuota(data) {
       const quota = data.copilot?.quota || {}, snapshots = quota.snapshots || {};

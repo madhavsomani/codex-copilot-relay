@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-5.6-luna',
+    [string]$Model = 'gpt-6-astra',
 
     [switch]$SkipStartup
 )
@@ -81,6 +81,12 @@ try {
         ) | Out-Null
     }
     & $startScript -Port $Port -Model $Model -DeferUpdateWhenBusy
+    $modelHealth = $null
+    try { $modelHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 10 }
+    catch { Write-Warning 'Context metadata is temporarily unavailable; the watchdog will synchronize it after recovery.' }
+    $catalogPath = New-CodexCopilotModelCatalog -Health $modelHealth -Model $Model -Directory $runtimeDirectory
+    $state = Set-CodexCopilotConfig -ConfigPath $configPath -Port $Port -Model $Model -RestoreState $state -ModelHealth $modelHealth -ModelCatalogPath $catalogPath
+    $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
     $proxyPidAfterStart = 0
     if (Test-Path -LiteralPath $proxyPidPath -PathType Leaf) {
         [int]::TryParse(

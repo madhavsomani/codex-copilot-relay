@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-5.6-luna',
+    [string]$Model = 'gpt-6-astra',
 
     [switch]$DeferUpdateWhenBusy,
 
@@ -22,8 +22,9 @@ $stdoutLog = Join-Path $runtimeDirectory 'proxy.stdout.log'
 $processStdoutLog = Join-Path $runtimeDirectory 'proxy.process.stdout.log'
 $stderrLog = Join-Path $runtimeDirectory 'proxy.stderr.log'
 . (Join-Path $bridgeRoot 'sdk-process-health.ps1')
-$expectedRoutingMode = if ($Model -eq 'gpt-6-astra') { 'locked-default' } else { 'per-request' }
-$expectedLockedReasoningEffort = if ($Model -eq 'gpt-6-astra') { 'xhigh' } else { $null }
+# The generated catalog now resolves Astra directly; explicit model choices are honored.
+$expectedRoutingMode = 'per-request'
+$expectedLockedReasoningEffort = $null
 
 function Test-LocalPortInUse {
     param([int]$LocalPort)

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { countModelTokens } from './context-tokenizer.mjs';
+import { buildSessionInput } from './bridge-core.mjs';
+
+const args = new Map();
+for (let i=2;i<process.argv.length;i+=2) args.set(process.argv[i],process.argv[i+1]);
+const base = args.get('--url') ?? 'http://127.0.0.1:4144/v1';
+const model = args.get('--model') ?? 'gpt-6-astra';
+const health = await (await fetch(base.replace(/\/v1$/, '') + '/health')).json();
+assert.equal(health.compatibility.contextTier, 'long_context');
+const inputLimit = health.compatibility.maxPromptTokens;
+const target = Math.min(800000, Math.floor(inputLimit * 0.93));
+const markers = [randomUUID(),randomUUID(),randomUUID()];
+const expected = markers.join(',');
+const block = Array.from({length:1000},(_,i)=>`Archive row ${i}: river valley garden forest mountain ocean cloud stone copper silver.\n`).join('');
+const blockTokens = countModelTokens(block);
+const copies = Math.floor((target - 10000) / blockTokens);
+const left = block.repeat(Math.floor(copies/2)), right = block.repeat(copies-Math.floor(copies/2));
+const body = {model,stream:false,truncation:'disabled',max_output_tokens:2048,
+  input:`Read the three CHECKPOINT values in order. Reply only with their values joined by commas, with no spaces.\nCHECKPOINT 1: ${markers[0]}\n${left}\nCHECKPOINT 2: ${markers[1]}\n${right}\nCHECKPOINT 3: ${markers[2]}\nReturn the three CHECKPOINT values from the start, middle and end in order.`};
+const local = buildSessionInput(body,process.cwd(),{maxSerializedTextTokens:inputLimit,countTokens:countModelTokens,useHistoryCompaction:false});
+const estimatedInputTokens = local.contextStats.serializedTextTokens;
+assert.ok(estimatedInputTokens > 750000 && estimatedInputTokens < inputLimit, 'Probe must exceed the old window and fit the advertised prompt limit');
+console.log(JSON.stringify({stage:'sending',estimatedInputTokens,maxPromptTokens:inputLimit,requestBytes:Buffer.byteLength(JSON.stringify(body)),compaction:false}));
+const started = Date.now();
+const response = await fetch(base+'/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(300000)});
+const result = await response.json();
+assert.equal(response.status,200,result.error?.message);
+const message = (result.output??[]).filter(x=>x.type==='message').at(-1);
+const actual=(message?.content??[]).map(x=>x.text??'').join('').trim();
+assert.equal(actual,expected,'All three distant checkpoints must survive');
+assert.ok(result.usage?.input_tokens > 750000, 'Measured provider input must prove a real long-context request');
+console.log(JSON.stringify({ok:true,model,estimatedInputTokens,usage:result.usage,wallMs:Date.now()-started,checkpoints:3,responseId:result.id,contextWindow:health.compatibility.maxContextWindowTokens}));

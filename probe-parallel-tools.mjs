@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+const args=new Map();for(let i=2;i<process.argv.length;i+=2)args.set(process.argv[i],process.argv[i+1]);
+const base=args.get('--url')??'http://127.0.0.1:4144/v1';const model=args.get('--model')??'gpt-6-astra';
+const request=async body=>{const r=await fetch(base+'/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model,stream:false,reasoning:{effort:'low'},...body}),signal:AbortSignal.timeout(90000)});const data=await r.json();assert.equal(r.status,200,data.error?.message);return data;};
+const tool={type:'function',name:'read_probe_value',description:'Read one independent test value.',parameters:{type:'object',properties:{key:{type:'string'}},required:['key'],additionalProperties:false}};
+const first=await request({parallel_tool_calls:true,tools:[tool],input:'Call read_probe_value twice in parallel in this same turn, once with key LEFT and once RIGHT. Both are independent. Do not wait for one before requesting the other. Then report both returned values separated by a comma.'});
+const calls=first.output.filter(x=>x.type==='function_call');assert.equal(calls.length,2,'Expected two tool calls in the same response');
+const markers=calls.map(()=>randomUUID());
+const done=await request({previous_response_id:first.id,input:calls.map((c,i)=>({type:'function_call_output',call_id:c.call_id,output:markers[i]}))});
+const text=done.output.filter(x=>x.type==='message').flatMap(x=>x.content??[]).map(x=>x.text??'').join('');
+assert.ok(markers.every(x=>text.includes(x)),'Both parallel results must be received');
+console.log(JSON.stringify({ok:true,model,parallelCalls:calls.length,returnedMarkers:markers.length}));
