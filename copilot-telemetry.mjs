@@ -24,6 +24,10 @@ export function normalizeAssistantUsage(value) {
     reasoningTokens: nonNegative(value.reasoningTokens),
     copilotCostUnits: nonNegative(value.copilotCostUnits ?? value.cost),
     totalNanoAiu: nonNegative(value.totalNanoAiu ?? value.copilotUsage?.totalNanoAiu),
+    creditMeteredApiCalls: Number.isFinite(value.creditMeteredApiCalls)
+      ? nonNegative(value.creditMeteredApiCalls)
+      : (Number.isFinite(value.totalNanoAiu ?? value.copilotUsage?.totalNanoAiu)
+        && (value.totalNanoAiu ?? value.copilotUsage?.totalNanoAiu) >= 0 ? 1 : 0),
     apiDurationMs: nonNegative(value.apiDurationMs ?? value.durationMs ?? value.duration),
   };
 }
@@ -43,6 +47,7 @@ export function summarizeAssistantUsage(values = []) {
     cacheWriteTokens: 0,
     reasoningTokens: 0,
     totalNanoAiu: 0,
+    creditMeteredApiCalls: 0,
     copilotCostUnits: 0,
     apiDurationMs: 0,
     apiEquivalentUsd: estimate.usd,
@@ -59,6 +64,7 @@ export function summarizeAssistantUsage(values = []) {
       "cacheWriteTokens",
       "reasoningTokens",
       "totalNanoAiu",
+      "creditMeteredApiCalls",
       "copilotCostUnits",
       "apiDurationMs",
     ]) summary[field] += event[field];
@@ -71,6 +77,7 @@ export function summarizeAssistantUsage(values = []) {
       cacheWriteTokens: 0,
       reasoningTokens: 0,
       totalNanoAiu: 0,
+      creditMeteredApiCalls: 0,
       copilotCostUnits: 0,
       apiDurationMs: 0,
       apiEquivalentUsd: 0,
@@ -88,6 +95,7 @@ export function summarizeAssistantUsage(values = []) {
       "cacheWriteTokens",
       "reasoningTokens",
       "totalNanoAiu",
+      "creditMeteredApiCalls",
       "copilotCostUnits",
       "apiDurationMs",
     ]) row[field] += event[field];

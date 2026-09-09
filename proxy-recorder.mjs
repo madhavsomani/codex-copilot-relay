@@ -112,6 +112,7 @@ function emptyCounters() {
     cacheWriteTokens: 0,
     reasoningTokens: 0,
     totalNanoAiu: 0,
+    creditMeteredApiCalls: 0,
     copilotCostUnits: 0,
     apiDurationMs: 0,
     apiEquivalentUsd: 0,
@@ -244,6 +245,7 @@ function normalizedUsageSummary(value) {
     cacheWriteTokens: finiteNumber(value?.cacheWriteTokens),
     reasoningTokens: finiteNumber(value?.reasoningTokens),
     totalNanoAiu: finiteNumber(value?.totalNanoAiu),
+    creditMeteredApiCalls: finiteNumber(value?.creditMeteredApiCalls),
     copilotCostUnits: finiteNumber(value?.copilotCostUnits),
     apiDurationMs: finiteNumber(value?.apiDurationMs),
     apiEquivalentUsd: finiteNumber(value?.apiEquivalentUsd),
@@ -262,6 +264,7 @@ function normalizedUsageSummary(value) {
       cacheWriteTokens: finiteNumber(item?.cacheWriteTokens),
       reasoningTokens: finiteNumber(item?.reasoningTokens),
       totalNanoAiu: finiteNumber(item?.totalNanoAiu),
+      creditMeteredApiCalls: finiteNumber(item?.creditMeteredApiCalls),
       copilotCostUnits: finiteNumber(item?.copilotCostUnits),
       apiDurationMs: finiteNumber(item?.apiDurationMs),
       apiEquivalentUsd: finiteNumber(item?.apiEquivalentUsd),
@@ -284,6 +287,7 @@ function usageCounterChanges(usage) {
     cacheWriteTokens: value.cacheWriteTokens,
     reasoningTokens: value.reasoningTokens,
     totalNanoAiu: value.totalNanoAiu,
+    creditMeteredApiCalls: value.creditMeteredApiCalls,
     copilotCostUnits: value.copilotCostUnits,
     apiDurationMs: value.apiDurationMs,
     apiEquivalentUsd: value.apiEquivalentUsd,
@@ -301,6 +305,7 @@ function modelUsageCounterChanges(usage) {
     cacheWriteTokens: finiteNumber(usage?.cacheWriteTokens),
     reasoningTokens: finiteNumber(usage?.reasoningTokens),
     totalNanoAiu: finiteNumber(usage?.totalNanoAiu),
+    creditMeteredApiCalls: finiteNumber(usage?.creditMeteredApiCalls),
     copilotCostUnits: finiteNumber(usage?.copilotCostUnits),
     apiDurationMs: finiteNumber(usage?.apiDurationMs),
     apiEquivalentUsd: finiteNumber(usage?.apiEquivalentUsd),
@@ -341,6 +346,8 @@ function lightweightRecord(record) {
     status: record.status ?? "unknown",
     requestedModel: record.requestedModel ?? null,
     selectedModel: record.selectedModel ?? null,
+    relayVersion: record.relayVersion ?? null,
+    routingMode: record.routingMode ?? null,
     streaming: Boolean(record.streaming),
     inputBytes: finiteNumber(record.inputBytes),
     outputBytes: finiteNumber(record.outputBytes),
@@ -612,7 +619,7 @@ export class ProxyRecorder {
     }
   }
 
-  start({ requestPath, body, inputBytes, streaming }) {
+  start({ requestPath, body, inputBytes, streaming, relayVersion = null, routingMode = null }) {
     const now = this.now();
     const record = {
       id: newId(now),
@@ -622,6 +629,8 @@ export class ProxyRecorder {
       status: "active",
       requestedModel: typeof body?.model === "string" ? body.model : null,
       selectedModel: null,
+      relayVersion,
+      routingMode,
       streaming: Boolean(streaming),
       inputBytes: Number.isFinite(inputBytes) ? inputBytes : 0,
       outputBytes: 0,
@@ -683,8 +692,10 @@ export class ProxyRecorder {
     this.emit("relay.tool_resolved", record, { failed: Boolean(details?.failed) });
   }
 
-  usageObserved(record, usage) {
+  usageObserved(record, usage, callUsage = null) {
     if (!record) return;
+    // Live cumulative usage is display-only; lifetime counters change once at finish.
+    if (callUsage) record.usage = normalizedUsageSummary(callUsage);
     const safeUsage = normalizedUsageSummary({
       metered: true,
       sdkApiCalls: 1,
@@ -700,6 +711,7 @@ export class ProxyRecorder {
         cacheReadTokens: safeUsage.cacheReadTokens,
         reasoningTokens: safeUsage.reasoningTokens,
         totalNanoAiu: safeUsage.totalNanoAiu,
+        creditMeteredApiCalls: safeUsage.creditMeteredApiCalls,
         copilotCostUnits: safeUsage.copilotCostUnits,
         apiDurationMs: safeUsage.apiDurationMs,
       },
@@ -833,6 +845,7 @@ export class ProxyRecorder {
       reasoningTokens: lifetime.reasoningTokens,
       totalNanoAiu: lifetime.totalNanoAiu,
       aiCredits: lifetime.totalNanoAiu / 1_000_000_000,
+      creditMeteredApiCalls: lifetime.creditMeteredApiCalls,
       copilotCostUnits: lifetime.copilotCostUnits,
       apiDurationMs: lifetime.apiDurationMs,
       apiEquivalentUsd: lifetime.apiEquivalentUsd,

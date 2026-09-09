@@ -512,6 +512,13 @@ automatically.
 
 ## Dashboard and health
 
+Model labels distinguish **Requested** (Codex's choice), **Selected** (relay backend),
+and **SDK reported** (usage-event model). The current policy appears above the
+metrics; historical calls retain their original route. SDK AI credits are shown
+for lifetime relay usage, by model, and per call. They are usage units, separate
+from the account entitlement and dollar benchmark. See the [1.3.17 notes](docs/RELEASE-1.3.17.md).
+
+
 With the persistent relay running:
 
 - Dashboard: <http://127.0.0.1:4144/dashboard>

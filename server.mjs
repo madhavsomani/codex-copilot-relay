@@ -241,6 +241,7 @@ function dashboardSnapshot() {
   snapshot.sampledAt = new Date().toISOString();
   snapshot.relayVersion = relayVersion;
   snapshot.defaultModel = defaultModel;
+  snapshot.routing = { ...modelRoutingPolicy, lockedModel: modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT ? defaultModel : null };
   snapshot.sdk = sdkRuntime.snapshot();
   snapshot.storage = telemetryStorage();
   snapshot.activeExchanges = exchanges.size;
@@ -649,7 +650,7 @@ class Exchange {
       const usage = normalizeAssistantUsage(event.data);
       if (usage) {
         this.usageEvents.push(usage);
-        recorder.usageObserved(this.record, usage);
+        recorder.usageObserved(this.record, usage, this.currentUsage());
       }
       return;
     }
@@ -1657,6 +1658,8 @@ const server = http.createServer(async (request, response) => {
     body,
     inputBytes: parsedBody.bytes,
     streaming: body?.stream !== false,
+    relayVersion,
+    routingMode: modelRoutingPolicy.mode,
   });
   let sink;
   try {

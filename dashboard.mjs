@@ -1,3 +1,5 @@
+import { callRoute, sdkCredits } from "./dashboard-data.mjs";
+
 export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="en">
 <head>
@@ -219,6 +221,19 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .usage-stat strong { display: block; margin-top: 7px; font-size: 19px; line-height: 1; letter-spacing: -.045em; overflow-wrap: anywhere; }
     .usage-stat small { display: block; margin-top: 4px; color: var(--muted); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .benchmark-stat strong { color: var(--cyan); }
+    .credits-stat { grid-column: 1 / -1; border-color: rgba(84,224,209,.4); }
+    .credits-stat strong { font-size: 25px; color: var(--cyan); }
+    .credits-stat small { white-space: normal; font-size: 10px; }
+    .routing-banner { display: grid; gap: 4px; margin: 0 0 14px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow-wrap: anywhere; }
+    .routing-banner strong { font-size: 12px; }
+    .routing-banner span { color: var(--muted); font-size: 11px; }
+    .inspector-grid dd.route-value { white-space: normal; overflow-wrap: anywhere; }
+    .route-summary { display: grid; gap: 8px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 10px; }
+    .route-summary h3 { font-size: 12px; color: var(--muted); }
+    .route-summary p { white-space: pre-line; overflow-wrap: anywhere; }
+    .route-change { color: var(--warn); }
+    .sdk-credit-value { color: var(--cyan); font-variant-numeric: tabular-nums; }
+    .model-stat small { display: block; color: var(--cyan); margin-top: 4px; font-size: 10px; }
     .benchmark-footnote { margin-top: 9px; }
     .metering-line { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; align-items: center; margin: 10px 1px 11px; }
     .metering-copy { color: var(--muted); font-size: 9px; }
@@ -309,6 +324,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   </header>
   <main>
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
+    <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
     <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
       <article class="kpi"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">↗</span><span>Calls handled</span></div><div class="kpi-main"><strong class="kpi-value" id="received">0</strong><svg class="kpi-sparkline" id="kpi-requests-chart" role="img" aria-label="Recent received request trend"></svg></div><div class="kpi-foot"><strong id="replayed">0</strong> Copilot replays · <span id="traffic">0 B</span></div></article>
       <article class="kpi good"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">✓</span><span>Success rate</span></div><div class="kpi-main"><strong class="kpi-value" id="success-rate">—</strong><svg class="kpi-sparkline" id="kpi-success-chart" role="img" aria-label="Recent completion-rate trend"></svg></div><div class="kpi-foot"><strong id="completed">0</strong> completed · <span id="failed">0</span> failed</div></article>
@@ -379,10 +395,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <div class="inspector-body">
           <dl class="inspector-grid">
             <dt>Request ID</dt><dd id="inspector-id">waiting</dd>
-            <dt>Model</dt><dd class="model" id="inspector-model">—</dd>
+            <dt>Requested model</dt><dd class="model route-value" id="inspector-requested">—</dd>
+            <dt>Selected backend</dt><dd class="model route-value" id="inspector-model">—</dd>
+            <dt>SDK usage model</dt><dd class="model route-value" id="inspector-reported">not reported</dd>
+            <dt>Selection</dt><dd class="route-value" id="inspector-selection">—</dd>
             <dt>Status</dt><dd id="inspector-status">idle</dd>
             <dt>Measured tokens</dt><dd id="inspector-tokens">—</dd>
             <dt>SDK model calls</dt><dd id="inspector-sdk-calls">—</dd>
+            <dt>AI credits</dt><dd class="sdk-credit-value" id="inspector-credits">not reported</dd>
             <dt>Latency</dt><dd id="inspector-latency">—</dd>
             <dt>Route</dt><dd id="inspector-route">—</dd>
             <dt>Outer tools</dt><dd id="inspector-tools">0</dd>
@@ -398,6 +418,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <div class="panel-head"><div class="panel-title"><span class="panel-title-icon"><svg viewBox="0 0 2406 2406" aria-hidden="true"><use href="#brand-openai"></use></svg></span><div><h2>Measured model usage</h2><span class="tiny">Live durable totals · Measured from SDK assistant.usage events</span></div></div><span class="telemetry-live" id="telemetry-live">connecting</span></div>
         <div class="usage-body">
           <div class="usage-metrics">
+            <div class="usage-stat credits-stat" style="--usage-color:var(--cyan)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">◎</span><span>AI credits · SDK</span></div><strong id="ai-credits">—</strong><small>Lifetime reported through this relay · finalized calls</small><small>SDK nano-AIU ÷ 1,000,000,000. Not dollars or your account balance.</small></div>
             <div class="usage-stat" style="--usage-color:var(--accent)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">↘</span><span>Input tokens</span></div><strong id="input-tokens">0</strong></div>
             <div class="usage-stat" style="--usage-color:var(--cyan)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">↗</span><span>Output tokens</span></div><strong id="output-tokens">0</strong></div>
             <div class="usage-stat" style="--usage-color:var(--violet)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">✦</span><span>SDK calls</span></div><strong id="sdk-calls">0</strong></div>
@@ -428,6 +449,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </div>
   </main>
   <script>
+    const callRoute = ${callRoute.toString()};
+    const sdkCredits = ${sdkCredits.toString()};
     const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), liveEvents: [], activeSamples: [], latestInspectorRecord: null, flowTimer: null, refreshTimer: null };
     const svgNs = "http://www.w3.org/2000/svg";
     const MAX_LIVE_CALLS = 64;
@@ -446,6 +469,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     const usd = (value) => { const amount = Number(value) || 0; const digits = amount === 0 || amount >= 1 ? 2 : amount >= .01 ? 4 : 6; return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amount); };
     const compact = (value) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(Number(value) || 0);
     function setText(id, value) { $(id).textContent = fmt(value); }
+    function creditsText(usage) {
+      const amount = sdkCredits(usage);
+      return amount === null ? "not reported" : new Intl.NumberFormat(undefined, {maximumFractionDigits: 9}).format(amount);
+    }
+    function routeLines(record) {
+      const route = callRoute(record, state.current || {});
+      return "Selected: " + (route.selected || "pending") + "\nRequested: " + (route.requested || "default")
+        + (route.changed || route.historical ? "\n" + route.note : "");
+    }
     function svgElement(name, attributes) { const node = document.createElementNS(svgNs, name); for (const entry of Object.entries(attributes || {})) node.setAttribute(entry[0], String(entry[1])); return node; }
     function sparkline(id, values, color) {
       const svg = $(id); svg.replaceChildren(); svg.setAttribute("viewBox", "0 0 72 35");
@@ -548,7 +580,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         const cell = document.createElement("div"); cell.className = "model-stat";
         const caption = document.createElement("span"); caption.textContent = "SDK calls";
         const strong = document.createElement("strong"); strong.textContent = compact(item.sdkApiCalls);
-        cell.append(caption, strong); row.appendChild(cell);
+        const credits = document.createElement("small"); credits.textContent = creditsText(item) + " AI credits";
+        cell.append(caption, strong, credits); row.appendChild(cell);
         root.appendChild(row);
       }
     }
@@ -563,6 +596,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("input-tokens", compact(summary.inputTokens));
       setText("output-tokens", compact(summary.outputTokens));
       setText("sdk-calls", number(summary.sdkApiCalls));
+      setText("ai-credits", creditsText(summary));
       setText("cost-coverage", coverage.toFixed(1) + "% exact coverage · " + number(summary.unmeteredCalls || 0) + " earlier outcomes unmetered");
       setText("metering-percent", coverage.toFixed(1) + "%");
       setText("integrity-coverage", coverage.toFixed(1) + "%");
@@ -654,12 +688,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function renderLiveInspector(record, event) {
       if (!record) return;
       state.latestInspectorRecord = record;
-      const usage = event?.usage || record.usage || {};
+      const usage = record.usage || event?.usage || {};
       const inputTokens = Number(usage.inputTokens), outputTokens = Number(usage.outputTokens);
       const hasTokens = Number.isFinite(inputTokens) || Number.isFinite(outputTokens);
       const status = event?.type ? event.type.replace("relay.", "") : (record.status || "retained");
       setText("inspector-id", String(record.id || "unknown").slice(-18));
-      setText("inspector-model", record.selectedModel || record.requestedModel || event?.model || "unknown");
+      const route = callRoute(record, state.current || {});
+      setText("inspector-requested", route.requested || "installation default");
+      setText("inspector-model", route.selected || "pending");
+      setText("inspector-reported", route.reported.join(", ") || event?.usage?.model || "not reported");
+      setText("inspector-selection", route.note);
+      setText("inspector-credits", creditsText(usage));
       setText("inspector-status", status);
       setText("inspector-tokens", hasTokens ? number((inputTokens || 0) + (outputTokens || 0)) + " tokens" : "unmetered / pending");
       setText("inspector-sdk-calls", Number.isFinite(Number(usage.sdkApiCalls)) ? number(Number(usage.sdkApiCalls)) : "pending");
@@ -718,7 +757,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       state.flowTimer = setTimeout(() => { stage.setAttribute("class", "traffic-map idle"); setText("flow-phase", "IDLE"); }, 2600);
     }
     function handleLiveEvent(event) {
-      const record = event.record || {}, id = String(record.id || "unknown"), model = record.selectedModel || record.requestedModel || event.model || "model";
+      const record = event.record || {}, id = String(record.id || "unknown"), model = record.selectedModel || "selection pending";
       if (event.type === "dashboard.ready") return;
       setText("network-model-name", model);
       let phase = "active", animation = "request", title = "Codex request received", detail = "Call " + id.slice(-8) + " entered the loopback relay.";
@@ -743,7 +782,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     function renderStats(data) {
       const summary = data.summary || {}, storage = data.storage || {};
-      setText("network-model-name", state.latestInspectorRecord?.selectedModel || state.latestInspectorRecord?.requestedModel || data.defaultModel || "GPT model");
+      state.current = { startedAt: data.startedAt, routing: data.routing };
+      setText("routing-policy", data.routing?.mode === "per-request"
+        ? "Per-request routing · Default: " + (data.defaultModel || "unknown")
+        : data.routing?.mode === "locked-default"
+          ? "Forced default routing · Backend: " + (data.routing.lockedModel || data.defaultModel || "unknown")
+          : "Routing policy unavailable for this relay version");
+      setText("routing-context", "Current relay started " + time(data.startedAt) + ". Past calls keep their original route; continuing exchanges keep their selected model.");
+      setText("network-model-name", state.latestInspectorRecord?.selectedModel || "Awaiting selection");
       setText("received", number(summary.received)); setText("replayed", number(summary.replayed)); setText("completed", number(summary.completed)); setText("failed", number(summary.failed)); setText("tools", number(summary.toolCalls)); setText("latency", duration(summary.avgLatencyMs)); setText("traffic", bytes((summary.inputBytes || 0) + (summary.outputBytes || 0)));
       setText("limit", number(data.maxRecords || 1000)); setText("detail-limit", number(data.maxDetailedRecords || 200) + " detailed"); setText("count", number(state.records.length) + " retained records");
       const auxiliaryBytes = (storage.metricsBytes || 0) + (storage.eventLogBytes || 0) + (storage.watchdogLogBytes || 0) + (storage.processStdoutBytes || 0) + (storage.processStderrBytes || 0);
@@ -763,18 +809,30 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       for (const record of records) {
         const row = document.createElement("tr"); if (record.id === state.selected) row.className = "selected"; row.tabIndex = 0; row.setAttribute("role", "button"); row.onclick = () => selectRecord(record.id); row.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRecord(record.id); } };
         const measured = record.usage?.metered ? compact((record.usage.inputTokens || 0) + (record.usage.outputTokens || 0)) + " tokens\n" + number(record.usage.sdkApiCalls || 0) + " SDK calls" : "unmetered";
-        const values = [time(record.receivedAt), (record.requestPath || "—") + "\n" + (record.selectedModel || record.requestedModel || "unknown"), record.status, record.detailTier, record.replayCount || 0, record.toolCalls || 0, duration(record.latencyMs), bytes((record.inputBytes || 0) + (record.outputBytes || 0)), measured];
+        const creditUsage = creditsText(record.usage) + " AI credits";
+        const values = [time(record.receivedAt), (record.requestPath || "—") + "\n" + routeLines(record), record.status, record.detailTier, record.replayCount || 0, record.toolCalls || 0, duration(record.latencyMs), bytes((record.inputBytes || 0) + (record.outputBytes || 0)), measured + "\n" + creditUsage];
         values.forEach((value, index) => { const cell = document.createElement("td"); if (index === 1) { cell.className = "wrap model"; cell.style.whiteSpace = "pre-line"; } else if (index === 2) cell.className = "status " + record.status; else if (index === 8) { cell.className = "token-cell"; cell.style.whiteSpace = "pre-line"; } if (index === 3) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : "detail"; cell.appendChild(badge); } else cell.textContent = value; row.appendChild(cell); });
         rows.appendChild(row);
       }
       $("show-more").hidden = state.visible >= state.records.length;
+    }
+    function routeSummary(record) {
+      const route = callRoute(record, state.current || {});
+      const box = document.createElement("section"); box.className = "route-summary";
+      const heading = document.createElement("h3"); heading.textContent = "Model route for this call";
+      const models = document.createElement("p"); models.textContent = "Requested: " + (route.requested || "installation default") + "\nSelected: " + (route.selected || "pending") + "\nSDK reported: " + (route.reported.join(", ") || "not reported");
+      const note = document.createElement("p"); note.className = route.changed ? "route-change" : "muted"; note.textContent = route.note;
+      const credits = document.createElement("p"); credits.className = "sdk-credit-value"; credits.textContent = "AI credits: " + creditsText(record.usage);
+      const provenance = document.createElement("p"); provenance.className = "tiny"; provenance.textContent = "Relay version: " + (record.relayVersion || "not recorded") + " · Policy: " + (record.routingMode || "not recorded");
+      box.append(heading, models, note, credits, provenance); return box;
     }
     function section(title, value, className) { const wrapper = document.createElement("section"); wrapper.className = "detail-section"; const heading = document.createElement("h3"); heading.textContent = title; const pre = document.createElement("pre"); if (className) pre.className = className; pre.textContent = json(value); wrapper.append(heading, pre); return wrapper; }
     function renderDetail(record, loading) {
       const detail = $("detail"); detail.replaceChildren(); setText("selected-id", record?.id || "none");
       if (!record) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "Select a call to inspect it."; detail.appendChild(empty); return; }
       detail.appendChild(section("Call metadata", { id: record.id, tier: record.detailTier, status: record.status, receivedAt: record.receivedAt, completedAt: record.completedAt, route: record.requestPath, requestedModel: record.requestedModel, selectedModel: record.selectedModel, streaming: record.streaming, inputBytes: record.inputBytes, outputBytes: record.outputBytes, latencyMs: record.latencyMs, replayCount: record.replayCount, toolCalls: record.toolCalls, previousResponseId: record.previousResponseId, continuedFrom: record.continuedFrom }));
-      detail.appendChild(section("Measured SDK usage and public API benchmark", record.usage || { metered: false, note: "This call predates exact SDK usage capture." }));
+      detail.prepend(routeSummary(record));
+      detail.appendChild(section("Measured SDK usage and public API benchmark", record.usage ? {...record.usage, aiCredits:sdkCredits(record.usage)} : { metered: false, note: "No SDK usage was reported for this call." }));
       if (loading) { const note = document.createElement("div"); note.className = "empty"; note.textContent = "Loading sanitized detail on demand…"; detail.appendChild(note); return; }
       if (record.detailTier === "lightweight" || !record.detailAvailable) { detail.appendChild(section("Lightweight retention", { note: "The full body aged out of the 200-call detailed tier. Mileage and metadata remain durable.", errorSummary: record.errorSummary || null })); return; }
       detail.appendChild(section("Codex input (sanitized)", record.input)); detail.appendChild(section("Copilot replay(s)", record.copilotReplays)); if (record.toolRequests?.length) detail.appendChild(section("Tool requests", record.toolRequests)); if (record.toolResolutions?.length) detail.appendChild(section("Tool resolutions", record.toolResolutions)); detail.appendChild(section("Codex output (sanitized)", record.output)); if (record.error) detail.appendChild(section("Error", record.error, "error"));

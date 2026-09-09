@@ -46,7 +46,8 @@ test("dashboard prioritizes measured SDK usage and demotes the hypothetical doll
   assert.doesNotMatch(DASHBOARD_HTML, /id="price-date"/);
   assert.doesNotMatch(DASHBOARD_HTML, /<span>API-equivalent estimate<\/span>/);
   assert.doesNotMatch(DASHBOARD_HTML, /id="rate-strip"/);
-  assert.doesNotMatch(DASHBOARD_HTML, /id="ai-credits"|Measured AI credits/);
+  assert.match(DASHBOARD_HTML, /id="ai-credits"/);
+  assert.match(DASHBOARD_HTML, /AI credits · SDK/);
   assert.match(DASHBOARD_HTML, /Copilot entitlement/);
   assert.match(DASHBOARD_HTML, /id="brand-github-copilot"/);
   assert.match(DASHBOARD_HTML, /id="brand-openai"/);
