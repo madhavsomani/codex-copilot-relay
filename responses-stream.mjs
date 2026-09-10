@@ -27,6 +27,7 @@ export class ResponsesEventStream {
     this.activeText = null;
     this.activeReasoning = null;
     this.activeTools = new Map();
+    this.activeSearches = new Map();
     this.doneItemIds = new Set();
     this.nextOutputIndex = 0;
   }
@@ -324,6 +325,23 @@ export class ResponsesEventStream {
     this.emit({ type: "response.output_item.done", output_index: outputIndex, item });
     this.doneItemIds.add(item.id);
     return item;
+  }
+
+  observeWebSearch(item) {
+    if (this.doneItemIds.has(item.id)) return;
+    let outputIndex = this.activeSearches.get(item.id);
+    if (outputIndex == null) {
+      outputIndex = this.allocateOutputIndex();
+      this.activeSearches.set(item.id, outputIndex);
+      this.emit({type:'response.output_item.added', output_index:outputIndex, item:{...item,status:'in_progress'}});
+      this.emit({type:'response.web_search_call.in_progress', output_index:outputIndex, item_id:item.id});
+    }
+    if (['completed','failed'].includes(item.status)) {
+      if (item.status === 'completed') this.emit({type:'response.web_search_call.completed', output_index:outputIndex, item_id:item.id});
+      this.emit({type:'response.output_item.done', output_index:outputIndex, item});
+      this.doneItemIds.add(item.id);
+      this.activeSearches.delete(item.id);
+    }
   }
 
   complete(output, usage) {

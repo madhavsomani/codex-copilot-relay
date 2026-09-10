@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
+import {fileURLToPath} from 'node:url';
 import { CopilotClient } from "@github/copilot-sdk";
 import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
 import { requestOwner, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
@@ -26,6 +27,8 @@ import { publicPricingSnapshot } from "./pricing.mjs";
 import { defaultEffort, routeEffort } from "./reasoning-routing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
+import {loadNativeToolsConfig, nativeJobs, NATIVE_SEARCH_NAME, prepareNativeSearch,
+  searchWithNativeCodex, imageWithNativeCodex, searchOutputItem} from './native-codex-tools.mjs';
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
 import {
   createModelRoutingPolicy,
@@ -53,6 +56,8 @@ import {
 } from "./bridge-core.mjs";
 
 const host = "127.0.0.1";
+const nativeToolsRoot = path.dirname(fileURLToPath(import.meta.url));
+let nativeToolsConfig = await loadNativeToolsConfig(nativeToolsRoot);
 const port = Number.parseInt(process.env.BRIDGE_PORT ?? "4141", 10);
 const relayVersion = (() => {
   try {
@@ -709,7 +714,7 @@ class Exchange {
 
     if (event.type === "assistant.tool_call_delta") {
       const metadata = this.toolMetadata.get(event.data?.name);
-      if (metadata && typeof event.data?.inputDelta === "string") {
+      if (metadata && !metadata.nativeSearch && typeof event.data?.inputDelta === "string") {
         this.sink?.appendToolCallDelta(event.data.inputDelta, {
           kind: metadata.kind,
           name: metadata.name,
@@ -759,6 +764,9 @@ class Exchange {
           messageItem,
           toolRequests: decision.toolRequests,
         };
+        if (messageItem && decision.toolRequests.every(request => this.toolMetadata.get(request.name)?.nativeSearch)) {
+          this.responseItems.push(messageItem);
+        }
         this.maybeCompleteToolTurn();
         return;
       }
@@ -795,6 +803,7 @@ class Exchange {
 
     if (event.type === "external_tool.requested") {
       const metadata = this.toolMetadata.get(event.data?.toolName);
+      if (metadata?.nativeSearch) return this.handleNativeSearch(event.data);
       const item = externalToolRequestToResponseItem(metadata, event.data);
       const call = {
         item,
@@ -839,6 +848,43 @@ class Exchange {
     log("response.completed", { responseId, kind: "message", model: this.model });
     this.done = true;
     await this.disconnect();
+  }
+
+  async handleNativeSearch(data) {
+    this.nativeSearchAbort ??= new AbortController();
+    this.nativeSearchCompleted ??= new Set();
+    const items = new Map();
+    log('native_tool.started', {kind:'search', backend:'openai-codex', responseId:this.sink?.responseId});
+    let payload;
+    try {
+      const args = typeof data.arguments === 'string' ? JSON.parse(data.arguments) : data.arguments;
+      const result = await searchWithNativeCodex(nativeToolsConfig, args?.query, {
+        signal:this.nativeSearchAbort.signal,
+        onSearch: value => {
+          if (!this.sink || this.sink.closed) return;
+          const previous = items.get(value.id);
+          const item = previous ?? searchOutputItem(value);
+          if (previous) Object.assign(item, searchOutputItem(value, previous.id));
+          else {items.set(value.id, item); this.responseItems.push(item);}
+          this.sink.eventStream?.observeWebSearch(item);
+        },
+      });
+      payload = {requestId:data.requestId, result:{textResultForLlm:JSON.stringify({backend:'native OpenAI search', answer:result.text, note:'Cite the explicit source URLs. Native usage is separate from Copilot credits.'}),resultType:'success'}};
+      log('native_tool.completed', {kind:'search', backend:'openai-codex', operations:result.searches.length, usage:result.usage});
+    } catch (error) {
+      payload = {requestId:data.requestId, error:error.message};
+      for (const item of items.values()) if (item.status !== 'completed') {
+        item.status = 'failed';
+        this.sink?.eventStream?.observeWebSearch(item);
+      }
+      log('native_tool.failed', {kind:'search', code:error.code || 'native_tool_failed'});
+    }
+    this.nativeSearchCompleted.add(data.toolCallId);
+    if (!this.done) {
+      try {await this.session.rpc.tools.handlePendingToolCall(payload);}
+      catch (error) {this.fail(error, 'native_tool_delivery_failed');}
+    }
+    this.maybeCompleteToolTurn();
   }
 
   async handleSessionIdle() {
@@ -956,7 +1002,10 @@ class Exchange {
 
   maybeCompleteToolTurn() {
     if (!this.lastToolMessage || !this.sink || this.sink.closed) return;
+    const nativeRequests = this.lastToolMessage.toolRequests.filter(request => this.toolMetadata.get(request.name)?.nativeSearch);
+    if (!nativeRequests.every(request => this.nativeSearchCompleted?.has(request.toolCallId))) return;
     const expected = this.lastToolMessage.toolRequests
+      .filter(request => !this.toolMetadata.get(request.name)?.nativeSearch)
       .map((request) => request.toolCallId)
       .filter(Boolean);
     if (!expected.length || !expected.every((callId) => this.pendingCalls.has(callId))) return;
@@ -1058,6 +1107,7 @@ class Exchange {
   }
 
   async disconnect() {
+    this.nativeSearchAbort?.abort();
     if (this.disconnecting) return;
     this.disconnecting = true;
     this.deadline.stop();
@@ -1205,8 +1255,14 @@ function selectSessionTools(declarations, toolChoice) {
 }
 
 function resolveRelayRequest(body) {
+  const native = prepareNativeSearch(body, nativeToolsConfig.enabled);
+  body = native.body;
   const requestCompatibility = resolveRequestCompatibility(body);
   const declarations = extractToolDeclarations(body);
+  if (native.search) {
+    const metadata = declarations.metadata.find(item => item.name === NATIVE_SEARCH_NAME);
+    metadata.nativeSearch = true;
+  }
   const sessionTools = selectSessionTools(declarations, requestCompatibility.toolChoice);
   const modelRouting = resolveRouting(body?.model, requestCompatibility.reasoningEffort);
   const model = modelRouting.selectedModel;
@@ -1446,6 +1502,7 @@ async function continueExchange(body, sink, toolOutputs) {
 }
 
 const server = http.createServer(async (request, response) => {
+  nativeToolsConfig = await loadNativeToolsConfig(nativeToolsRoot);
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${host}:${port}`}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
@@ -1457,12 +1514,13 @@ const server = http.createServer(async (request, response) => {
       provider: "github-copilot-sdk",
       model: defaultModel,
       models: availableOpenAiModels,
+      nativeTools: {enabled:nativeToolsConfig.enabled, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null},
       modelCapabilities: Object.fromEntries(availableOpenAiModels.map(id => [id, {
         ...resolveModelCompatibility(modelsById.get(id)),
         supportedReasoningEfforts: modelsById.get(id)?.supportedReasoningEfforts ?? [],
         defaultReasoningEffort: defaultEffort(modelsById.get(id)),
       }])),
-      activeExchanges: exchanges.size,
+      activeExchanges: exchanges.size + nativeJobs.size,
       exchangeStates: ownership.snapshot(),
       routing: {
         mode: modelRoutingPolicy.mode,
@@ -1613,6 +1671,23 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+    if (request.method === 'POST' && ['/v1/images/generations','/v1/images/edits'].includes(url.pathname)) {
+      const controller = new AbortController();
+      const cancel = () => {if (!response.writableEnded) controller.abort();};
+      response.once('close', cancel);
+      log('native_tool.started', {kind:'image', backend:'openai-codex'});
+      try {
+        const {body} = await readJsonBody(request, {maxBytes:180 * 1024 * 1024});
+        const output = await imageWithNativeCodex(nativeToolsConfig, body, {edit:url.pathname.endsWith('/edits'), signal:controller.signal});
+        log('native_tool.completed', {kind:'image', backend:'openai-codex', model:'gpt-image-2'});
+        if (!response.destroyed) return sendJson(response, 200, output, {'x-relay-backend':'native-openai-codex'});
+      } catch (error) {
+        log('native_tool.failed', {kind:'image', code:error.code ?? 'native_tool_failed'});
+        if (!response.destroyed) return sendJson(response, error.statusCode ?? 502, errorPayload(error, error.code ?? 'native_tool_failed'));
+      } finally {response.off('close', cancel);}
+      return;
+    }
+    log('bridge.request_rejected', {statusCode:404, code:'not_found', method:request.method, path:url.pathname});
     return sendJson(response, 404, errorPayload("Not found.", "not_found"));
   }
 
@@ -1712,6 +1787,7 @@ async function shutdown(signal) {
   log("bridge.shutdown", { signal });
   if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
+  for (const child of nativeJobs) child.kill();
   await Promise.allSettled([...exchanges].map((exchange) => exchange.disconnect()));
   await sdkRuntime.stop();
   process.exit(0);

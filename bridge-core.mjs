@@ -856,6 +856,7 @@ export function buildSessionInput(
     "Tool names beginning with codex__ are bridge aliases. Their descriptions identify the exact outer namespace and tool name.",
     "For an outer free-form/custom tool, pass an object with one string field named input; put the complete raw tool input in that string.",
     "Follow the outer developer instructions below, subject to GitHub Copilot service policies and the SDK safety rules that remain enabled.",
+    "Continue routine work already authorized by the user without redundant conversational permission questions. Full access describes execution permissions; it does not authorize unrelated actions or override an explicit approval requirement. Ask only for a necessary missing decision or authorization required by the outer instructions.",
     ...(Array.isArray(contextBudget.systemInstructions)
       ? contextBudget.systemInstructions.filter((instruction) =>
         typeof instruction === "string" && instruction.trim())

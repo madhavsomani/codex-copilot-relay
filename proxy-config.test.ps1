@@ -193,6 +193,12 @@ try {
     if ($missingProvider -or $missingBaseUrl) {
         throw 'The managed provider block was not written.'
     }
+    if (
+        $enabledText -notmatch '(?m)^requires_openai_auth = true\r?$' -or
+        $enabledText -notmatch '(?m)^experimental_bearer_token = "codex-copilot-local-only"\r?$'
+    ) {
+        throw 'Desktop authentication must be enabled together with the nonsecret relay bearer override.'
+    }
     if ($enabledText -notmatch '(?m)^stream_max_retries = 3\r?$') {
         throw 'The managed provider did not enable bounded stream retries.'
     }
@@ -217,6 +223,13 @@ try {
     }
     # A retained state file must also be able to repair a missing provider block.
     $repairedState = Set-CodexCopilotConfig -ConfigPath $configPath -Port 4144 -Model 'gpt-5.6-luna' -RestoreState $state
+    $repairedText = [IO.File]::ReadAllText($configPath)
+    if (
+        $repairedText -notmatch '(?m)^requires_openai_auth = true\r?$' -or
+        $repairedText -notmatch '(?m)^experimental_bearer_token = "codex-copilot-local-only"\r?$'
+    ) {
+        throw 'Repair lost the paired desktop-auth and relay-credential settings.'
+    }
     Restore-CodexCopilotConfig -ConfigPath $configPath -State $repairedState | Out-Null
 
     # Any safe model exposed by Copilot must work; the launcher must not hard-code
@@ -268,6 +281,17 @@ try {
     if ([IO.File]::ReadAllText($contextPath) -match '(?m)^model_(context_window|auto_compact_token_limit) =') { throw 'Global context overrides shadow per-model catalog.' }
     Restore-CodexCopilotConfig -ConfigPath $contextPath -State $multiState | Out-Null
     if ([IO.File]::ReadAllText($contextPath) -notmatch 'model_context_window = 272000') { throw 'Rollback lost original context override.' }
+
+    # Native-tool opt-in changes search capability and still restores the prior value.
+    $nativeHealth = [pscustomobject]@{ok=$true;model='gpt-6-astra';compatibility=$astraHealth.compatibility;nativeTools=[pscustomobject]@{enabled=$true}}
+    [IO.File]::WriteAllLines($contextPath,@('model = "gpt-6-astra"','web_search = "cached"'))
+    $nativeCatalogPath=New-CodexCopilotModelCatalog -Health $nativeHealth -Model 'gpt-6-astra' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
+    $nativeCatalog=Get-Content -LiteralPath $nativeCatalogPath -Raw | ConvertFrom-Json
+    if (-not $nativeCatalog.models[0].supports_search_tool) { throw 'Native search was not advertised after opt-in.' }
+    $nativeState=Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $nativeHealth
+    if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^web_search = "live"') { throw 'Native opt-in did not enable live search.' }
+    Restore-CodexCopilotConfig -ConfigPath $contextPath -State $nativeState | Out-Null
+    if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^web_search = "cached"') { throw 'Native search restore lost the original value.' }
 
     # Full-file restore must preserve exact bytes, including BOM and line endings.
     $exactConfigPath = Join-Path $tempDirectory 'exact-config.toml'

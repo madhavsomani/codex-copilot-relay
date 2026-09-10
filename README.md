@@ -496,11 +496,26 @@ when you do not want the Windows watchdog, use this manual flow.
    name = "GitHub Copilot local bridge"
    base_url = "http://127.0.0.1:4144/v1"
    wire_api = "responses"
-   requires_openai_auth = false
+   requires_openai_auth = true
+   experimental_bearer_token = "codex-copilot-local-only"
    request_max_retries = 0
    stream_max_retries = 3
    stream_idle_timeout_ms = 900000
    ```
+
+   Keep these two authentication settings together. Codex app-server 0.153.4
+   suppresses its saved ChatGPT login from the desktop authentication API when
+   `requires_openai_auth` is false, which can break browser control even while
+   websites remain logged in. The explicit bearer is a nonsecret placeholder
+   for the loopback relay, not an OpenAI or GitHub credential. It takes
+   precedence for model requests and prevents ChatGPT token/account headers
+   from reaching the relay. Never enable the flag without that override.
+   This does not authenticate or secure the relay itself.
+
+   Validate credential separation against the installed Codex binary after
+   upgrading Codex: `npm run probe:desktop-auth -- /path/to/codex`. The probe
+   uses synthetic credentials and a local mock server, not real model calls.
+   See [desktop authentication repair](docs/RELEASE-1.3.18.md).
 
 5. Reopen the Codex task and run the health and streaming probes shown above.
 6. To stop, terminate `node server.mjs` and restore the private config backup.
@@ -830,8 +845,11 @@ metadata to 272,000 tokens even when a larger context override is configured.
 The catalog preserves that Codex version's original fallback instructions and
 records Copilot's actual limits. Its generated files and cached upstream prompt
 stay in ignored runtime storage. Original configuration values remain restorable.
-OpenAI-hosted web search is disabled while this route is enabled; browser and
-connector search tools remain available. Fresh tasks must reload the configuration.
+Hosted web search is disabled by default. The optional [native Codex tools adapter](docs/NATIVE-TOOLS.md)
+enables live search and GPT Image 2 through the installed native Codex engine and
+its existing ChatGPT sign-in. These calls use separate OpenAI/ChatGPT allowance;
+main conversation inference still uses Copilot. Browser and connector tools are
+independent. Fresh tasks must reload the configuration.
 
 The relay preserves the Codex-side contract: system/developer instructions,
 role-ordered conversation history, function/custom/namespace tool declarations,
@@ -855,7 +873,8 @@ marked for deferred loading.
 | Readable reasoning summary | Forwarded when Copilot emits it; the provider may return reasoning usage without summary text |
 | Long context | Token-budgeted against the selected Copilot model, with salience-aware local compaction |
 | Data-URL images | Supported within the selected model's advertised image limits |
-| Stored Responses, Conversations, hosted prompts/tools, structured-output enforcement | Rejected explicitly; not silently emulated |
+| Live web search and built-in GPT Image 2 | Optional native Codex adapter; separate OpenAI/ChatGPT usage |
+| Stored Responses, Conversations, other hosted tools, structured-output enforcement | Rejected explicitly; not silently emulated |
 | OpenAI prompt-cache identity, encrypted reasoning state, service tier, sampling/logprobs | Provider-specific and not transferable |
 | SDK worker crash recovery | Automatic replacement and new-call recovery; interrupted in-memory exchanges require a Codex retry/continue |
 | Durable in-flight crash resume | Not yet supported; no silent replay of prompts or side effects |
@@ -867,6 +886,11 @@ OpenAI and GitHub. The same model name can therefore still show small behavioral
 differences even when the visible Codex contract is preserved.
 
 ### Why Codex can still ask for permission
+
+The assistant should perform routine work already authorized by the user without
+asking again. The relay now reminds the model of this explicitly. A conversational
+question is not a command-approval dialog, and changing the shell approval policy
+cannot guarantee that a model will never ask a question.
 
 The relay changes inference routing; it does not replace Codex, Windows, the
 browser, or connector security boundaries. With `approval_policy = "never"` and

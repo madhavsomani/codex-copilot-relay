@@ -19,7 +19,9 @@ or that every native OpenAI feature is available.
 | Image inputs and live screenshot results | Initial image plus two consecutive tool-returned images; binary data is forwarded, never embedded as prompt text |
 | Browser tools | Harness-executed function/custom tools; backend availability and browser policy still apply |
 | Worker crash and session churn | Isolated fault and capacity probes; interrupted in-memory work still needs retry |
-| Native hosted image generation, web/file search, code interpreter, computer-use API | Explicit HTTP 400: no hosted execution mapping |
+| Live hosted web search | Optional native Codex helper; actual search actions streamed as web_search_call, sources returned as URLs |
+| Built-in image_gen tool | Optional native Codex helper serves Images generations/edits endpoints with GPT Image 2 |
+| Hosted image_generation Responses declaration, file search, code interpreter, computer-use API | Explicit rejection: no execution mapping |
 | Third-party image/video generators | Ordinary connector/browser tools; service authentication and generation costs are separate |
 | Stored Responses/Conversations, JSON-schema output enforcement, provider service tiers | Unsupported controls rejected explicitly |
 | OpenAI encrypted reasoning, cache identity, model-specific serving behavior | Not transferable between providers |
@@ -59,6 +61,10 @@ large-context admission and retrieval, not perfect reasoning over arbitrary larg
 repositories. A fresh real Codex run separately verified the 870,000-token window.
 
 ## Reproduce
+
+See [native tools](NATIVE-TOOLS.md) for opt-in, billing boundaries, restrictions,
+and a live probe. Native tools require a separately installed, signed-in Codex
+engine; they are not capabilities supplied by the GitHub Copilot SDK.
 
 Run npm test and powershell -File proxy-config.test.ps1 for local regressions.
 Run npm run probe:suite -- --model gpt-6-astra --long-context true for an isolated

@@ -379,7 +379,7 @@ function New-CodexCopilotModelCatalog {
             max_context_window = $entrySettings.model_context_window; auto_compact_token_limit = $entrySettings.model_auto_compact_token_limit
             effective_context_window_percent = $percent; experimental_supported_tools = @()
             input_modalities = if ($cap.maxImageAttachments -eq 0) { @('text') } else { @('text', 'image') }
-            supports_search_tool = $false; use_responses_lite = $false
+            supports_search_tool = [bool]$Health.nativeTools.enabled; use_responses_lite = $false
             include_skills_usage_instructions = $true; include_plugin_usage_instructions = $true; include_apps_usage_instructions = $true
         }
     }
@@ -463,9 +463,9 @@ function Set-CodexCopilotConfig {
     }
 
     $contextValues = Get-CodexCopilotContextSettings -Health $ModelHealth -Model $Model
-    # Codex otherwise adds an OpenAI-hosted search declaration even to plain prompts.
-    # Browser and connector search tools are separate and remain available.
-    $contextValues['web_search'] = '"disabled"'
+    # Only advertise hosted search when the operator has opted into the native
+    # Codex adapter. Browser and connector search tools are independent.
+    $contextValues['web_search'] = if ($ModelHealth.nativeTools.enabled) { '"live"' } else { '"disabled"' }
     if ($ModelCatalogPath) { $contextValues['model_catalog_json'] = '"' + $ModelCatalogPath.Replace('\', '/') + '"' }
     # Per-model catalog limits must not be shadowed by global Astra overrides.
     if ($ModelCatalogPath -and $ModelHealth.routing.mode -eq 'per-request' -and $ModelHealth.modelCapabilities) {
@@ -536,7 +536,8 @@ function Set-CodexCopilotConfig {
         'name = "GitHub Copilot local bridge"',
         "base_url = `"http://127.0.0.1:$Port/v1`"",
         "wire_api = `"responses`"",
-        'requires_openai_auth = false',
+        'requires_openai_auth = true',
+        'experimental_bearer_token = "codex-copilot-local-only"',
         'request_max_retries = 0',
         'stream_max_retries = 3',
         'stream_idle_timeout_ms = 900000',
