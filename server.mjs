@@ -714,7 +714,7 @@ class Exchange {
 
     if (event.type === "assistant.tool_call_delta") {
       const metadata = this.toolMetadata.get(event.data?.name);
-      if (metadata && !metadata.nativeSearch && typeof event.data?.inputDelta === "string") {
+      if (metadata && metadata.kind !== "tool_search" && !metadata.nativeSearch && typeof event.data?.inputDelta === "string") {
         this.sink?.appendToolCallDelta(event.data.inputDelta, {
           kind: metadata.kind,
           name: metadata.name,
@@ -1740,7 +1740,18 @@ const server = http.createServer(async (request, response) => {
   try {
     await ownership.run(owner, async () => {
       if (response.destroyed) return;
-      const toolOutputs = extractToolOutputs(body)
+      const latestToolOutput = (Array.isArray(body.input) ? body.input : []).findLast(item =>
+        ["tool_search_output", "function_call_output", "custom_tool_call_output"].includes(item?.type));
+      const hasSearchOutput = latestToolOutput?.type === "tool_search_output";
+      if (hasSearchOutput) {
+        const prior = exchangesByCallId.get(latestToolOutput.call_id);
+        if (ownsExchange(prior, owner)) {
+          if (prior.sink && !prior.sink.closed) throw Object.assign(new Error("Tool search response is still streaming."), { statusCode: 409 });
+          prior.done = true;
+          await prior.disconnect();
+        }
+      }
+      const toolOutputs = (hasSearchOutput ? [] : extractToolOutputs(body))
         .filter((item) => ownsExchange(exchangesByCallId.get(item.call_id), owner));
       // Reject overlap before sending HTTP 200/SSE; preserve the original stream.
       if (!toolOutputs.length) await ownership.retireSuperseded(owner);

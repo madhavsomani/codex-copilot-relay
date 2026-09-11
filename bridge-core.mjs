@@ -119,7 +119,10 @@ function visitTool(tool, namespace, declarations) {
     return;
   }
 
-  if (!new Set(["function", "custom"]).has(tool.type)) return;
+  if (tool.type === "tool_search" && tool.execution === "client") {
+    tool = { ...tool, name: "tool_search", defer_loading: false };
+  }
+  if (!new Set(["function", "custom", "tool_search"]).has(tool.type)) return;
   if (typeof tool.name !== "string" || !tool.name) return;
 
   const metadata = {
@@ -160,7 +163,7 @@ export function extractToolDeclarations(body) {
   }
 
   for (const item of Array.isArray(body?.input) ? body.input : []) {
-    if (item?.type !== "additional_tools") continue;
+    if (!["additional_tools", "tool_search_output"].includes(item?.type)) continue;
     for (const tool of Array.isArray(item.tools) ? item.tools : []) {
       visitTool(tool, null, declarations);
     }
@@ -353,7 +356,11 @@ function historyEntry(item, attachments, contextStats, sourceIndex = -1) {
     };
   }
 
-  if (item.type === "function_call") {
+  if (item.type === "tool_search_output") {
+    return { role: "tool", tool_type: item.type, call_id: item.call_id, output: "Tool search loaded: " + JSON.stringify(item.tools ?? []) };
+  }
+
+  if (["function_call", "tool_search_call"].includes(item.type)) {
     return {
       role: "assistant_tool_call",
       tool_type: item.type,
@@ -853,6 +860,7 @@ export function buildSessionInput(
     "You are the language model inside an outer Codex coding harness.",
     "The outer Codex harness owns all tool execution, permission checks, filesystem access, and user approvals.",
     "Only request tools through the custom declarations supplied to this session. Never claim a tool ran before its result is returned.",
+    "Tools listed in tool_search_output history are already loaded in this session. Call the discovered tool next; do not repeat a completed search unless another capability is needed.",
     "Tool names beginning with codex__ are bridge aliases. Their descriptions identify the exact outer namespace and tool name.",
     "For an outer free-form/custom tool, pass an object with one string field named input; put the complete raw tool input in that string.",
     "Follow the outer developer instructions below, subject to GitHub Copilot service policies and the SDK safety rules that remain enabled.",
@@ -1013,6 +1021,7 @@ function validatePortableTool(tool, param = "tools") {
     }
     return;
   }
+  if (tool.type === "tool_search" && tool.execution === "client") return;
   if (!["function", "custom"].includes(tool.type)) {
     rejectUnsupported(
       param,
@@ -1026,7 +1035,7 @@ function validatePortableTools(body) {
     validatePortableTool(tool);
   }
   for (const item of Array.isArray(body?.input) ? body.input : []) {
-    if (item?.type !== "additional_tools") continue;
+    if (!["additional_tools", "tool_search_output"].includes(item?.type)) continue;
     for (const tool of Array.isArray(item.tools) ? item.tools : []) {
       validatePortableTool(tool, "input.additional_tools");
     }
@@ -1310,6 +1319,12 @@ export function externalToolRequestToResponseItem(metadata, eventData) {
     status: "completed",
   };
   if (metadata.namespace) base.namespace = metadata.namespace;
+
+  if (metadata.kind === "tool_search") {
+    return { id: base.id, call_id: callId, type: "tool_search_call",
+      execution: "client", status: "completed",
+      arguments: JSON.parse(argumentsAsJson(eventData.arguments)) };
+  }
 
   if (metadata.kind === "custom") {
     const rawArguments = eventData.arguments;

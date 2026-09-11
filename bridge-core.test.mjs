@@ -880,3 +880,22 @@ test("classifies context failures as invalid prompts", () => {
   );
   assert.equal(classifyResponseFailureCode("Socket closed unexpectedly."), "server_error");
 });
+
+test("client tool search maps to outer search calls and loads returned declarations", () => {
+  const body = { tools: [{ type: "tool_search", execution: "client", description: "Find tools", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } }], input: [] };
+  assert.doesNotThrow(() => resolveRequestCompatibility(body));
+  const declarations = extractToolDeclarations(body);
+  assert.equal(declarations.sdkTools.length, 1);
+  assert.equal(declarations.sdkTools[0].defer, "never");
+  const call = externalToolRequestToResponseItem(declarations.metadata[0], { toolCallId: "search1", arguments: { query: "calendar" } });
+  assert.equal(call.type, "tool_search_call");
+  assert.equal(call.execution, "client");
+  assert.deepEqual(call.arguments, { query: "calendar" });
+  assert.equal(call.name, undefined);
+  body.input.push(call, { type: "tool_search_output", execution: "client", call_id: "search1", tools: [{ type: "function", name: "calendar", parameters: { type: "object", properties: {} } }] });
+  assert.equal(extractToolDeclarations(body).sdkTools.length, 2);
+  assert.match(buildSessionInput(body).prompt, /Tool search loaded/);
+  assert.throws(() => resolveRequestCompatibility({ tools: [{ type: "tool_search", execution: "server" }] }), /no outer Codex execution mapping/);
+  body.input[1].tools = [{ type: "web_search" }];
+  assert.throws(() => resolveRequestCompatibility(body), /no outer Codex execution mapping/);
+});
