@@ -7,6 +7,8 @@ import { CopilotClient } from "@github/copilot-sdk";
 import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
 import { requestOwner, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
 import { DASHBOARD_HTML } from "./dashboard.mjs";
+import { SETUP_HTML } from './setup-ui.mjs';
+import { createSetupStatus, sameOriginLocal } from './setup-status.mjs';
 import {
   BlankCompletionGuard,
   PrematureCompletionGuard,
@@ -27,10 +29,10 @@ import { publicPricingSnapshot } from "./pricing.mjs";
 import { defaultEffort, routeEffort } from "./reasoning-routing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
-import {loadNativeToolsConfig, nativeJobs, NATIVE_SEARCH_NAME, prepareNativeSearch,
-  searchWithNativeCodex, imageWithNativeCodex, searchOutputItem, validateImageRequest} from './native-codex-tools.mjs';
+import {loadNativeToolsConfig, nativeJobs, prepareNativeSearch,
+  imageWithNativeCodex, validateImageRequest} from './native-codex-tools.mjs';
 import {OpenAIFallback, responseFallbackReason} from './openai-fallback.mjs';
-import {ProviderTelemetry,nativeFeatureError} from './provider-telemetry.mjs';
+import {ProviderTelemetry} from './provider-telemetry.mjs';
 import {visionCollectionBudget, prepareVisionAttachments, imageEvidence} from './vision-attachments.mjs';
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
 import {
@@ -204,6 +206,7 @@ let quotaRefreshPromise = null;
 let quotaRefreshTimer = null;
 
 const exchanges = new Set();
+let lastCodexRequestAt = null;
 const ownership = new ExchangeOwnership(exchanges);
 const exchangesByCallId = new Map();
 const exchangesByResponseId = new Map();
@@ -266,8 +269,8 @@ function dashboardSnapshot() {
   };
   snapshot.pricing = openAiPublicPricing;
   snapshot.providers = providerTelemetry.snapshot();
-  snapshot.providers.policy = {automaticFallback:false,defaultProvider:'github-copilot-sdk',nativeFeatures:['search','image'],quotaIsolation:true};
-  snapshot.providers.native = {enabled:nativeToolsConfig.enabled};
+  snapshot.providers.policy = {automaticFallback:false,defaultProvider:'github-copilot-sdk',nativeFeatures:['image'],quotaIsolation:true};
+  snapshot.providers.native = {enabled:false,searchEnabled:false,imageEnabled:nativeToolsConfig.imageEnabled === true};
   snapshot.providers.platform = openaiFallback.health();
   return snapshot;
 }
@@ -522,7 +525,7 @@ class ResponseSink {
     this.stopHeartbeat();
     this.stopDisconnectObserver();
     const payload = errorPayload(error, code);
-    const responseErrorCode = classifyResponseFailureCode(payload.error.message);
+    const responseErrorCode = classifyResponseFailureCode(payload.error.message, error?.code);
     const failedResponse = makeFailedResponseObject({
       responseId: this.responseId,
       model: this.model,
@@ -730,7 +733,7 @@ class Exchange {
 
     if (event.type === "assistant.tool_call_delta") {
       const metadata = this.toolMetadata.get(event.data?.name);
-      if (metadata && metadata.kind !== "tool_search" && !metadata.nativeSearch && typeof event.data?.inputDelta === "string") {
+      if (metadata && metadata.kind !== "tool_search" && typeof event.data?.inputDelta === "string") {
         this.sink?.appendToolCallDelta(event.data.inputDelta, {
           kind: metadata.kind,
           name: metadata.name,
@@ -780,9 +783,6 @@ class Exchange {
           messageItem,
           toolRequests: decision.toolRequests,
         };
-        if (messageItem && decision.toolRequests.every(request => this.toolMetadata.get(request.name)?.nativeSearch)) {
-          this.responseItems.push(messageItem);
-        }
         this.maybeCompleteToolTurn();
         return;
       }
@@ -819,7 +819,6 @@ class Exchange {
 
     if (event.type === "external_tool.requested") {
       const metadata = this.toolMetadata.get(event.data?.toolName);
-      if (metadata?.nativeSearch) return this.handleNativeSearch(event.data);
       const item = externalToolRequestToResponseItem(metadata, event.data);
       const call = {
         item,
@@ -864,50 +863,6 @@ class Exchange {
     log("response.completed", { responseId, kind: "message", model: this.model });
     this.done = true;
     await this.disconnect();
-  }
-
-  async handleNativeSearch(data) {
-    this.nativeSearchAbort ??= new AbortController();
-    this.nativeSearchCompleted ??= new Set();
-    const items = new Map();
-    const telemetryRecord=providerTelemetry.start({provider:'openai-codex',kind:'search',model:nativeToolsConfig.model,parentId:this.sink?.record?.id});
-    log('native_tool.started', {kind:'search', backend:'openai-codex', responseId:this.sink?.responseId});
-    let payload;
-    try {
-      const args = typeof data.arguments === 'string' ? JSON.parse(data.arguments) : data.arguments;
-      const result = await searchWithNativeCodex(nativeToolsConfig, args?.query, {
-        signal:this.nativeSearchAbort.signal,
-        onSubmitted:()=>providerTelemetry.submitted(telemetryRecord),
-        onUsage:usage=>providerTelemetry.usage(telemetryRecord,usage,{source:'native_helper_turn'}),
-        onSearch: value => {
-          if (!this.sink || this.sink.closed) return;
-          const previous = items.get(value.id);
-          const item = previous ?? searchOutputItem(value);
-          if (previous) Object.assign(item, searchOutputItem(value, previous.id));
-          else {items.set(value.id, item); this.responseItems.push(item);}
-          this.sink.eventStream?.observeWebSearch(item);
-        },
-      });
-      payload = {requestId:data.requestId, result:{textResultForLlm:JSON.stringify({backend:'native OpenAI search', answer:result.text, note:'Cite the explicit source URLs. Native usage is separate from Copilot credits.'}),resultType:'success'}};
-      log('native_tool.completed', {kind:'search', backend:'openai-codex', operations:result.searches.length, usage:result.usage});
-      providerTelemetry.finish(telemetryRecord);
-    } catch (error) {
-      // A feature-level quota error is data for the Copilot agent, not a failed
-      // model session. Never retry it or reroute the conversation to OpenAI.
-      payload = {requestId:data.requestId,result:{textResultForLlm:JSON.stringify(nativeFeatureError(error)),resultType:'success'}};
-      providerTelemetry.finish(telemetryRecord,{status:'failed',error,statusCode:error.statusCode});
-      for (const item of items.values()) if (item.status !== 'completed') {
-        item.status = 'failed';
-        this.sink?.eventStream?.observeWebSearch(item);
-      }
-      log('native_tool.failed', {kind:'search', code:error.code || 'native_tool_failed'});
-    }
-    this.nativeSearchCompleted.add(data.toolCallId);
-    if (!this.done) {
-      try {await this.session.rpc.tools.handlePendingToolCall(payload);}
-      catch (error) {this.fail(error, 'native_tool_delivery_failed');}
-    }
-    this.maybeCompleteToolTurn();
   }
 
   async handleSessionIdle() {
@@ -1025,10 +980,7 @@ class Exchange {
 
   maybeCompleteToolTurn() {
     if (!this.lastToolMessage || !this.sink || this.sink.closed) return;
-    const nativeRequests = this.lastToolMessage.toolRequests.filter(request => this.toolMetadata.get(request.name)?.nativeSearch);
-    if (!nativeRequests.every(request => this.nativeSearchCompleted?.has(request.toolCallId))) return;
     const expected = this.lastToolMessage.toolRequests
-      .filter(request => !this.toolMetadata.get(request.name)?.nativeSearch)
       .map((request) => request.toolCallId)
       .filter(Boolean);
     if (!expected.length || !expected.every((callId) => this.pendingCalls.has(callId))) return;
@@ -1139,7 +1091,6 @@ class Exchange {
   }
 
   async disconnect() {
-    this.nativeSearchAbort?.abort();
     if (this.disconnecting) return;
     this.disconnecting = true;
     this.deadline.stop();
@@ -1291,10 +1242,6 @@ function resolveRelayRequest(body) {
   body = native.body;
   const requestCompatibility = resolveRequestCompatibility(body);
   const declarations = extractToolDeclarations(body);
-  if (native.search) {
-    const metadata = declarations.metadata.find(item => item.name === NATIVE_SEARCH_NAME);
-    metadata.nativeSearch = true;
-  }
   const sessionTools = selectSessionTools(declarations, requestCompatibility.toolChoice);
   const modelRouting = resolveRouting(body?.model, requestCompatibility.reasoningEffort);
   const model = modelRouting.selectedModel;
@@ -1538,6 +1485,10 @@ async function continueExchange(body, sink, toolOutputs) {
   }
 }
 
+const readSetupStatus = createSetupStatus({root:nativeToolsRoot,port,
+  relay:async()=>({ok:(await sdkRuntime.checkHealth()).ok,version:relayVersion,model:defaultModel,activeExchanges:exchanges.size,lastCodexRequestAt}),
+  auth:async()=>{const client=await sdkRuntime.ready();const auth=await bounded(()=>client.getAuthStatus(),4000,'Copilot sign-in check');return {authenticated:auth.isAuthenticated===true,models:auth.isAuthenticated?availableOpenAiModels:[]};}});
+
 const server = http.createServer(async (request, response) => {
   nativeToolsConfig = await loadNativeToolsConfig(nativeToolsRoot);
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${host}:${port}`}`);
@@ -1549,9 +1500,10 @@ const server = http.createServer(async (request, response) => {
       sdk,
       version: relayVersion,
       provider: "github-copilot-sdk",
+      lastCodexRequestAt,
       model: defaultModel,
       models: availableOpenAiModels,
-      nativeTools: {enabled:nativeToolsConfig.enabled, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null},
+      nativeTools: {enabled:false, searchEnabled:false, imageEnabled:nativeToolsConfig.imageEnabled === true, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null},
       openaiFallback: openaiFallback.health(),
       providerPolicy:{automaticFallback:false,defaultProvider:'github-copilot-sdk',openAiQuotaBlocksCopilot:false},
       modelCapabilities: Object.fromEntries(availableOpenAiModels.map(id => [id, {
@@ -1649,6 +1601,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/")) {
+    if (!sameOriginLocal(request,port)) return sendJson(response,403,errorPayload('Dashboard requires same-origin loopback access.','forbidden'));
     // Ephemeral launcher mode has a bearer token that a browser dashboard must
     // not be asked to carry. Persistent mode is loopback-only and intentionally
     // exposes this portal only to local processes.
@@ -1666,6 +1619,14 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/dashboard/events") {
       openDashboardEventStream(request, response);
       return;
+    }
+    if (request.method === 'GET' && url.pathname === '/dashboard/setup') {
+      response.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','x-frame-options':'DENY'});
+      response.end(SETUP_HTML.replaceAll('__DASHBOARD_URL__','/dashboard'));return;
+    }
+    if (request.method === 'GET' && url.pathname === '/dashboard/setup/status') {
+      try{return sendJson(response,200,await readSetupStatus(),{'cache-control':'no-store'});}
+      catch{return sendJson(response,503,errorPayload('Setup checks unavailable.','setup_unavailable'));}
     }
     if (request.method === "GET" && url.pathname === "/dashboard/api") {
       void refreshCopilotQuota();
@@ -1809,6 +1770,8 @@ const server = http.createServer(async (request, response) => {
     relayVersion,
     routingMode: modelRoutingPolicy.mode,
   });
+  // Header-labelled observation, not authentication or a persistent app connection.
+  if (/codex/i.test(String(request.headers.originator ?? '') + ' ' + String(request.headers['user-agent'] ?? ''))) lastCodexRequestAt=new Date().toISOString();
   let sink;
   try {
     await ownership.run(owner, async () => {

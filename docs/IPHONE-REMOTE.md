@@ -13,9 +13,13 @@ ChatGPT iPhone Remote
   -> the same desktop task on your awake Windows host
   -> local Copilot relay -> GitHub Copilot model
 
-Desktop search/image feature -> native Codex/OpenAI helper
-Explicit public API/voice request -> configured OpenAI Platform service
+Desktop image-generation feature -> native Codex/OpenAI helper (images only)
+Explicit public API/Realtime client -> configured OpenAI Platform service
 ```
+
+Native desktop voice is a different feature. With the relay selected, Codex
+0.153.4 currently misroutes its call setup to `/v1/live` on the relay. The public
+Realtime adapter does not fix that. See [native voice](NATIVE-VOICE.md).
 
 Ordinary mobile ChatGPT conversations and cloud tasks do not inherit the
 Windows relay's provider configuration. They continue using their own OpenAI
@@ -104,8 +108,11 @@ model requests against synthetic accounts. It must be rerun after Codex upgrades
 - No Platform API key is needed merely to use official iPhone Remote. Optional
   public API/Realtime features have their own setup and billing.
 - Dashboard provider usage covers calls the relay actually sees. OpenAI sign-in,
-  Remote transport, normal mobile chats, and app-owned voice sessions are not
-  model calls passing through this relay and must not be shown as metered here.
+  Remote transport and normal mobile chats are not model calls metered here.
+  The current failed native voice setup hitting `/v1/live` does not establish a
+  successful OpenAI voice session or any measured voice usage. Once voice routes
+  directly to OpenAI, its usage must remain unreported unless an actual native
+  usage source is available.
 - OpenAI image/search/voice limits do not deliberately disable independent
   Copilot work. The relay cannot bypass an OpenAI account/workspace restriction
   that blocks the Remote connection or the desktop app itself.

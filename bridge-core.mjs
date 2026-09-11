@@ -1427,7 +1427,8 @@ export function makeFailedResponseObject({ responseId, model, code, message }) {
   };
 }
 
-export function classifyResponseFailureCode(message) {
+export function classifyResponseFailureCode(message, code) {
+  if (code === 'vision_budget_exceeded') return 'invalid_prompt';
   return /prompt token count|context.*(?:limit|large)|too many tokens/i
     .test(String(message ?? ""))
     ? "invalid_prompt"

@@ -379,7 +379,7 @@ function New-CodexCopilotModelCatalog {
             max_context_window = $entrySettings.model_context_window; auto_compact_token_limit = $entrySettings.model_auto_compact_token_limit
             effective_context_window_percent = $percent; experimental_supported_tools = @()
             input_modalities = if ($cap.maxImageAttachments -eq 0) { @('text') } else { @('text', 'image') }
-            supports_search_tool = [bool]$Health.nativeTools.enabled; use_responses_lite = $false
+            supports_search_tool = $false; use_responses_lite = $false
             include_skills_usage_instructions = $true; include_plugin_usage_instructions = $true; include_apps_usage_instructions = $true
         }
     }
@@ -465,7 +465,7 @@ function Set-CodexCopilotConfig {
     $contextValues = Get-CodexCopilotContextSettings -Health $ModelHealth -Model $Model
     # Only advertise hosted search when the operator has opted into the native
     # Codex adapter. Browser and connector search tools are independent.
-    $contextValues['web_search'] = if ($ModelHealth.nativeTools.enabled) { '"live"' } else { '"disabled"' }
+    $contextValues['web_search'] = '"disabled"'
     if ($ModelCatalogPath) { $contextValues['model_catalog_json'] = '"' + $ModelCatalogPath.Replace('\', '/') + '"' }
     # Per-model catalog limits must not be shadowed by global Astra overrides.
     if ($ModelCatalogPath -and $ModelHealth.routing.mode -eq 'per-request' -and $ModelHealth.modelCapabilities) {

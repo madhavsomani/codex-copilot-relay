@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {callRoute, sdkCredits} from './dashboard-data.mjs';
+import {callRoute, sdkCredits, nativeImageStatus} from './dashboard-data.mjs';
+
+test('native image status is independent of the disabled legacy search flag',()=>{
+  assert.equal(nativeImageStatus({enabled:false,imageEnabled:true}),'Images enabled · native search removed');
+  assert.equal(nativeImageStatus({enabled:true,imageEnabled:false}),'Images disabled · native search removed');
+  assert.equal(nativeImageStatus({enabled:true}),'Image status unavailable');
+});
 
 test('historical Terra to Astra routing remains distinct from current policy', () => {
   const r = callRoute({requestedModel:'gpt-5.6-terra',selectedModel:'gpt-6-astra',receivedAt:'2026-09-08T12:00:00Z'},

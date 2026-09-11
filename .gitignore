@@ -17,3 +17,7 @@ output/
 report.*.json
 *.heapsnapshot
 *.dmp
+
+# Local, abandoned Codex-engine experiment: never part of a relay release.
+/experimental/
+/probe-native-voice-routing.mjs

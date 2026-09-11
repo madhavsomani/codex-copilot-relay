@@ -16,7 +16,7 @@ usage in the relay dashboard.
 flowchart TD
     Client[Codex or a Responses-compatible agent] --> Gateway[Local relay]
     Gateway -->|Normal model requests and outer tool calls| Copilot[Official GitHub Copilot SDK]
-    Gateway -->|Basic search and GPT Image 2| Helper[Isolated signed-in native Codex helper]
+    Gateway -->|GPT Image 2 only| Helper[Isolated signed-in native Codex helper]
     Gateway -->|Explicit OpenAI model or endpoint only| API[Public OpenAI API]
     Voice[Trusted local voice client] -->|Realtime WebSocket / WebRTC signaling| Gateway
     API -->|Computer action or function call| Client
@@ -27,7 +27,7 @@ flowchart TD
 | --- | --- | --- |
 | Reasoning, coding, ordinary function tools, child-agent model turns | Copilot | Your own Copilot subscription/access and CLI login |
 | Capturing a screen, local files, shell, browser, MCP | Client/harness; results interpreted by Copilot | Client supplies and executes tools |
-| Basic hosted web search, built-in image tool with basic GPT Image 2 options | Existing native Codex helper | Current native Codex installation and sign-in; separate subscription allowance |
+| Built-in image tool with basic GPT Image 2 options | Existing native Codex helper | Current native Codex installation and sign-in; separate subscription allowance; native search removed |
 | Hosted `file_search`, `code_interpreter`, `computer_use_preview` / `computer`, Responses `image_generation` | Explicit `openai/<model>` or `/v1/openai/responses` only | Platform API key, local gateway token, supported upstream model and account access |
 | Search domain/location/context options, stored/background Responses, structured outputs | Explicit public OpenAI request only; otherwise rejected | Same public-API setup |
 | Multipart image edits, masks, explicit size/quality, multiple images, other image models | Explicit `/v1/openai/images/...` endpoint | Same; upstream validates actual supported combinations |
@@ -61,7 +61,7 @@ Official [Copilot CLI installation](https://docs.github.com/en/copilot/how-tos/s
 and [Copilot CLI authentication](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli).
 
 For the ordinary reversible Windows setup, follow [README](../README.md).
-Native search/images are optional: install current Codex, sign in using
+Native images are optional: install current Codex, sign in using
 `codex login`, then run `./Enable-Codex-NativeTools.ps1`. See
 [NATIVE-TOOLS.md](NATIVE-TOOLS.md) for the tested helper version and supported options.
 
@@ -80,7 +80,7 @@ by OpenAI. No key or local token is printed, stored in TOML, or committed.
 
 **There is no automatic fallback**, whether from an error, a quota limit, or an
 unsupported tool declaration. Normal model turns remain on Copilot. Dedicated
-native search/image and explicitly requested public API/voice calls use OpenAI.
+native image and explicitly requested public API/voice calls use OpenAI.
 No already-submitted paid request is retried or sent to a second provider.
 
 ## 3. Windows: optional authenticated hybrid launcher
@@ -150,9 +150,9 @@ Runnable client examples: [Responses](../examples/responses-client.mjs) and
 
 ## 5. Routing, state and options
 
-- Ordinary `/v1/responses` remains Copilot. Basic hosted search stays on the
-  signed-in helper when enabled. Unsupported search constraints return an error;
-  they do not select another provider.
+- Ordinary `/v1/responses` remains Copilot. Native hosted search is removed.
+  Optional stale declarations are stripped; explicitly forced hosted search is
+  rejected without launching OpenAI. Browser/connector search stays harness-owned.
 - Request `model: "openai/<actual-model-id>"` to explicitly select OpenAI. Or
   use `/v1/openai/responses` with a normal OpenAI model ID. Explicit mode also
   handles separate native image inputs and controls the Copilot path cannot.
@@ -187,10 +187,13 @@ or `/v1/realtime/calls` for WebRTC; media travels directly between the browser
 and OpenAI, not through this HTTP gateway. Keep ephemeral credentials private.
 Sessions have a 60-minute relay ceiling, 4 MiB message cap and bounded buffering.
 
-**This does not prove Codex desktop's built-in voice button uses these endpoints.**
-Its microphone, UI, native session protocol and account services are app-owned.
-The Realtime gateway can be used by compatible clients; desktop voice requires
-separate app integration verification. Copilot does not become a speech model.
+**This is not an adapter for Codex desktop's built-in voice button.** On tested
+engine 0.153.4, native voice call creation inherits the Copilot provider and fails
+at the relay's `/v1/live`. The native URL overrides do not independently select
+OpenAI account authentication. Enabling this public gateway or supplying a
+Platform key does not fix existing signed-in app voice. See
+[native voice limitations in stock Codex](NATIVE-VOICE.md).
+Copilot does not become a speech model.
 
 ## Verification and operational limits
 
@@ -235,8 +238,8 @@ their source labelled. Logs that already rotated away cannot be reconstructed;
 concurrent legacy start/finish matching is best effort. Existing Copilot
 history/mileage is left untouched.
 
-An OpenAI feature failure is isolated: native search returns structured failure
-data so the Copilot agent can continue independent work without retrying search.
+An OpenAI feature failure is isolated from independent Copilot work. Native
+search is removed; old search records remain for audit only.
 An unavailable image/voice feature still cannot finish without its own allowance.
 Explicit OpenAI model sessions receive the OpenAI error; the relay does not
 silently migrate them to Copilot. This cannot bypass an account-level gate that

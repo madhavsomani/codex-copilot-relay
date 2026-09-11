@@ -18,10 +18,10 @@ if (-not $Disable) {
     if ($version -notmatch '(\d+)\.(\d+)\.(\d+)' -or [version]$Matches[0] -lt [version]'0.153.4') { throw 'Native tools require Codex 0.153.4 or newer.' }
 }
 New-Item -ItemType Directory -Path (Split-Path -Parent $settingsPath) -Force | Out-Null
-$settings = @{enabled = (-not $Disable); codexPath = $CodexPath; model = 'gpt-6-astra'} | ConvertTo-Json
+$settings = @{enabled = $false; searchEnabled = $false; imageEnabled = (-not $Disable); codexPath = $CodexPath; model = 'gpt-6-astra'} | ConvertTo-Json
 $staged = $settingsPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
 [IO.File]::WriteAllText($staged, $settings, [Text.UTF8Encoding]::new($false))
 Move-Item -LiteralPath $staged -Destination $settingsPath -Force
 if ($Disable) { Write-Output 'Native tools disabled in settings. Version 1.3.19 or newer reads this on the next request.' }
-else { Write-Output 'Native tools enabled: search and GPT Image 2 use separate OpenAI/ChatGPT usage. Copilot remains the conversation provider.' }
+else { Write-Output 'Native images enabled: GPT Image 2 use separate OpenAI/ChatGPT usage. Copilot remains the conversation provider.' }
 if (-not $NoRepair) { & (Join-Path $bridgeRoot 'Repair-Codex-CopilotProxy.ps1') -NoDashboard }

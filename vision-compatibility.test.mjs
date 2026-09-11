@@ -17,6 +17,32 @@ const limits={maxImageAttachments:1,maxAttachmentBase64Chars:4194304,maxSingleAt
 const raster=async(color,name)=>({type:'blob',mimeType:'image/png',displayName:name,
   data:(await sharp({create:{width:120,height:80,channels:3,background:color}}).png().toBuffer()).toString('base64')});
 
+test('exact duplicate images use one source with an explicit occurrence mapping',async()=>{
+  const a=await raster('#aa3300','identity');
+  const result=await prepareVisionAttachments([a,{...a,displayName:'identity-again'}],limits);
+  assert.equal(result.attachments.length,1);
+  assert.equal(result.attachments[0].data,a.data);
+  assert.equal(result.evidence.length,2);
+  assert.match(result.note,/Source 2.*identity-again.*Source 1/);
+  assert.equal(result.deduplicatedImages,1);
+});
+
+test('JPEG packing fits detailed images without dropping distinct sources',async()=>{
+  let seed=12345;const bytes=Buffer.alloc(900*900*3);
+  for(let i=0;i<bytes.length;i++){seed=(Math.imul(seed,1664525)+1013904223)>>>0;bytes[i]=seed>>>24;}
+  const a={type:'blob',mimeType:'image/png',displayName:'detail',data:(await sharp(bytes,{raw:{width:900,height:900,channels:3}}).png().toBuffer()).toString('base64')};
+  const b=await raster('#0000ff','distinct');
+  const small={...limits,maxAttachmentBase64Chars:700000,maxSingleAttachmentBase64Chars:700000,supportedMediaTypes:['image/png','image/jpeg']};
+  const result=await prepareVisionAttachments([a,b,{...a,displayName:'repeat'}],small);
+  assert.equal(result.attachments[0].mimeType,'image/jpeg');
+  assert.ok(result.attachments[0].data.length<=small.maxAttachmentBase64Chars);
+  assert.equal(result.evidence.length,3);
+  assert.match(result.note,/Panel 2 = distinct/);
+  assert.match(result.note,/lossy JPEG/);
+  assert.equal(result.deduplicatedImages,1);
+  await assert.rejects(prepareVisionAttachments([a,b],{...small,supportedMediaTypes:['image/png']}),{code:'vision_budget_exceeded'});
+});
+
 test('single screenshots retain exact bytes with a stable hash',async()=>{
   const image=await raster('#ff0000','screen');const result=await prepareVisionAttachments([image],limits);
   assert.equal(result.attachments[0].data,image.data);assert.equal(result.note,'');assert.match(result.evidence[0].sha256,/^[a-f0-9]{64}$/);

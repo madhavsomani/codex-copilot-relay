@@ -1,4 +1,5 @@
-import { callRoute, sdkCredits } from "./dashboard-data.mjs";
+import { callRoute, sdkCredits, nativeImageStatus } from "./dashboard-data.mjs";
+import {CONNECTION_HTML,CONNECTION_STYLE,CONNECTION_SCRIPT} from './setup-ui.mjs';
 
 export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -320,6 +321,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .provider-log pre { white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:280px;overflow:auto; }
     @media (max-width:900px) { .provider-grid {grid-template-columns:1fr;} .provider-card .provider-route {min-height:0;} }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
+    ${CONNECTION_STYLE}
   </style>
 </head>
 <body>
@@ -342,13 +344,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </div>
   </header>
   <main>
+    ${CONNECTION_HTML}
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
     <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
     <section class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
       <div class="panel-head"><div><h2>Where calls actually go</h2><span class="tiny">Model name ≠ provider · separate accounts, separate counters</span></div><span class="pill" id="no-fallback">Loading policy…</span></div>
       <div class="provider-grid">
         <article class="provider-card" id="provider-copilot"><h3>GitHub Copilot</h3><div class="provider-route">Codex → Relay → Copilot SDK → selected model</div><div class="provider-values"><div><strong id="provider-copilot-calls">—</strong><small>SDK model calls</small></div><div><strong id="provider-copilot-in">—</strong><small>input tokens</small></div><div><strong id="provider-copilot-out">—</strong><small>output tokens</small></div></div><div class="provider-note" id="provider-copilot-state">Default inference route</div></article>
-        <article class="provider-card" id="provider-native"><h3>Native Codex / OpenAI</h3><div class="provider-route">Feature tool → native Codex helper → OpenAI</div><div class="provider-values"><div><strong id="provider-native-calls">—</strong><small>helper calls submitted</small></div><div><strong id="provider-native-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-native-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-native-state">Search and image features · Codex sign-in allowance</div></article>
+        <article class="provider-card" id="provider-native"><h3>Native Codex / OpenAI</h3><div class="provider-route">Feature tool → native Codex helper → OpenAI</div><div class="provider-values"><div><strong id="provider-native-calls">—</strong><small>helper calls submitted</small></div><div><strong id="provider-native-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-native-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-native-state">Image generation · native search removed · Codex sign-in allowance</div></article>
         <article class="provider-card" id="provider-platform"><h3>OpenAI Platform API</h3><div class="provider-route">Explicit API / voice request → OpenAI Platform</div><div class="provider-values"><div><strong id="provider-platform-calls">—</strong><small>API requests submitted</small></div><div><strong id="provider-platform-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-platform-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-platform-state">Separate API billing · never automatic fallback</div></article>
       </div>
       <div class="disclaimer" id="provider-coverage">Not reported means unknown, not zero. No credential tokens are displayed.</div>
@@ -485,6 +488,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <script>
     const callRoute = ${callRoute.toString()};
     const sdkCredits = ${sdkCredits.toString()};
+    const nativeImageStatus = ${nativeImageStatus.toString()};
     const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), liveEvents: [], activeSamples: [], latestInspectorRecord: null, flowTimer: null, refreshTimer: null };
     const svgNs = "http://www.w3.org/2000/svg";
     const MAX_LIVE_CALLS = 64;
@@ -866,10 +870,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         const active=records.filter(record=>!record.completedAt).length;
         setText('provider-'+id+'-calls',number(total.submitted||0));setText('provider-'+id+'-in',reportedTokens(total.inputTokens));setText('provider-'+id+'-out',reportedTokens(total.outputTokens));
         $('provider-'+id).dataset.active=String(active>0);
-        const enabled=id==='native'?data.providers?.native?.enabled:data.providers?.platform?.configured&&data.providers?.platform?.enabled;
+        const enabled=data.providers?.platform?.configured&&data.providers?.platform?.enabled;
         const limit=data.providers?.observedLimits?.[key];
-        let note=(enabled?'Enabled':'Not enabled')+' · '+number(active)+' active · '+number(total.failed||0)+' failed/rejected · '+number(total.usageReports||0)+' usage reports.';
-        if(id==='native')note+=' Image entries may report helper tokens only; generation tokens unavailable.';
+        let note=(id==='native'?nativeImageStatus(data.providers?.native):(enabled?'Enabled':'Not enabled'))+' · '+number(active)+' active · '+number(total.failed||0)+' failed/rejected · '+number(total.usageReports||0)+' usage reports.';
+        if(id==='native')note+=' Counts include historical search calls. Image entries may report helper tokens only; generation tokens unavailable.';
         else note+=' Explicit API and voice only. No subscription or Copilot credit conversion.';
         if(limit)note+=' Last limit signal: '+limit.state+' at '+time(limit.at)+' ('+(limit.kind||'feature')+'). Not an account balance.';
         setText('provider-'+id+'-state',note);
@@ -960,5 +964,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
     setText("relay-address", location.host); connectLiveEvents(); refresh(); setInterval(refresh, 5000);
   </script>
+<script>${CONNECTION_SCRIPT}</script>
 </body>
 </html>`;

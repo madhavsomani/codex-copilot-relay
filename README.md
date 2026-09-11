@@ -51,13 +51,15 @@ SDK.
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
 
-### Explicit providers and usage visibility (1.3.23)
+### Images-only native adapter and connection center (1.3.27)
 
 Keep Copilot for normal agent work and use an explicitly enabled public OpenAI
 connection for hosted tools, advanced search/image options and Realtime API
-transport. The existing signed-in Codex search/GPT Image 2 helper remains
+transport. The signed-in Codex GPT Image 2 helper remains
 available without a Platform key. Multi-image Copilot requests use bounded,
-labelled overviews; the original dashboard is unchanged.
+labelled overviews with exact-duplicate mapping and bounded JPEG compression.
+Native OpenAI search is removed. Browser/connector tools remain harness-owned.
+The connection cards distinguish configured Codex from recently observed traffic.
 The dashboard now separates Copilot, native Codex/OpenAI, and public OpenAI
 calls, with provider filters and observed token breakdowns. Missing usage is
 labelled, not invented. **No automatic fallback:** normal inference remains
@@ -66,22 +68,29 @@ feature quotas do not disable independent Copilot work.
 
 **[Step-by-step hybrid setup and client examples](docs/HYBRID-SETUP.md)** covers
 credentials, billing, restoration, generic Responses clients and honest limits.
-This is hybrid compatibility, not complete native parity or a guarantee that
-Codex desktop voice works through a custom provider.
+This is hybrid compatibility, not complete native parity. **Native desktop voice
+is currently blocked with this provider on Codex 0.153.4**: call creation reaches
+the relay's unimplemented `/v1/live`, and a URL override still uses relay auth.
+The optional public Realtime gateway is not a fix for signed-in app voice.
+See [the verified native voice limitation](docs/NATIVE-VOICE.md).
 
 ## Quick start (Windows)
 
-```powershell
-npm install -g @github/copilot
-copilot login
+Install Node.js 22 LTS or newer and stock Codex. No custom Codex engine is needed.
+After cloning (or extracting the repository ZIP), `npm run setup` opens the
+read-only connection center even before dependencies or GitHub login are ready.
+Keep it open and use a second terminal for installation/connection commands.
+This is guided setup, not a one-click installer. See [first run](docs/FIRST-RUN.md).
 
+```powershell
 git clone https://github.com/madhavsomani/codex-copilot-relay.git
 cd codex-copilot-relay
 npm ci
-npm run probe -- --model gpt-5.6-sol
+node node_modules/@github/copilot/npm-loader.js login
+node probe-setup-auth.mjs
 
 Set-ExecutionPolicy -Scope Process Bypass
-.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-5.6-sol
+.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-6-astra
 ```
 
 Reopen the Codex task after the provider switch, then visit
@@ -869,8 +878,8 @@ metadata to 272,000 tokens even when a larger context override is configured.
 The catalog preserves that Codex version's original fallback instructions and
 records Copilot's actual limits. Its generated files and cached upstream prompt
 stay in ignored runtime storage. Original configuration values remain restorable.
-Hosted web search is disabled by default. The optional [native Codex tools adapter](docs/NATIVE-TOOLS.md)
-enables live search and GPT Image 2 through the installed native Codex engine and
+Native hosted search is removed. The optional [native image adapter](docs/NATIVE-TOOLS.md)
+enables GPT Image 2 through the installed stock Codex engine and
 its existing ChatGPT sign-in. These calls use separate OpenAI/ChatGPT allowance;
 main conversation inference still uses Copilot. Browser and connector tools are
 independent. Fresh tasks must reload the configuration.
@@ -897,7 +906,8 @@ marked for deferred loading.
 | Readable reasoning summary | Forwarded when Copilot emits it; the provider may return reasoning usage without summary text |
 | Long context | Token-budgeted against the selected Copilot model, with salience-aware local compaction |
 | Data-URL images | Supported within the selected model's advertised image limits |
-| Live web search and built-in GPT Image 2 | Optional native Codex adapter; separate OpenAI/ChatGPT usage |
+| Native hosted web search | Removed; use harness browser/connector tools |
+| Built-in GPT Image 2 | Optional native image adapter; separate OpenAI/ChatGPT helper and image usage |
 | Stored Responses, Conversations, other hosted tools, structured-output enforcement | Rejected explicitly; not silently emulated |
 | OpenAI prompt-cache identity, encrypted reasoning state, service tier, sampling/logprobs | Provider-specific and not transferable |
 | SDK worker crash recovery | Automatic replacement and new-call recovery; interrupted in-memory exchanges require a Codex retry/continue |

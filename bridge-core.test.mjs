@@ -879,6 +879,8 @@ test("classifies context failures as invalid prompts", () => {
     "invalid_prompt",
   );
   assert.equal(classifyResponseFailureCode("Socket closed unexpectedly."), "server_error");
+  assert.equal(classifyResponseFailureCode('Images cannot fit the provider byte limit.', 'vision_budget_exceeded'), 'invalid_prompt');
+  assert.equal(classifyResponseFailureCode('Local image packing is busy.', 'vision_busy'), 'server_error');
 });
 
 test("client tool search maps to outer search calls and loads returned declarations", () => {

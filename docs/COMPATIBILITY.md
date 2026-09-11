@@ -19,10 +19,11 @@ or that every native OpenAI feature is available.
 | Image inputs and live screenshot results | Initial image plus two consecutive tool-returned images; binary data is forwarded, never embedded as prompt text |
 | Browser tools | Harness-executed function/custom tools; backend availability and browser policy still apply |
 | Worker crash and session churn | Isolated fault and capacity probes; interrupted in-memory work still needs retry |
-| Live hosted web search | Optional native Codex helper; actual search actions streamed as web_search_call, sources returned as URLs |
+| Native hosted web search | Removed; optional stale declarations are stripped, forced search is rejected before inference; harness browser/connector tools remain available |
 | Built-in image_gen tool | Optional native Codex helper serves Images generations/edits endpoints with GPT Image 2 |
 | Hosted image_generation Responses declaration, file search, code interpreter, computer-use API | Explicit OpenAI model/endpoint only; no automatic fallback, whole explicit turn uses OpenAI |
-| Realtime WebSocket / WebRTC signaling and public Audio API | Optional public transport; compatible client required, built-in desktop voice not certified |
+| Realtime WebSocket / WebRTC signaling and public Audio API | Optional public transport; compatible client required; not the native app voice path |
+| Native signed-in Codex desktop voice | Blocked on tested engine 0.153.4: `/v1/live` targets the relay; URL-only overrides retain relay authentication. See [native voice](NATIVE-VOICE.md) |
 | Third-party image/video generators | Ordinary connector/browser tools; service authentication and generation costs are separate |
 | Stored Responses and JSON-schema output enforcement | Optional public OpenAI transport; not implemented inside Copilot |
 | Conversations API and provider-specific controls on Copilot | Unsupported controls rejected explicitly |

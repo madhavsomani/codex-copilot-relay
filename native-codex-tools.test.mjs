@@ -3,28 +3,40 @@ import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {nativeEnvironment, nativeArguments, prepareNativeSearch, validateImageRequest,
-  runNativeCodex, searchWithNativeCodex, nativeJobs} from './native-codex-tools.mjs';
+  runNativeCodex, nativeJobs} from './native-codex-tools.mjs';
 import {extractToolDeclarations, resolveRequestCompatibility} from './bridge-core.mjs';
 import {ResponsesEventStream} from './responses-stream.mjs';
+
+test('disabled optional search does not break ordinary tools or continuations', () => {
+  const fn={type:'function',name:'echo',parameters:{type:'object'}};
+  const body={tools:[{type:'web_search'},fn],input:[{type:'function_call_output',call_id:'pending',output:'ok'}]};
+  const result=prepareNativeSearch(body,false);
+  assert.equal(result.search,false);
+  assert.deepEqual(result.body.tools,[fn]);
+  assert.deepEqual(result.body.input,body.input);
+  assert.equal(body.tools.length,2);
+  assert.throws(()=>prepareNativeSearch({tools:[{type:'web_search'}],tool_choice:'required'},false),{code:'native_tools_disabled'});
+});
+
+test('images-only settings block search before any helper is spawned', async () => {
+  let spawned=false;
+  await assert.rejects(runNativeCodex({enabled:false,imageEnabled:true,searchEnabled:false},'search','fixture',{
+    spawnProcess:()=>{spawned=true;throw new Error('must not spawn');}
+  }),{code:'native_tools_disabled'});
+  assert.equal(spawned,false);
+});
 
 test('native helpers retain login location but exclude credentials and endpoint/agent overrides', () => {
   const env = nativeEnvironment({Path:'bin', CODEX_HOME:'profile', OPENAI_API_KEY:'synthetic', OPENAI_BASE_URL:'http://relay', BRIDGE_AUTH_TOKEN:'synthetic', CODEX_THREAD_ID:'parent', NODE_OPTIONS:'injected'});
   assert.deepEqual(env, {Path:'bin',CODEX_HOME:'profile',RUST_LOG:'off'});
-  const args = nativeArguments('search', 'gpt-6-astra', 'temporary');
-  for (const value of ['--ignore-user-config','--ephemeral','read-only','model_provider="openai"','features.shell_tool=false','features.multi_agent=false','features.apps=false','features.image_generation=false','web_search="live"']) assert.ok(args.includes(value));
+  const args = nativeArguments('image', 'gpt-6-astra', 'temporary');
+  assert.ok(args.includes('features.plugins=false'));
+  for (const value of ['--ignore-user-config','--ephemeral','read-only','model_provider="openai"','features.shell_tool=false','features.multi_agent=false','features.apps=false','features.image_generation=true','web_search="disabled"']) assert.ok(args.includes(value));
   assert.equal(args.at(-1), '-');
 });
 
-test('hosted search requires opt-in and refuses constraints it cannot enforce', () => {
-  const body={tools:[{type:'web_search'}], tool_choice:{type:'web_search'}};
-  assert.throws(()=>prepareNativeSearch(body,false),{code:'native_tools_disabled'});
-  for (const extra of [{filters:{allowed_domains:['example.com']}},{user_location:{city:'Seattle'}},{external_web_access:false},{search_context_size:'high'}])
-    assert.throws(()=>prepareNativeSearch({tools:[{type:'web_search',...extra}]},true),{code:'unsupported_parameter'});
-  const prepared=prepareNativeSearch(body,true);
-  assert.equal(prepared.search,true);
-  assert.doesNotThrow(()=>resolveRequestCompatibility(prepared.body));
-  assert.equal(extractToolDeclarations(prepared.body).sdkTools.length,1);
-  assert.equal(body.tools[0].type,'web_search');
+test('legacy enabled flag cannot restore removed search', () => {
+  assert.equal(prepareNativeSearch({tools:[{type:'web_search'}]},true).search,false);
 });
 
 test('image adapter enforces its actual contract before performing native work', () => {
@@ -49,21 +61,15 @@ function fakeProcess(events, {finish=true, code=0}={}) {
   };
 }
 const config={enabled:true,codexPath:'fixture',model:'fixture'};
-test('native JSONL preserves split UTF-8 and requires actual completed search evidence',async()=>{
-  const events=[{type:'thread.started',thread_id:'00000000-0000-0000-0000-000000000000'},
-    {type:'item.completed',item:{id:'search1',type:'web_search',action:{type:'search',query:'test'}}},
-    {type:'item.completed',item:{type:'agent_message',text:'Café [source](https://example.com)'}},
-    {type:'turn.completed',usage:{input_tokens:1,output_tokens:2}}];
-  const progress=[];
-  const result=await searchWithNativeCodex(config,'test',{spawnProcess:fakeProcess(events),onSearch:item=>progress.push(item)});
-  assert.equal(result.text,'Café [source](https://example.com)'); assert.equal(progress.length,1);
-  await assert.rejects(searchWithNativeCodex(config,'test',{spawnProcess:fakeProcess(events.filter(e=>e.item?.type!=='web_search'))}),{code:'native_search_not_performed'});
-  assert.equal(nativeJobs.size,0);
+test('image helper preserves split UTF-8',async()=>{
+  const events=[{type:'item.completed',item:{type:'agent_message',text:'Café'}},{type:'turn.completed',usage:{input_tokens:1,output_tokens:2}}];
+  const result=await runNativeCodex(config,'image','fixture',{spawnProcess:fakeProcess(events)});
+  assert.equal(result.text,'Café');
 });
 test('cancelled and incomplete native jobs release their capacity',async()=>{
-  await assert.rejects(runNativeCodex(config,'search','x',{spawnProcess:fakeProcess([])}),{code:'native_turn_incomplete'});
+  await assert.rejects(runNativeCodex(config,'image','x',{spawnProcess:fakeProcess([])}),{code:'native_turn_incomplete'});
   const controller=new AbortController();
-  const result=runNativeCodex(config,'search','x',{signal:controller.signal,spawnProcess:fakeProcess([],{finish:false})});
+  const result=runNativeCodex(config,'image','x',{signal:controller.signal,spawnProcess:fakeProcess([],{finish:false})});
   controller.abort(); await assert.rejects(result,{code:'native_tool_cancelled'}); assert.equal(nativeJobs.size,0);
 });
 test('native search SSE keeps stable output indexes and does not duplicate terminal items',()=>{

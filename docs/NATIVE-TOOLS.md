@@ -1,82 +1,72 @@
-# Optional native search and images
+# Optional native images (OpenAI allowance)
 
-For full hosted tool protocols, advanced search/image options, and Realtime,
-see [hybrid setup](HYBRID-SETUP.md). Version 1.3.22 adds a separately authenticated
-public OpenAI API path. The restrictions below describe only the original
-subscription-based Codex helper, not that optional public transport.
+The native adapter is **images-only**. Native OpenAI web search has been removed,
+including legacy opt-ins. Ordinary reasoning and screenshot analysis remain on
+GitHub Copilot; the Codex harness still owns browser and connector tools.
 
-The conversation continues through GitHub Copilot. When explicitly enabled, the
-relay uses the installed native Codex engine for web search and GPT Image 2.
-This is a hybrid adapter, not Copilot-hosted search/image generation. It consumes
-the native account's OpenAI/ChatGPT allowance in addition to Copilot allowance.
-Native helper usage is logged separately and is excluded from dashboard Copilot
-credits and dollar estimates. Each invocation includes a separate native model
-turn, so it adds latency and native input/output usage.
+## Enable / disable
 
-## Enable
+Use an existing, signed-in **stock Codex 0.153.4 or newer** installation:
 
-Install current Codex desktop/CLI and sign in through its normal login flow.
-Codex 0.153.4 is the tested minimum. Then run:
+```powershell
+.\Enable-Codex-NativeTools.ps1
+# To disable native image generation:
+.\Enable-Codex-NativeTools.ps1 -Disable
+```
 
-    powershell -NoProfile -File .\Enable-Codex-NativeTools.ps1
+The helper discovers the installed executable or accepts an explicit
+`-CodexPath`. It never replaces the executable, reads login tokens or grants
+an entitlement. Settings are local in ignored `runtime/native-tools.json`.
+`imageEnabled` is independent of the removed `searchEnabled` flag. Repair
+preserves the protected original-config backup and defers updates while busy.
 
-Pass -CodexPath with the absolute executable path when automatic desktop discovery
-is unavailable. The script writes only ignored runtime/native-tools.json and
-uses the normal Repair path. Active relay exchanges are preserved. Native search
-is advertised only when health confirms the adapter is enabled. Reopen the task
-after config/catalog changes so Codex loads the live search declaration.
+## Where usage goes
 
-To opt out:
+A request to `/v1/images/generations` or `/v1/images/edits` launches an isolated
+native OpenAI Codex helper turn that asks GPT Image 2 to generate exactly one
+image. Both the helper turn and image service use OpenAI allowance. It is not
+free local image generation, and helper launches are not underlying API-call
+counts. Plugins, shell, subagents and hosted search are disabled in the helper.
 
-    powershell -NoProfile -File .\Enable-Codex-NativeTools.ps1 -Disable
+The dashboard exposes images-enabled/search-removed state and keeps historical
+search records intact. Available counters measure helper-turn input/output;
+image-generation tokens may be missing. Missing is unknown, not zero. Old quota
+signals are historical events, not a current account balance. No automatic
+provider fallback or image retry is performed.
 
-Running v1.3.19+ reads the setting on each request. A helper already running may
-finish; new invocations fail explicitly after disabling. Restore Normal Codex
-still restores the protected prior configuration, which may be a different
-custom provider if that was the configuration backed up originally.
+## Supported options
 
-## Execution and limits
+- Model: `gpt-image-2`; one image per request (`n=1`).
+- Non-empty prompt up to 32,000 characters.
+- Quality, size and background: `auto` only (or omit them).
+- Edits: one to five embedded PNG/JPEG/WebP data-URL references, up to 32 MiB each.
+- No remote/local URL fetching, masks, image batches or arbitrary output paths.
+- The helper reads only its newly generated PNG, not a model-supplied path.
+- Native app voice is unsupported; see [voice limitations](NATIVE-VOICE.md).
 
-- Search: supports live web_search/web_search_preview, default medium context,
-  and an explicit hosted search tool choice. Real native search actions are
-  emitted as Responses web_search_call items; the helper returns explicit source
-  URLs for the Copilot answer. OpenAI's opaque citation IDs do not transfer into
-  Copilot's context, so native citation-marker identity is not preserved.
-- Domain filters, requested user location, cached-only search, nondefault search
-  context sizes and max_tool_calls are rejected rather than silently ignored.
-- Images: the built-in image_gen tool calls /v1/images/generations or
-  /v1/images/edits. Both are implemented for gpt-image-2, one result, automatic
-  quality/size/background. Edits accept 1-5 PNG/JPEG/WebP data-URL references.
-  Multipart uploads, remote reference URLs, masks and explicit output settings
-  are not supported by this subscription-based helper. The gateway routes
-  neither unsupported requests nor quota failures automatically. Select the
-  explicit `/v1/openai/...` endpoint or `openai/<model>` for public API work.
-- At most two native helpers run concurrently. Each has a ten-minute deadline,
-  a bounded JSONL output buffer, and cancellation when its caller disconnects.
-  Search is bounded to five observed native web operations.
-- Native helpers run ephemeral, with user config ignored, a read-only shell
-  sandbox, shell tools disabled, apps disabled and subagents disabled. They
-  receive the requested query or image prompt/references, not the parent chat.
-  Native Codex still supplies its own system and installed skill context.
-- The relay never opens the authentication store or copies/refreshes account
-  tokens. Native Codex handles authentication. API-key and endpoint override
-  environment variables are excluded, preventing recursion back into the relay.
-- For generated images, the relay reads only the new native thread's PNG output,
-  verifies its path/type/size, and returns it to the original Codex image tool.
-  Temporary edit references are removed after the request. Native generated
-  artifacts remain in the account's Codex generated_images directory.
+The optional [public Platform gateway](HYBRID-SETUP.md) is separate, disabled by
+default, requires separate credentials and explicit routing, and has its own
+billing. Enabling native images does not enable that gateway.
 
-## Verification
+## Screenshot / image history is a different path
 
-    node --test native-codex-tools.test.mjs
-    node probe-native-tools.mjs --image
+The relay prepares image inputs locally for Copilot. Exact byte duplicates share
+one source with an explicit reference mapping. Every distinct image is retained
+within the bounded collection. PNG is tried first; JPEG at bounded quality is
+used only if supported, before reducing resolution. The note discloses loss and
+panel mapping. Single fitting images retain their exact original bytes.
 
-The live probe starts its own loopback relay on a random port, verifies a real
-search/source URL and a generated PNG, and writes evidence under ignored runtime.
-It consumes both Copilot and native OpenAI/ChatGPT allowance. Omit --image for a
-search-only probe. Production is not restarted by this probe.
+Packing never regenerates an image or edits source files. Copilot's advertised
+limits remain enforced. For tiny text or exact comparisons, request an individual
+image or crop; a contact sheet cannot preserve arbitrary detail from every page.
 
-Relevant upstream implementation:
-[image tool](https://github.com/openai/codex/blob/196964ef10db326047c3e71fc568693cbd7c58a8/codex-rs/ext/image-generation/src/tool.rs),
-[image provider selection](https://github.com/openai/codex/blob/196964ef10db326047c3e71fc568693cbd7c58a8/codex-rs/ext/image-generation/src/backend.rs),
-[official configuration reference](https://developers.openai.com/codex/config-reference/).
+## Local verification (no OpenAI inference)
+
+```powershell
+node --test native-codex-tools.test.mjs vision-compatibility.test.mjs
+powershell -NoProfile -File .\remote-compatibility.test.ps1
+```
+
+The old paid native-search probes no longer apply and are excluded from release
+verification. Real image-generation tests consume allowance and need explicit
+approval. Never regenerate existing assets just to test transport.

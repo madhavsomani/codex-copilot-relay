@@ -282,14 +282,14 @@ try {
     Restore-CodexCopilotConfig -ConfigPath $contextPath -State $multiState | Out-Null
     if ([IO.File]::ReadAllText($contextPath) -notmatch 'model_context_window = 272000') { throw 'Rollback lost original context override.' }
 
-    # Native-tool opt-in changes search capability and still restores the prior value.
+    # Legacy native-tool opt-in cannot re-enable removed search; rollback preserves the prior value.
     $nativeHealth = [pscustomobject]@{ok=$true;model='gpt-6-astra';compatibility=$astraHealth.compatibility;nativeTools=[pscustomobject]@{enabled=$true}}
     [IO.File]::WriteAllLines($contextPath,@('model = "gpt-6-astra"','web_search = "cached"'))
     $nativeCatalogPath=New-CodexCopilotModelCatalog -Health $nativeHealth -Model 'gpt-6-astra' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
     $nativeCatalog=Get-Content -LiteralPath $nativeCatalogPath -Raw | ConvertFrom-Json
-    if (-not $nativeCatalog.models[0].supports_search_tool) { throw 'Native search was not advertised after opt-in.' }
+    if ($nativeCatalog.models[0].supports_search_tool) { throw 'Legacy native opt-in advertised removed search.' }
     $nativeState=Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $nativeHealth
-    if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^web_search = "live"') { throw 'Native opt-in did not enable live search.' }
+    if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^web_search = "disabled"') { throw 'Legacy native opt-in re-enabled removed search.' }
     Restore-CodexCopilotConfig -ConfigPath $contextPath -State $nativeState | Out-Null
     if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^web_search = "cached"') { throw 'Native search restore lost the original value.' }
 

@@ -27,6 +27,14 @@
   Codex engine upgrade rerun `probe-desktop-auth.mjs` against that installed
   engine. Do not claim iPhone Remote is verified without a phone-to-host
   prompt/reply round trip. See `docs/IPHONE-REMOTE.md`.
+- Support unmodified stock Codex only. Do not ship or install custom engines.
+  Native app voice is unsupported on the tested engine; never weaken model
+  credential isolation to enable it. See `docs/NATIVE-VOICE.md`.
+- Native OpenAI helpers are images-only. Search is removed, including legacy
+  opt-ins. Browser and connector tools are separate, harness-owned capabilities.
+- Run `basic-revert.test.ps1` for lifecycle work. Connection status must
+  distinguish configured routing from observed traffic and authentication.
+- The connection center is guided/read-only, not an automatic installer.
 
 - Run `npm test` and `git diff --check` for every code change.
 - For dashboard work, inspect the live page at desktop, tablet, and phone widths

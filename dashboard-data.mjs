@@ -19,3 +19,8 @@ export function sdkCredits(usage) {
   if (!(usage.creditMeteredApiCalls > 0) && !(usage.totalNanoAiu > 0)) return null;
   return usage.totalNanoAiu / 1_000_000_000;
 }
+
+export function nativeImageStatus(native) {
+  if (!native || typeof native.imageEnabled !== 'boolean') return 'Image status unavailable';
+  return (native.imageEnabled ? 'Images enabled' : 'Images disabled') + ' · native search removed';
+}

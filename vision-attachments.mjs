@@ -30,21 +30,31 @@ export async function prepareVisionAttachments(attachments, compatibility) {
     compatibility.maxSingleAttachmentBase64Chars ?? MAX_PACKED_BASE64);
   const total = attachments.reduce((sum, image) => sum + image.data.length, 0);
   if (!maxCount) throw failure('This model does not support images. Select a vision-capable model.');
-  if (attachments.length <= maxCount && total <= maxBytes
-      && attachments.every(image => image.data.length <= maxBytes)) {
-    return {attachments, note:'', evidence:imageEvidence(attachments)};
-  }
   if (attachments.length > MAX_PACKED_IMAGES || total > MAX_PACKED_BASE64)
     throw failure('Too many image bytes for local packing. Request a smaller image batch.');
+  const evidence=imageEvidence(attachments), seen=new Map(), unique=[], aliases=[];
+  for (const [index,image] of attachments.entries()) {
+    const digest=evidence[index].sha256;
+    if (seen.has(digest)) {
+      const first=seen.get(digest);
+      aliases.push(`Source ${index+1} (${String(image.displayName || image.description || 'image').slice(0,128)}) is byte-identical to Source ${first.source+1} (Panel ${first.panel+1})`);
+    } else {
+      seen.set(digest,{source:index,panel:unique.length});unique.push(image);
+    }
+  }
+  const aliasNote=aliases.length ? `[Relay exact-duplicate mapping: ${aliases.join('; ')}. Every occurrence still refers to the same source pixels; panel order is first occurrence, not last appearance.]` : '';
+  const finish=result=>({...result,evidence,deduplicatedImages:aliases.length,note:[result.note,aliasNote].filter(Boolean).join('\n')});
+  if (unique.length <= maxCount && unique.reduce((sum,image)=>sum+image.data.length,0) <= maxBytes)
+    return finish({attachments:unique,note:''});
   if(activePacks>=2) {
     if(waitingPacks.length>=8)throw Object.assign(failure('Local image packing is busy. Retry a smaller batch.'),{code:'vision_busy',statusCode:429});
     await new Promise(resolve=>waitingPacks.push(resolve));
   } else activePacks++;
-  try {return await packImages(attachments,maxBytes);}
+  try {return finish(await packImages(unique,maxBytes,compatibility.supportedMediaTypes));}
   finally {if(waitingPacks.length)waitingPacks.shift()();else activePacks--;}
 }
 
-async function packImages(attachments,maxBytes) {
+async function packImages(attachments,maxBytes,supportedMediaTypes) {
   // No remote URLs or filesystem paths are fetched here. Decode only supplied
   // raster bytes, with a decompression-bomb limit and no animated-frame expansion.
   const tiles = [];
@@ -83,14 +93,21 @@ async function packImages(attachments,maxBytes) {
       layers.push({input:label,left,top},{input:tile.data,left:left+8,top:top+36});
       if (index%columns===columns-1) top += rowHeights[Math.floor(index/columns)];
     }
-    const bytes = await sharp({create:{width:columns*width,height:rowHeights.reduce((a,b)=>a+b,0),channels:3,background:'#ffffff'}})
+    const png = await sharp({create:{width:columns*width,height:rowHeights.reduce((a,b)=>a+b,0),channels:3,background:'#ffffff'}})
       .composite(layers).png({compressionLevel:9}).toBuffer();
-    const data = bytes.toString('base64');
-    if (data.length <= maxBytes) {
+    const formats=[{mimeType:'image/png',quality:null}];
+    if (!supportedMediaTypes?.length || supportedMediaTypes.includes('image/jpeg'))
+      formats.push({mimeType:'image/jpeg',quality:90},{mimeType:'image/jpeg',quality:80});
+    for (const format of formats) {
+      const bytes=format.quality ? await sharp(png).flatten({background:'#ffffff'})
+        .jpeg({quality:format.quality,chromaSubsampling:'4:4:4'}).toBuffer() : png;
+      // Check encoded size too: the transport carries base64, not just the raster.
+      if (4*Math.ceil(bytes.length/3)>maxBytes) continue;
+      const data=bytes.toString('base64');
       const displayName = 'visual-panels-' + hash(data).slice(0,12);
-      const attachment = {type:'blob',mimeType:'image/png',data,displayName};
+      const attachment = {type:'blob',mimeType:format.mimeType,data,displayName};
       return {attachments:[attachment], evidence:imageEvidence(attachments),
-        note:`[Relay visual overview: ${rendered.map(tile=>`${tile.label} = ${tile.name}`).join('; ')}. Panels follow conversation order; later panels are newer. Images may be reduced to ${edge}px per edge. For small text or exact comparison request each source separately. This is a packed overview, not separate native image inputs.]`};
+        note:`[Relay visual overview: ${rendered.map(tile=>`${tile.label} = ${String(tile.name).slice(0,128)}`).join('; ')}. Panels follow first-occurrence order. Images may be reduced to ${edge}px per edge. Encoding: ${format.quality ? 'lossy JPEG quality '+format.quality : 'lossless PNG'}. For small text or exact comparison request each source separately. This is a packed overview, not separate native image inputs. Original files are unchanged.]`};
     }
   }
   throw failure('Images cannot fit the provider byte limit. Request individual images or smaller crops.');

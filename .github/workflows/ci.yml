@@ -39,6 +39,10 @@ jobs:
         shell: powershell
         run: .\remote-compatibility.test.ps1
       - if: runner.os == 'Windows'
+        name: Basic revert restores exact original config
+        shell: powershell
+        run: .\basic-revert.test.ps1
+      - if: runner.os == 'Windows'
         name: Parse every PowerShell script
         shell: powershell
         run: |
