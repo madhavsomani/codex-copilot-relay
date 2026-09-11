@@ -19,6 +19,15 @@
 
 ## Required verification
 
+- Preserve OpenAI desktop identity, native account/Remote services, device
+  pairings and managed Remote policies when changing model routing. Never
+  expose the loopback relay to make mobile access work. Keep the paired
+  desktop-auth flag and nonsecret model bearer override together.
+- For config/lifecycle changes, run `remote-compatibility.test.ps1`; after a
+  Codex engine upgrade rerun `probe-desktop-auth.mjs` against that installed
+  engine. Do not claim iPhone Remote is verified without a phone-to-host
+  prompt/reply round trip. See `docs/IPHONE-REMOTE.md`.
+
 - Run `npm test` and `git diff --check` for every code change.
 - For dashboard work, inspect the live page at desktop, tablet, and phone widths
   and confirm there is no page-level horizontal overflow or browser console error.

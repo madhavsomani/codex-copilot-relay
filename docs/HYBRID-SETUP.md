@@ -6,6 +6,12 @@ authentication bypass. It does not promise identical behavior across providers.
 
 ## Three distinct execution paths
 
+Using iPhone to continue a desktop task is an app-owned **Remote connection**,
+not a fourth model-provider route. Keep OpenAI account/pairing services intact;
+see [iPhone Remote setup and verification](IPHONE-REMOTE.md). A public API key
+is not required merely for Remote, and its transport is not counted as model
+usage in the relay dashboard.
+
 ```mermaid
 flowchart TD
     Client[Codex or a Responses-compatible agent] --> Gateway[Local relay]

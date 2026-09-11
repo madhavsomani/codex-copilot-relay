@@ -448,10 +448,16 @@ localhost address, and ordinary mobile Chat/Work does not read the desktop
 Codex `config.toml` custom-provider setting.
 
 If the ChatGPT mobile app shows **Remote** and this Windows Codex host is paired,
-you can steer a [supported desktop Codex task](https://help.openai.com/en/articles/20001275/)
-from the phone while the computer stays awake, online, and running Codex. The
-task still executes on the Windows host, where this local relay and provider
-configuration remain in effect. This is indirect remote control, not direct
+the [official Remote feature](https://learn.chatgpt.com/docs/remote-connections)
+lets you steer desktop tasks while the computer stays awake, online, and running
+Codex. The intended configuration keeps model work on the host's Copilot relay
+and leaves OpenAI sign-in, pairing, and Remote transport with the desktop app.
+The official docs do not explicitly certify this custom provider with Remote;
+verify a phone-to-host task round trip on your installation.
+
+See the [iPhone Remote setup and verification guide](docs/IPHONE-REMOTE.md).
+No Platform API key is required merely for Remote. Ordinary mobile ChatGPT
+conversations remain on OpenAI. This is indirect remote control, not direct
 mobile access to the relay or dashboard.
 
 Do not port-forward the persistent relay: it intentionally has no bearer token

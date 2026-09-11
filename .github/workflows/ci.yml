@@ -35,6 +35,10 @@ jobs:
         shell: powershell
         run: .\hybrid-config.test.ps1
       - if: runner.os == 'Windows'
+        name: Preserve desktop account and Remote pairing state
+        shell: powershell
+        run: .\remote-compatibility.test.ps1
+      - if: runner.os == 'Windows'
         name: Parse every PowerShell script
         shell: powershell
         run: |
