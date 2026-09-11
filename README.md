@@ -51,6 +51,19 @@ SDK.
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
 
+### Optional hybrid capabilities (1.3.22)
+
+Keep Copilot for normal agent work and use an explicitly enabled public OpenAI
+connection for hosted tools, advanced search/image options and Realtime API
+transport. The existing signed-in Codex search/GPT Image 2 helper remains
+available without a Platform key. Multi-image Copilot requests use bounded,
+labelled overviews; the original dashboard is unchanged.
+
+**[Step-by-step hybrid setup and client examples](docs/HYBRID-SETUP.md)** covers
+credentials, billing, restoration, generic Responses clients and honest limits.
+This is hybrid compatibility, not complete native parity or a guarantee that
+Codex desktop voice works through a custom provider.
+
 ## Quick start (Windows)
 
 ```powershell

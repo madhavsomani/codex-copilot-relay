@@ -1,5 +1,10 @@
 # Optional native search and images
 
+For full hosted tool protocols, advanced search/image options, and Realtime,
+see [hybrid setup](HYBRID-SETUP.md). Version 1.3.22 adds a separately authenticated
+public OpenAI API path. The restrictions below describe only the original
+subscription-based Codex helper, not that optional public transport.
+
 The conversation continues through GitHub Copilot. When explicitly enabled, the
 relay uses the installed native Codex engine for web search and GPT Image 2.
 This is a hybrid adapter, not Copilot-hosted search/image generation. It consumes
@@ -43,8 +48,9 @@ custom provider if that was the configuration backed up originally.
   /v1/images/edits. Both are implemented for gpt-image-2, one result, automatic
   quality/size/background. Edits accept 1-5 PNG/JPEG/WebP data-URL references.
   Multipart uploads, remote reference URLs, masks and explicit output settings
-  are not supported by this adapter. The hosted Responses image_generation
-  declaration remains unsupported; it is a different protocol.
+  are not supported by this subscription-based helper. The gateway routes
+  those requests and the separate hosted Responses image_generation protocol
+  to the optional public API fallback when authenticated and enabled.
 - At most two native helpers run concurrently. Each has a ten-minute deadline,
   a bounded JSONL output buffer, and cancellation when its caller disconnects.
   Search is bounded to five observed native web operations.

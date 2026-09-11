@@ -528,23 +528,15 @@ function finalizeImageAttachments({
   maxImageAttachments,
   maxAttachmentBase64Chars,
   maxSingleAttachmentBase64Chars,
+  requireRecentImages = false,
 }) {
   const serializedContext = `${systemContent}\n${prompt}`;
   const referenced = attachments.filter((attachment) =>
     serializedContext.includes(`[Image attached as ${attachment.displayName}]`));
-  const latestUserImageSource = referenced
-    .filter((attachment) => attachment._bridgeSourceRole === "user")
-    .reduce((latest, attachment) => Math.max(latest, attachment._bridgeSourceIndex), -1);
-  const priority = (attachment) => {
-    if (attachment._bridgeSourceRole === "user"
-      && attachment._bridgeSourceIndex === latestUserImageSource) return 4;
-    if (attachment._bridgeInstruction) return 3;
-    if (attachment._bridgeSourceRole === "user") return 2;
-    return 1;
-  };
+  // Recency, not the user/tool role, determines the current visual state.
+  // Otherwise a reference uploaded hours ago can displace today's screenshot.
   const ranked = [...referenced].sort((left, right) =>
-    priority(right) - priority(left)
-      || right._bridgeSourceIndex - left._bridgeSourceIndex
+    right._bridgeSourceIndex - left._bridgeSourceIndex
       || right._bridgeCandidateIndex - left._bridgeCandidateIndex);
   const selected = [];
   let base64Chars = 0;
@@ -559,8 +551,13 @@ function finalizeImageAttachments({
   selected.sort((left, right) => left._bridgeCandidateIndex - right._bridgeCandidateIndex);
   const selectedNames = new Set(selected.map((attachment) => attachment.displayName));
   const omitted = attachments.filter((attachment) => !selectedNames.has(attachment.displayName));
+  const newestSource = referenced.reduce((latest,image)=>Math.max(latest,image._bridgeSourceIndex),-1);
+  if (requireRecentImages && omitted.some(image=>image._bridgeSourceIndex===newestSource)) {
+    throw Object.assign(new Error('The newest image batch exceeds the local image collection budget. Request fewer images or smaller crops.'),
+      {code:'vision_budget_exceeded',statusCode:400});
+  }
   const omissionReason = maxImageAttachments > 0
-    ? `[Image omitted by bridge compatibility policy; the selected model accepts at most ${maxImageAttachments} prompt image(s).]`
+    ? `[Image omitted by bridge count/byte budget; request that historical image again for exact comparison.]`
     : "[Image omitted because the selected model does not accept prompt images.]";
   let adjustedSystemContent = systemContent;
   let adjustedPrompt = prompt;
@@ -908,6 +905,7 @@ export function buildSessionInput(
     maxImageAttachments,
     maxAttachmentBase64Chars,
     maxSingleAttachmentBase64Chars,
+    requireRecentImages: contextBudget.requireRecentImages === true,
   }));
   contextStats.promptChars = prompt.length;
   contextStats.systemChars = systemContent.length;
@@ -1284,6 +1282,7 @@ export function normalizeToolOutput(item, compatibility = {}) {
       maxImageAttachments: compatibility.maxImageAttachments ?? MAX_IMAGE_ATTACHMENTS,
       maxAttachmentBase64Chars: compatibility.maxAttachmentBase64Chars ?? MAX_ATTACHMENT_BASE64_CHARS,
       maxSingleAttachmentBase64Chars: compatibility.maxSingleAttachmentBase64Chars ?? MAX_ATTACHMENT_BASE64_CHARS,
+      requireRecentImages: compatibility.requireRecentImages === true,
     }));
   }
   const failed = item?.success === false

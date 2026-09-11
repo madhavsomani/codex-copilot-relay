@@ -31,6 +31,10 @@ jobs:
         shell: powershell
         run: .\sdk-process-health.test.ps1
       - if: runner.os == 'Windows'
+        name: Optional hybrid header and restoration tests
+        shell: powershell
+        run: .\hybrid-config.test.ps1
+      - if: runner.os == 'Windows'
         name: Parse every PowerShell script
         shell: powershell
         run: |

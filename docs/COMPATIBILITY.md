@@ -21,9 +21,11 @@ or that every native OpenAI feature is available.
 | Worker crash and session churn | Isolated fault and capacity probes; interrupted in-memory work still needs retry |
 | Live hosted web search | Optional native Codex helper; actual search actions streamed as web_search_call, sources returned as URLs |
 | Built-in image_gen tool | Optional native Codex helper serves Images generations/edits endpoints with GPT Image 2 |
-| Hosted image_generation Responses declaration, file search, code interpreter, computer-use API | Explicit rejection: no execution mapping |
+| Hosted image_generation Responses declaration, file search, code interpreter, computer-use API | Optional authenticated public OpenAI transport; whole turn uses OpenAI, upstream model/access requirements apply |
+| Realtime WebSocket / WebRTC signaling and public Audio API | Optional public transport; compatible client required, built-in desktop voice not certified |
 | Third-party image/video generators | Ordinary connector/browser tools; service authentication and generation costs are separate |
-| Stored Responses/Conversations, JSON-schema output enforcement, provider service tiers | Unsupported controls rejected explicitly |
+| Stored Responses and JSON-schema output enforcement | Optional public OpenAI transport; not implemented inside Copilot |
+| Conversations API and provider-specific controls on Copilot | Unsupported controls rejected explicitly |
 | OpenAI encrypted reasoning, cache identity, model-specific serving behavior | Not transferable between providers |
 
 ## Why a 1M model showed 258,400 tokens
@@ -54,6 +56,13 @@ For the Astra account checked on September 9, 2026 UTC:
 - SDK exhaustion buffer: 95%; explicit truncation=disabled disables both relay
   history compaction and SDK automatic compaction.
 - Vision: one image per prompt, at most 3 MiB decoded / 4 MiB base64 on this route.
+
+Since 1.3.22, bounded recent images can be packed into a labelled overview to
+fit that one native slot. This does not increase the provider's actual limit
+or guarantee OCR accuracy. Single in-budget images remain byte-identical;
+new tool screenshots outrank older uploaded references during history rebuild.
+See [hybrid setup](HYBRID-SETUP.md) for exact native multi-image routing and
+separate credentials, billing, endpoint, and desktop voice limitations.
 
 A live synthetic request measured 836,528 input tokens and recovered exact random
 checkpoints from the beginning, middle, and end without compaction. This proves

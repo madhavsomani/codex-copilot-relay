@@ -541,9 +541,12 @@ function Set-CodexCopilotConfig {
         'request_max_retries = 0',
         'stream_max_retries = 3',
         'stream_idle_timeout_ms = 900000',
+        $(if ($env:RELAY_OPENAI_ENABLED -eq '1' -and $env:RELAY_OPENAI_LOCAL_TOKEN.Length -ge 32) {
+            'env_http_headers = { "x-relay-openai-token" = "RELAY_OPENAI_LOCAL_TOKEN" }'
+        }),
         $script:CodexCopilotConfigEnd
     )) {
-        $lines.Add($line)
+        if ($null -ne $line) { $lines.Add($line) }
     }
     Write-CodexConfigLines -ConfigPath $ConfigPath -Lines ([string[]]$lines.ToArray())
     return $state
@@ -762,7 +765,10 @@ function Start-CodexCopilotAutoStart {
 
     $taskName = Get-CodexCopilotScheduledTaskName
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($task -and (Test-CodexCopilotTaskTargetsScript -Task $task -ScriptPath $WatchScript)) {
+    # A scheduled task does not inherit this launcher's process-local secrets.
+    # Hybrid mode uses a hidden child watchdog now; normal logon autostart stays
+    # registered and starts without paid credentials after a reboot.
+    if ($env:RELAY_OPENAI_ENABLED -ne '1' -and $task -and (Test-CodexCopilotTaskTargetsScript -Task $task -ScriptPath $WatchScript)) {
         if ($RestartRunning -and $task.State -eq 'Running') {
             Stop-ScheduledTask -TaskName $taskName
             for ($attempt = 0; $attempt -lt 40; $attempt++) {

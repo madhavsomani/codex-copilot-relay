@@ -21,6 +21,9 @@ const env = {...process.env, BRIDGE_PORT:String(port), BRIDGE_DEFAULT_MODEL:mode
   BRIDGE_MODEL_ROUTING_MODE:'per-request'};
 delete env.BRIDGE_LOCKED_REASONING_EFFORT;
 delete env.BRIDGE_AUTH_TOKEN; delete env.BRIDGE_EVENT_LOG_PATH;
+// Unit mocks cover paid fallback. This SDK suite must never spend Platform API
+// funds merely because its parent happened to enable the optional gateway.
+delete env.RELAY_OPENAI_ENABLED; delete env.RELAY_OPENAI_API_KEY; delete env.RELAY_OPENAI_LOCAL_TOKEN;
 const child = spawn(process.execPath, [path.join(root, 'server.mjs')], {cwd:root, env, windowsHide:true, stdio:['ignore','pipe','pipe']});
 let errors = ''; child.stdout.resume(); child.stderr.on('data', data => { errors = (errors + data).slice(-4000); });
 const report = {model,port,isolated:true,startedAt:new Date().toISOString(),results:[]};
@@ -39,6 +42,7 @@ try {
     ['probe-deferred-tool.mjs',[]], ['probe-reasoning-phase.mjs',[]], ['probe-tool-choice.mjs',[]],
     ['probe-request-semantics.mjs',[]], ['probe-agent-message.mjs',[]], ['probe-concurrency.mjs',['--count','4']],
     ['probe-premature-recovery.mjs',[]], ['probe-delayed-tool.mjs',['--delay-ms','31000']], ['probe-vision.mjs',[]],
+    ['probe-vision-parity.mjs',['--artifacts',path.join(runtime,'vision-parity')]],
     ['probe-failure-stream.mjs',[]], ['probe-parallel-tools.mjs',[]], ['probe-steering.mjs',[]],
     ['probe-routing-agents.mjs',[]],
   ];

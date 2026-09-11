@@ -28,7 +28,9 @@ import { defaultEffort, routeEffort } from "./reasoning-routing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import {loadNativeToolsConfig, nativeJobs, NATIVE_SEARCH_NAME, prepareNativeSearch,
-  searchWithNativeCodex, imageWithNativeCodex, searchOutputItem} from './native-codex-tools.mjs';
+  searchWithNativeCodex, imageWithNativeCodex, searchOutputItem, validateImageRequest} from './native-codex-tools.mjs';
+import {OpenAIFallback, responseFallbackReason} from './openai-fallback.mjs';
+import {visionCollectionBudget, prepareVisionAttachments, imageEvidence} from './vision-attachments.mjs';
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
 import {
   createModelRoutingPolicy,
@@ -141,6 +143,7 @@ const maxRequestBodyBytes = environmentInteger(
   512 * 1024 * 1024,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
+const openaiFallback = new OpenAIFallback({directory:runtimeDirectory,log:(event,data)=>log(event,data)});
 const recorderHistoryLimit = environmentInteger("BRIDGE_HISTORY_LIMIT", 1_000, 1_000, 10_000);
 const recorderDetailedLimit = environmentInteger(
   "BRIDGE_DETAILED_HISTORY_LIMIT",
@@ -1044,7 +1047,16 @@ class Exchange {
     for (const output of outputs) {
       const call = this.pendingCalls.get(output.call_id);
       if (!call) continue;
-      const normalized = normalizeToolOutput(output, this.modelCompatibility);
+      const normalized = normalizeToolOutput(output, visionCollectionBudget(this.modelCompatibility));
+      if (normalized.binaryResultsForLlm?.length) {
+        const vision = await prepareVisionAttachments(normalized.binaryResultsForLlm, this.modelCompatibility);
+        normalized.text += vision.note ? '\n' + vision.note : '';
+        normalized.binaryResultsForLlm = vision.attachments.map(image=>({type:'image',
+          data:image.data,mimeType:image.mimeType,
+          description:(image.displayName || image.description) + ' sha256:' + imageEvidence([image])[0].sha256}));
+        log('vision.tool_handoff',{callId:output.call_id,sourceImages:vision.evidence,
+          sentImages:imageEvidence(normalized.binaryResultsForLlm)});
+      }
       const payload = normalized.failed
         ? { requestId: call.requestId, error: normalized.text || "Outer Codex tool failed." }
         : { requestId: call.requestId, result: {
@@ -1308,11 +1320,16 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     useHistoryCompaction: requestCompatibility.useHistoryCompaction,
     reasoningContext: requestCompatibility.reasoningContext,
     systemInstructions: requestCompatibility.systemInstructions,
-    maxImageAttachments: modelCompatibility.maxImageAttachments,
-    maxAttachmentBase64Chars: modelCompatibility.maxAttachmentBase64Chars,
-    maxSingleAttachmentBase64Chars:
-      modelCompatibility.maxSingleAttachmentBase64Chars,
+    ...visionCollectionBudget(modelCompatibility),
   });
+  if (sessionInput.attachments.length) {
+    const vision = await prepareVisionAttachments(sessionInput.attachments,modelCompatibility);
+    sessionInput.attachments = vision.attachments;
+    if (vision.note) sessionInput.prompt += '\n' + vision.note;
+    sessionInput.contextStats.imageAttachments = vision.attachments.length;
+    sessionInput.contextStats.attachmentBase64Chars = vision.attachments.reduce((sum,image)=>sum+image.data.length,0);
+    log('vision.initial_handoff',{sourceImages:vision.evidence,sentImages:imageEvidence(vision.attachments)});
+  }
   if (requestCompatibility.toolChoice === "none") sessionInput.requiresAction = false;
   if (requestCompatibility.toolChoice === "required"
     || requestCompatibility.toolChoice?.mode === "specific") {
@@ -1515,12 +1532,13 @@ const server = http.createServer(async (request, response) => {
       model: defaultModel,
       models: availableOpenAiModels,
       nativeTools: {enabled:nativeToolsConfig.enabled, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null},
+      openaiFallback: openaiFallback.health(),
       modelCapabilities: Object.fromEntries(availableOpenAiModels.map(id => [id, {
         ...resolveModelCompatibility(modelsById.get(id)),
         supportedReasoningEfforts: modelsById.get(id)?.supportedReasoningEfforts ?? [],
         defaultReasoningEffort: defaultEffort(modelsById.get(id)),
       }])),
-      activeExchanges: exchanges.size + nativeJobs.size,
+      activeExchanges: exchanges.size + nativeJobs.size + openaiFallback.jobs.size,
       exchangeStates: ownership.snapshot(),
       routing: {
         mode: modelRoutingPolicy.mode,
@@ -1543,6 +1561,7 @@ const server = http.createServer(async (request, response) => {
         outerCodexInstructions: "forwarded",
         outerCodexTools: "declaration-only; execution remains in Codex",
         toolResultImages: "binary image results forwarded on live tool continuations within model limits",
+        multiImageHandling: "bounded labelled contact sheet when provider image count/byte limits require packing; exact single-image bytes preserved",
         outerCodexMemory: "forwarded through request instructions",
         assistantMessagePhase: "preserved",
         readableReasoningSummaries: "forwarded when emitted by Copilot",
@@ -1663,6 +1682,15 @@ const server = http.createServer(async (request, response) => {
     return sendJson(response, 401, errorPayload("Invalid bridge bearer token.", "unauthorized"));
   }
 
+  // Paid endpoints are additionally authenticated by their own local token.
+  // Explicit /openai routes never touch the Copilot SDK or native subscription.
+  if (url.pathname.startsWith('/v1/openai/') ||
+      /^\/v1\/(files|vector_stores|containers|realtime|audio)(\/|$)/.test(url.pathname) ||
+      url.pathname.startsWith('/v1/responses/')) {
+    try {return await openaiFallback.forward(request,response,url);}
+    catch(error){return sendJson(response,error.statusCode||503,errorPayload(error,error.code));}
+  }
+
   if (request.method === "GET" && url.pathname === "/v1/models") {
     // Codex's provider endpoint expects its own ModelsResponse envelope rather
     // than the public OpenAI list-models shape. An empty catalog tells Codex to
@@ -1671,13 +1699,24 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+    if (request.method === 'POST' && url.pathname === '/v1/images/variations') {
+      try {return await openaiFallback.forward(request,response,url,{reason:'image_variations'});}
+      catch(error){return sendJson(response,error.statusCode||503,errorPayload(error,error.code));}
+    }
     if (request.method === 'POST' && ['/v1/images/generations','/v1/images/edits'].includes(url.pathname)) {
       const controller = new AbortController();
       const cancel = () => {if (!response.writableEnded) controller.abort();};
       response.once('close', cancel);
-      log('native_tool.started', {kind:'image', backend:'openai-codex'});
       try {
+        if (!String(request.headers['content-type']).includes('application/json')) {
+          return await openaiFallback.forward(request,response,url,{reason:'multipart_image'});
+        }
         const {body} = await readJsonBody(request, {maxBytes:180 * 1024 * 1024});
+        let publicReason = nativeToolsConfig.enabled ? null : 'native_images_disabled';
+        try {validateImageRequest(body,url.pathname.endsWith('/edits'));}
+        catch(error) {if(error.code==='unsupported_parameter'||error.code==='invalid_image_reference')publicReason='extended_image_options';else throw error;}
+        if (publicReason) return await openaiFallback.forward(request,response,url,{body,reason:publicReason});
+        log('native_tool.started', {kind:'image', backend:'openai-codex'});
         const output = await imageWithNativeCodex(nativeToolsConfig, body, {edit:url.pathname.endsWith('/edits'), signal:controller.signal});
         log('native_tool.completed', {kind:'image', backend:'openai-codex', model:'gpt-image-2'});
         if (!response.destroyed) return sendJson(response, 200, output, {'x-relay-backend':'native-openai-codex'});
@@ -1712,6 +1751,18 @@ const server = http.createServer(async (request, response) => {
   }
 
   const body = parsedBody.body;
+  const publicReason = responseFallbackReason(body,{nativeEnabled:nativeToolsConfig.enabled,
+    knownResponse:openaiFallback.routes.has(body?.previous_response_id)});
+  if (publicReason) {
+    if (body.previous_response_id && exchangesByResponseId.has(body.previous_response_id))
+      return sendJson(response,409,errorPayload('Cannot move an active Copilot response ID into OpenAI. Start an OpenAI-routed request with full context.','provider_continuation_conflict'));
+    try {return await openaiFallback.forward(request,response,url,{body,reason:publicReason});}
+    catch(error){return sendJson(response,error.statusCode||503,errorPayload(error,error.code));}
+  }
+  if (openaiFallback.health().enabled && body?.previous_response_id &&
+      !exchangesByResponseId.has(body.previous_response_id)) {
+    return sendJson(response,409,errorPayload('Response route is unknown or expired. Resend full context with an explicit provider; the relay will not guess the backend.','unknown_response_route'));
+  }
   let requestCompatibility;
   let owner;
   try {
@@ -1782,6 +1833,7 @@ const server = http.createServer(async (request, response) => {
 
 server.requestTimeout = 0;
 server.headersTimeout = 60_000;
+openaiFallback.attachRealtime(server);
 
 server.listen(port, host, () => {
   log("bridge.ready", {
@@ -1798,6 +1850,7 @@ async function shutdown(signal) {
   log("bridge.shutdown", { signal });
   if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
+  openaiFallback.close();
   for (const child of nativeJobs) child.kill();
   await Promise.allSettled([...exchanges].map((exchange) => exchange.disconnect()));
   await sdkRuntime.stop();

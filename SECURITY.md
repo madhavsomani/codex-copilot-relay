@@ -36,6 +36,28 @@ passes the delegation task as ordinary text over loopback. Codex still owns the
 tool boundary and approval checks. This compatibility behavior is another
 reason the listener must never be exposed to a LAN, public tunnel, or proxy.
 
+## Optional paid OpenAI transport
+
+Public fallback is off by default and requires a dedicated
+`RELAY_OPENAI_API_KEY` plus a distinct local token of at least 32 characters.
+The launcher retains them only in process environment. TOML contains an
+environment-variable reference, never either credential. Do not persist secrets
+in scripts or commit shell transcripts. Normal reboot startup does not recover
+process-local credentials.
+
+Paid routes reject browser Origin headers and unexpected Host values. They
+forward only to the fixed public OpenAI host, with a path/method allowlist and
+no redirects. Incoming Authorization, cookies and local gateway tokens are
+never forwarded. Files, multipart image data and whole hosted-tool turns are
+transmitted only through the authenticated opt-in path. See
+[hybrid setup](docs/HYBRID-SETUP.md) before enabling it.
+
+The gateway never executes OpenAI computer actions itself or automatically
+acknowledges safety checks. Client approvals remain mandatory where applicable.
+It does not read Codex or Copilot token stores. Public API activity is excluded
+from Copilot billing counters. Only hashed response-affinity metadata and
+body-free status events are persisted by this transport.
+
 ## Reporting an issue
 
 Do not paste secrets, private prompts, config backups, or raw runtime logs into
