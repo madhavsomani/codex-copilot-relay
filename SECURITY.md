@@ -38,7 +38,7 @@ reason the listener must never be exposed to a LAN, public tunnel, or proxy.
 
 ## Optional paid OpenAI transport
 
-Public fallback is off by default and requires a dedicated
+The explicit public gateway is off by default and requires a dedicated
 `RELAY_OPENAI_API_KEY` plus a distinct local token of at least 32 characters.
 The launcher retains them only in process environment. TOML contains an
 environment-variable reference, never either credential. Do not persist secrets
@@ -55,8 +55,10 @@ transmitted only through the authenticated opt-in path. See
 The gateway never executes OpenAI computer actions itself or automatically
 acknowledges safety checks. Client approvals remain mandatory where applicable.
 It does not read Codex or Copilot token stores. Public API activity is excluded
-from Copilot billing counters. Only hashed response-affinity metadata and
-body-free status events are persisted by this transport.
+from Copilot billing counters. Hashed response-affinity metadata, allowlisted
+numeric token usage, model/feature routing, and body-free outcome metadata are
+persisted. Prompts, media and credentials are excluded. Automatic provider
+fallback is disabled, including when a feature hits its own usage limit.
 
 ## Reporting an issue
 

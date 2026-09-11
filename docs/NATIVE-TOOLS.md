@@ -49,8 +49,8 @@ custom provider if that was the configuration backed up originally.
   quality/size/background. Edits accept 1-5 PNG/JPEG/WebP data-URL references.
   Multipart uploads, remote reference URLs, masks and explicit output settings
   are not supported by this subscription-based helper. The gateway routes
-  those requests and the separate hosted Responses image_generation protocol
-  to the optional public API fallback when authenticated and enabled.
+  neither unsupported requests nor quota failures automatically. Select the
+  explicit `/v1/openai/...` endpoint or `openai/<model>` for public API work.
 - At most two native helpers run concurrently. Each has a ten-minute deadline,
   a bounded JSONL output buffer, and cancellation when its caller disconnects.
   Search is bounded to five observed native web operations.

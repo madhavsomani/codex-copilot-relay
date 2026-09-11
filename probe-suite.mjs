@@ -43,6 +43,7 @@ try {
     ['probe-request-semantics.mjs',[]], ['probe-agent-message.mjs',[]], ['probe-concurrency.mjs',['--count','4']],
     ['probe-premature-recovery.mjs',[]], ['probe-delayed-tool.mjs',['--delay-ms','31000']], ['probe-vision.mjs',[]],
     ['probe-vision-parity.mjs',['--artifacts',path.join(runtime,'vision-parity')]],
+    ['probe-quota-isolation.mjs',[]],
     ['probe-failure-stream.mjs',[]], ['probe-parallel-tools.mjs',[]], ['probe-steering.mjs',[]],
     ['probe-routing-agents.mjs',[]],
   ];

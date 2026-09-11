@@ -300,6 +300,25 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .detail { min-height: auto; } }
     @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; } .section-nav { order: 3; width: 100%; overflow-x: auto; } .telemetry-rail { grid-template-columns: 1fr; } .chart { min-height: 208px; } .compact-chart { min-height: 0; } .architecture-body { padding: 12px; } .brand-avatar { width: 38px; height: 38px; } }
     @media (max-width: 430px) { .kpis { grid-template-columns: 1fr; } .kpis .kpi:last-child { grid-column: auto; } }
+    .provider-panel { margin: 16px 0; }
+    .provider-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--border); }
+    .provider-card { padding:16px 18px; min-width:0; background:var(--panel,#111925); border-top:2px solid transparent; }
+    .provider-card[data-active="true"] { border-top-color:var(--cyan); }
+    .provider-card h3 { margin:0 0 6px;font-size:14px; }
+    .provider-card .provider-route { font-size:11px;color:var(--muted);overflow-wrap:anywhere;min-height:28px; }
+    .provider-values { display:flex; gap:16px; flex-wrap:wrap;margin:12px 0; }
+    .provider-values strong { display:block;font-size:20px;font-variant-numeric:tabular-nums; }
+    .provider-values small { color:var(--muted);font-size:10px; }
+    .provider-note { font-size:11px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere; }
+    .provider-log { padding:12px 16px; }
+    .provider-log summary { cursor:pointer;font-size:13px; }
+    .provider-log .provider-toolbar { display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0; }
+    .provider-log select { background:var(--panel,#111925);color:inherit;border:1px solid var(--border);border-radius:6px;padding:6px; }
+    .provider-log .table-wrap { max-height:330px;overflow:auto; }
+    .provider-log td { white-space:normal;overflow-wrap:anywhere; }
+    .provider-log table { min-width:740px; }
+    .provider-log pre { white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:280px;overflow:auto; }
+    @media (max-width:900px) { .provider-grid {grid-template-columns:1fr;} .provider-card .provider-route {min-height:0;} }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
   </style>
 </head>
@@ -325,6 +344,20 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <main>
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
     <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
+    <section class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
+      <div class="panel-head"><div><h2>Where calls actually go</h2><span class="tiny">Model name ≠ provider · separate accounts, separate counters</span></div><span class="pill" id="no-fallback">Loading policy…</span></div>
+      <div class="provider-grid">
+        <article class="provider-card" id="provider-copilot"><h3>GitHub Copilot</h3><div class="provider-route">Codex → Relay → Copilot SDK → selected model</div><div class="provider-values"><div><strong id="provider-copilot-calls">—</strong><small>SDK model calls</small></div><div><strong id="provider-copilot-in">—</strong><small>input tokens</small></div><div><strong id="provider-copilot-out">—</strong><small>output tokens</small></div></div><div class="provider-note" id="provider-copilot-state">Default inference route</div></article>
+        <article class="provider-card" id="provider-native"><h3>Native Codex / OpenAI</h3><div class="provider-route">Feature tool → native Codex helper → OpenAI</div><div class="provider-values"><div><strong id="provider-native-calls">—</strong><small>helper calls submitted</small></div><div><strong id="provider-native-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-native-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-native-state">Search and image features · Codex sign-in allowance</div></article>
+        <article class="provider-card" id="provider-platform"><h3>OpenAI Platform API</h3><div class="provider-route">Explicit API / voice request → OpenAI Platform</div><div class="provider-values"><div><strong id="provider-platform-calls">—</strong><small>API requests submitted</small></div><div><strong id="provider-platform-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-platform-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-platform-state">Separate API billing · never automatic fallback</div></article>
+      </div>
+      <div class="disclaimer" id="provider-coverage">Not reported means unknown, not zero. No credential tokens are displayed.</div>
+      <details class="provider-log" id="provider-call-log"><summary>Inspect provider calls and token usage <span class="tiny" id="provider-log-count"></span></summary>
+        <div class="provider-toolbar"><label for="provider-filter">Destination</label><select id="provider-filter"><option value="all">All providers</option><option value="github-copilot-sdk">GitHub Copilot</option><option value="openai-codex">Native Codex / OpenAI</option><option value="openai-platform">OpenAI Platform API</option></select><span class="tiny">Newest 100 matching calls · select a row for exact usage</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Time / call ID</th><th>Destination / feature</th><th>Model</th><th>Outcome</th><th>Input / output tokens</th><th>Evidence</th></tr></thead><tbody id="provider-call-rows"></tbody></table></div>
+        <pre id="provider-call-detail">Select a call. This view contains metadata only—never prompts, images, audio or credentials.</pre>
+      </details>
+    </section>
     <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
       <article class="kpi"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">↗</span><span>Calls handled</span></div><div class="kpi-main"><strong class="kpi-value" id="received">0</strong><svg class="kpi-sparkline" id="kpi-requests-chart" role="img" aria-label="Recent received request trend"></svg></div><div class="kpi-foot"><strong id="replayed">0</strong> Copilot replays · <span id="traffic">0 B</span></div></article>
       <article class="kpi good"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">✓</span><span>Success rate</span></div><div class="kpi-main"><strong class="kpi-value" id="success-rate">—</strong><svg class="kpi-sparkline" id="kpi-success-chart" role="img" aria-label="Recent completion-rate trend"></svg></div><div class="kpi-foot"><strong id="completed">0</strong> completed · <span id="failed">0</span> failed</div></article>
@@ -335,7 +368,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     <section class="command-grid">
       <div class="relay-stack">
       <article class="panel architecture" id="relay-architecture">
-        <div class="panel-head"><div class="panel-title"><span class="panel-title-icon"><span aria-hidden="true">⌁</span></span><div><h2>Live relay fabric</h2><span class="tiny">Upright request, response, and tool glyphs move only for real relay phases</span></div></div><span class="phase" id="flow-phase">IDLE</span></div>
+        <div class="panel-head"><div class="panel-title"><span class="panel-title-icon"><span aria-hidden="true">⌁</span></span><div><h2>Live relay fabric</h2><span class="tiny">Copilot route only · other destinations are shown in provider activity above</span></div></div><span class="phase" id="flow-phase">IDLE</span></div>
         <div class="architecture-body">
           <div class="network-viewport">
             <div class="network-stage">
@@ -391,12 +424,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </div>
       <div class="inspection-stack">
       <aside class="panel live-inspector" aria-labelledby="inspector-heading">
-        <div class="panel-head"><div><h2 id="inspector-heading">Live request inspector</h2><span class="tiny">Most recent real SSE phase across every active call</span></div><span class="live-badge connected"><span class="dot"></span>live</span></div>
+        <div class="panel-head"><div><h2 id="inspector-heading">Live request inspector</h2><span class="tiny">Most recent Copilot phase · OpenAI calls appear in the provider ledger</span></div><span class="live-badge connected"><span class="dot"></span>live</span></div>
         <div class="inspector-body">
           <dl class="inspector-grid">
             <dt>Request ID</dt><dd id="inspector-id">waiting</dd>
             <dt>Requested model</dt><dd class="model route-value" id="inspector-requested">—</dd>
-            <dt>Selected backend</dt><dd class="model route-value" id="inspector-model">—</dd>
+            <dt>Selected model</dt><dd class="model route-value" id="inspector-model">—</dd>
+            <dt>Destination</dt><dd>GitHub Copilot SDK</dd>
             <dt>SDK usage model</dt><dd class="model route-value" id="inspector-reported">not reported</dd>
             <dt>Selection</dt><dd class="route-value" id="inspector-selection">—</dd>
             <dt>Status</dt><dd id="inspector-status">idle</dd>
@@ -757,6 +791,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       state.flowTimer = setTimeout(() => { stage.setAttribute("class", "traffic-map idle"); setText("flow-phase", "IDLE"); }, 2600);
     }
     function handleLiveEvent(event) {
+      if(event.type==='provider.activity') {clearTimeout(state.refreshTimer);state.refreshTimer=setTimeout(refresh,150);return;}
       const record = event.record || {}, id = String(record.id || "unknown"), model = record.selectedModel || "selection pending";
       if (event.type === "dashboard.ready") return;
       setText("network-model-name", model);
@@ -781,6 +816,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       source.onerror = () => { $("live-badge").className = "live-badge"; setText("live-status", "reconnecting live feed"); };
     }
     function renderStats(data) {
+      renderProviders(data);
       const summary = data.summary || {}, storage = data.storage || {};
       state.current = { startedAt: data.startedAt, routing: data.routing };
       setText("routing-policy", data.routing?.mode === "per-request"
@@ -788,7 +824,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         : data.routing?.mode === "locked-default"
           ? "Forced default routing · Backend: " + (data.routing.lockedModel || data.defaultModel || "unknown")
           : "Routing policy unavailable for this relay version");
-      setText("routing-context", "Current relay started " + time(data.startedAt) + ". Past calls keep their original route; continuing exchanges keep their selected model.");
+      setText("routing-context", "Copilot stays the default. OpenAI feature limits do not switch or disable Copilot. Current relay started " + time(data.startedAt) + ".");
       setText("network-model-name", state.latestInspectorRecord?.selectedModel || "Awaiting selection");
       setText("received", number(summary.received)); setText("replayed", number(summary.replayed)); setText("completed", number(summary.completed)); setText("failed", number(summary.failed)); setText("tools", number(summary.toolCalls)); setText("latency", duration(summary.avgLatencyMs)); setText("traffic", bytes((summary.inputBytes || 0) + (summary.outputBytes || 0)));
       setText("limit", number(data.maxRecords || 1000)); setText("detail-limit", number(data.maxDetailedRecords || 200) + " detailed"); setText("count", number(state.records.length) + " retained records");
@@ -815,6 +851,55 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         rows.appendChild(row);
       }
       $("show-more").hidden = state.visible >= state.records.length;
+    }
+    const providerName = value => ({'github-copilot-sdk':'GitHub Copilot','openai-codex':'Native Codex / OpenAI','openai-platform':'OpenAI Platform API'}[value] || 'Not recorded');
+    const reportedTokens = value => typeof value==='number'&&Number.isFinite(value)?number(value):'not reported';
+    function renderProviders(data) {
+      state.providerData=data.providers;
+      setText('no-fallback',data.providers?.policy?.automaticFallback===false?'No automatic fallback':'Policy unavailable');
+      const summary=data.summary||{};
+      setText('provider-copilot-calls',number(summary.sdkApiCalls||0));setText('provider-copilot-in',reportedTokens(summary.inputTokens));setText('provider-copilot-out',reportedTokens(summary.outputTokens));
+      setText('provider-copilot-state','Default inference · '+number(data.activeExchanges||0)+' active exchanges · Copilot entitlement. OpenAI limits stay isolated.');
+      $('provider-copilot').dataset.active=String((data.activeExchanges||0)>0);
+      for(const [key,id] of [['openai-codex','native'],['openai-platform','platform']]){
+        const total=data.providers?.totals?.[key]||{},records=(data.providers?.records||[]).filter(record=>record.provider===key);
+        const active=records.filter(record=>!record.completedAt).length;
+        setText('provider-'+id+'-calls',number(total.submitted||0));setText('provider-'+id+'-in',reportedTokens(total.inputTokens));setText('provider-'+id+'-out',reportedTokens(total.outputTokens));
+        $('provider-'+id).dataset.active=String(active>0);
+        const enabled=id==='native'?data.providers?.native?.enabled:data.providers?.platform?.configured&&data.providers?.platform?.enabled;
+        const limit=data.providers?.observedLimits?.[key];
+        let note=(enabled?'Enabled':'Not enabled')+' · '+number(active)+' active · '+number(total.failed||0)+' failed/rejected · '+number(total.usageReports||0)+' usage reports.';
+        if(id==='native')note+=' Image entries may report helper tokens only; generation tokens unavailable.';
+        else note+=' Explicit API and voice only. No subscription or Copilot credit conversion.';
+        if(limit)note+=' Last limit signal: '+limit.state+' at '+time(limit.at)+' ('+(limit.kind||'feature')+'). Not an account balance.';
+        setText('provider-'+id+'-state',note);
+      }
+      setText('provider-coverage','OpenAI ledger since '+time(data.providers?.since)+'. Retained legacy native logs are labelled; missing history is not reconstructed. Token totals include only observed usage, with cached/audio counts as subsets. WebRTC media bypassing the relay is not metered. '+(data.providers?.storageError||''));
+      renderProviderRows();
+    }
+    function renderProviderRows(){
+      const native=state.providerData?.records||[];
+      const copilot=state.records.map(record=>({id:record.id,provider:'github-copilot-sdk',kind:'inference',model:record.selectedModel,
+        status:record.status,receivedAt:record.receivedAt,submitted:(record.replayCount||0)>0,
+        usage:record.usage?.metered?record.usage:{inputTokens:null,outputTokens:null},usageSource:record.usage?.metered?'Copilot SDK':'not_reported',usageComplete:Boolean(record.usage?.metered)}));
+      const filter=$('provider-filter').value;
+      const records=[...native,...copilot].filter(record=>filter==='all'||record.provider===filter).sort((a,b)=>Date.parse(b.receivedAt)-Date.parse(a.receivedAt));
+      setText('provider-log-count','· '+records.length+' retained matches');const root=$('provider-call-rows');root.replaceChildren();
+      for(const record of records.slice(0,100)){
+        const row=document.createElement('tr');row.tabIndex=0;row.setAttribute('role','button');
+        const usage=record.usage||{};
+        const values=[time(record.receivedAt)+' · '+record.id.slice(-8),providerName(record.provider)+' / '+record.kind,
+          (record.model||'not reported')+(record.featureModel?' → '+record.featureModel:''),record.status+(record.submitted?' · submitted':' · not submitted'),
+          reportedTokens(usage.inputTokens)+' / '+reportedTokens(usage.outputTokens),record.source==='legacy-log'?'legacy log · partial':(record.usageSource||'not_reported')+(record.usageComplete?'':' · partial/unknown')];
+        for(const value of values){const cell=document.createElement('td');cell.textContent=value;row.appendChild(cell);}
+        const select=()=>{$('provider-call-detail').textContent=JSON.stringify({id:record.id,destination:providerName(record.provider),feature:record.kind,
+          model:record.model,featureModel:record.featureModel,status:record.status,submitted:record.submitted,parentCallId:record.parentId,
+          receivedAt:record.receivedAt,completedAt:record.completedAt,errorCode:record.errorCode,usage:record.usage,
+          source:record.usageSource,completeUsage:record.usageComplete,
+          note:'Null = not reported. Cached/audio/image/reasoning counts are subsets, not extra totals. Native image helper usage does not establish generation cost.'},null,2);};
+        row.onclick=select;row.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};root.appendChild(row);
+      }
+      if(!records.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=6;cell.textContent='No recorded calls for this destination.';row.appendChild(cell);root.appendChild(row);}
     }
     function routeSummary(record) {
       const route = callRoute(record, state.current || {});
@@ -870,6 +955,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       } catch (error) { $("updated").textContent = error.message; $("updated").className = "error"; }
     }
     $("show-more").onclick = () => { state.visible += 200; renderRows(); };
+    $('provider-filter').onchange=renderProviderRows;
     $("clear").onclick = async () => { if (!confirm("Clear the 1,000-entry detailed history? Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
     setText("relay-address", location.host); connectLiveEvents(); refresh(); setInterval(refresh, 5000);

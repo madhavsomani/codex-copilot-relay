@@ -30,6 +30,7 @@ import { ResponsesEventStream } from "./responses-stream.mjs";
 import {loadNativeToolsConfig, nativeJobs, NATIVE_SEARCH_NAME, prepareNativeSearch,
   searchWithNativeCodex, imageWithNativeCodex, searchOutputItem, validateImageRequest} from './native-codex-tools.mjs';
 import {OpenAIFallback, responseFallbackReason} from './openai-fallback.mjs';
+import {ProviderTelemetry,nativeFeatureError} from './provider-telemetry.mjs';
 import {visionCollectionBudget, prepareVisionAttachments, imageEvidence} from './vision-attachments.mjs';
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
 import {
@@ -143,7 +144,8 @@ const maxRequestBodyBytes = environmentInteger(
   512 * 1024 * 1024,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
-const openaiFallback = new OpenAIFallback({directory:runtimeDirectory,log:(event,data)=>log(event,data)});
+const providerTelemetry = new ProviderTelemetry({directory:runtimeDirectory});
+const openaiFallback = new OpenAIFallback({directory:runtimeDirectory,telemetry:providerTelemetry,log:(event,data)=>log(event,data)});
 const recorderHistoryLimit = environmentInteger("BRIDGE_HISTORY_LIMIT", 1_000, 1_000, 10_000);
 const recorderDetailedLimit = environmentInteger(
   "BRIDGE_DETAILED_HISTORY_LIMIT",
@@ -181,6 +183,7 @@ const eventLogMaxBytes = environmentInteger(
 const watchdogLogMaxBytes = 8 * 1024 * 1024;
 const auxiliaryLogMaxBytes = 32 * 1024 * 1024;
 const telemetryDiskBudgetBytes = 1024 * 1024 * 1024;
+await providerTelemetry.importLegacy(eventLogPath ?? path.join(runtimeDirectory,'proxy.stdout.log'));
 const recorder = new ProxyRecorder({
   filePath: path.join(runtimeDirectory, "proxy-events.jsonl"),
   metricsFilePath: path.join(runtimeDirectory, "proxy-metrics.json"),
@@ -220,21 +223,23 @@ function telemetryStorage() {
   const watchdogLogBytes = localFileSize(path.join(runtimeDirectory, "watchdog.log"));
   const processStdoutBytes = localFileSize(path.join(runtimeDirectory, "proxy.process.stdout.log"));
   const processStderrBytes = localFileSize(path.join(runtimeDirectory, "proxy.stderr.log"));
+  const providerTelemetryBytes = localFileSize(providerTelemetry.file);
   const totalBytes = recorderStorage.totalBytes
     + eventLogBytes
     + watchdogLogBytes
     + processStdoutBytes
-    + processStderrBytes;
+    + processStderrBytes + providerTelemetryBytes;
   const telemetryCapBytes = recorderStorage.telemetryCapBytes
     + eventLogMaxBytes
     + watchdogLogMaxBytes
-    + (2 * auxiliaryLogMaxBytes);
+    + (2 * auxiliaryLogMaxBytes) + 8 * 1024 * 1024;
   return {
     ...recorderStorage,
     eventLogBytes,
     watchdogLogBytes,
     processStdoutBytes,
     processStderrBytes,
+    providerTelemetryBytes,
     totalBytes,
     telemetryCapBytes,
     diskBudgetBytes: telemetryDiskBudgetBytes,
@@ -260,6 +265,10 @@ function dashboardSnapshot() {
     currencyConversionApplied: false,
   };
   snapshot.pricing = openAiPublicPricing;
+  snapshot.providers = providerTelemetry.snapshot();
+  snapshot.providers.policy = {automaticFallback:false,defaultProvider:'github-copilot-sdk',nativeFeatures:['search','image'],quotaIsolation:true};
+  snapshot.providers.native = {enabled:nativeToolsConfig.enabled};
+  snapshot.providers.platform = openaiFallback.health();
   return snapshot;
 }
 
@@ -324,6 +333,9 @@ function openDashboardEventStream(request, response) {
       response.write(`event: relay\ndata: ${JSON.stringify(event)}\n\n`);
     }
   });
+  const unsubscribeProvider = providerTelemetry.subscribe(event=>{
+    if(!response.writableEnded&&!response.destroyed)response.write(`event: relay\ndata: ${JSON.stringify(event)}\n\n`);
+  });
   const heartbeat = setInterval(() => {
     if (!response.writableEnded && !response.destroyed) response.write(": heartbeat\n\n");
   }, sseHeartbeatIntervalMs);
@@ -331,6 +343,7 @@ function openDashboardEventStream(request, response) {
   const cleanup = () => {
     clearInterval(heartbeat);
     unsubscribe();
+    unsubscribeProvider();
   };
   request.once("close", cleanup);
   response.once("close", cleanup);
@@ -857,12 +870,15 @@ class Exchange {
     this.nativeSearchAbort ??= new AbortController();
     this.nativeSearchCompleted ??= new Set();
     const items = new Map();
+    const telemetryRecord=providerTelemetry.start({provider:'openai-codex',kind:'search',model:nativeToolsConfig.model,parentId:this.sink?.record?.id});
     log('native_tool.started', {kind:'search', backend:'openai-codex', responseId:this.sink?.responseId});
     let payload;
     try {
       const args = typeof data.arguments === 'string' ? JSON.parse(data.arguments) : data.arguments;
       const result = await searchWithNativeCodex(nativeToolsConfig, args?.query, {
         signal:this.nativeSearchAbort.signal,
+        onSubmitted:()=>providerTelemetry.submitted(telemetryRecord),
+        onUsage:usage=>providerTelemetry.usage(telemetryRecord,usage,{source:'native_helper_turn'}),
         onSearch: value => {
           if (!this.sink || this.sink.closed) return;
           const previous = items.get(value.id);
@@ -874,8 +890,12 @@ class Exchange {
       });
       payload = {requestId:data.requestId, result:{textResultForLlm:JSON.stringify({backend:'native OpenAI search', answer:result.text, note:'Cite the explicit source URLs. Native usage is separate from Copilot credits.'}),resultType:'success'}};
       log('native_tool.completed', {kind:'search', backend:'openai-codex', operations:result.searches.length, usage:result.usage});
+      providerTelemetry.finish(telemetryRecord);
     } catch (error) {
-      payload = {requestId:data.requestId, error:error.message};
+      // A feature-level quota error is data for the Copilot agent, not a failed
+      // model session. Never retry it or reroute the conversation to OpenAI.
+      payload = {requestId:data.requestId,result:{textResultForLlm:JSON.stringify(nativeFeatureError(error)),resultType:'success'}};
+      providerTelemetry.finish(telemetryRecord,{status:'failed',error,statusCode:error.statusCode});
       for (const item of items.values()) if (item.status !== 'completed') {
         item.status = 'failed';
         this.sink?.eventStream?.observeWebSearch(item);
@@ -1533,6 +1553,7 @@ const server = http.createServer(async (request, response) => {
       models: availableOpenAiModels,
       nativeTools: {enabled:nativeToolsConfig.enabled, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null},
       openaiFallback: openaiFallback.health(),
+      providerPolicy:{automaticFallback:false,defaultProvider:'github-copilot-sdk',openAiQuotaBlocksCopilot:false},
       modelCapabilities: Object.fromEntries(availableOpenAiModels.map(id => [id, {
         ...resolveModelCompatibility(modelsById.get(id)),
         supportedReasoningEfforts: modelsById.get(id)?.supportedReasoningEfforts ?? [],
@@ -1700,27 +1721,28 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method !== "POST" || url.pathname !== "/v1/responses") {
     if (request.method === 'POST' && url.pathname === '/v1/images/variations') {
-      try {return await openaiFallback.forward(request,response,url,{reason:'image_variations'});}
-      catch(error){return sendJson(response,error.statusCode||503,errorPayload(error,error.code));}
+      return sendJson(response,400,errorPayload('No automatic OpenAI fallback. Use an explicitly configured /v1/openai/images/variations endpoint.','explicit_provider_required'));
     }
     if (request.method === 'POST' && ['/v1/images/generations','/v1/images/edits'].includes(url.pathname)) {
       const controller = new AbortController();
       const cancel = () => {if (!response.writableEnded) controller.abort();};
       response.once('close', cancel);
+      const telemetryRecord=providerTelemetry.start({provider:'openai-codex',kind:'image',model:nativeToolsConfig.model,featureModel:'gpt-image-2'});
       try {
         if (!String(request.headers['content-type']).includes('application/json')) {
-          return await openaiFallback.forward(request,response,url,{reason:'multipart_image'});
+          throw Object.assign(new Error('Native image helper requires JSON. No fallback was attempted. Use /v1/openai/images/edits explicitly for public API multipart edits.'),{code:'explicit_provider_required',statusCode:400});
         }
         const {body} = await readJsonBody(request, {maxBytes:180 * 1024 * 1024});
-        let publicReason = nativeToolsConfig.enabled ? null : 'native_images_disabled';
-        try {validateImageRequest(body,url.pathname.endsWith('/edits'));}
-        catch(error) {if(error.code==='unsupported_parameter'||error.code==='invalid_image_reference')publicReason='extended_image_options';else throw error;}
-        if (publicReason) return await openaiFallback.forward(request,response,url,{body,reason:publicReason});
+        validateImageRequest(body,url.pathname.endsWith('/edits'));
         log('native_tool.started', {kind:'image', backend:'openai-codex'});
-        const output = await imageWithNativeCodex(nativeToolsConfig, body, {edit:url.pathname.endsWith('/edits'), signal:controller.signal});
+        const output = await imageWithNativeCodex(nativeToolsConfig, body, {edit:url.pathname.endsWith('/edits'), signal:controller.signal,
+          onSubmitted:()=>providerTelemetry.submitted(telemetryRecord),
+          onUsage:usage=>providerTelemetry.usage(telemetryRecord,usage,{source:'native_helper_turn',complete:false})});
+        providerTelemetry.finish(telemetryRecord);
         log('native_tool.completed', {kind:'image', backend:'openai-codex', model:'gpt-image-2'});
         if (!response.destroyed) return sendJson(response, 200, output, {'x-relay-backend':'native-openai-codex'});
       } catch (error) {
+        providerTelemetry.finish(telemetryRecord,{status:'failed',error,statusCode:error.statusCode});
         log('native_tool.failed', {kind:'image', code:error.code ?? 'native_tool_failed'});
         if (!response.destroyed) return sendJson(response, error.statusCode ?? 502, errorPayload(error, error.code ?? 'native_tool_failed'));
       } finally {response.off('close', cancel);}

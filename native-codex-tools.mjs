@@ -46,13 +46,14 @@ export function nativeArguments(kind, model, cwd, imagePaths = []) {
     ...imagePaths.flatMap(file => ['--image', file]), '-'];
 }
 
-export async function runNativeCodex(config, kind, prompt, {signal, imagePaths = [], onSearch, cwd = os.tmpdir(), timeoutMs = 600000, spawnProcess = spawn} = {}) {
+export async function runNativeCodex(config, kind, prompt, {signal, imagePaths = [], onSearch, onUsage, onSubmitted, cwd = os.tmpdir(), timeoutMs = 600000, spawnProcess = spawn} = {}) {
   if (!config.enabled) throw new NativeToolError('Native Codex tools are disabled. Enable them explicitly with Enable-Codex-NativeTools.ps1; they use OpenAI/ChatGPT usage, not Copilot credits.', 'native_tools_disabled', 501);
   if (signal?.aborted) throw new NativeToolError('Native tool cancelled.', 'native_tool_cancelled', 499);
   if (nativeJobs.size >= 2) throw new NativeToolError('Both native-tool slots are busy. Retry after a current tool finishes.', 'native_tools_busy', 429);
   const child = spawnProcess(config.codexPath, nativeArguments(kind, config.model, cwd, imagePaths),
     {cwd, env: nativeEnvironment(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
   nativeJobs.add(child);
+  try{onSubmitted?.();}catch{}
   let buffer = '', bytes = 0, threadId = null, usage = null, turnCompleted = false;
   const messages = [], searches = new Map();
   const decoder = new StringDecoder('utf8');
@@ -68,7 +69,7 @@ export async function runNativeCodex(config, kind, prompt, {signal, imagePaths =
     const parse = (line) => {
       let event; try {event = JSON.parse(line);} catch {return;}
       if (event.type === 'thread.started' && /^[0-9a-f-]{36}$/i.test(event.thread_id)) threadId = event.thread_id;
-      if (event.type === 'turn.completed') {usage = event.usage; turnCompleted = true;}
+      if (event.type === 'turn.completed') {usage = event.usage; turnCompleted = true;try{onUsage?.(usage);}catch{}}
       if (event.type === 'turn.failed') failure = new NativeToolError(event.error?.message || 'Native Codex turn failed.');
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') messages.push(event.item.text);
       if (event.item?.type === 'web_search' && ['item.started', 'item.completed'].includes(event.type)) {
@@ -139,7 +140,7 @@ export function validateImageRequest(body, edit = false) {
   });
 }
 
-export async function imageWithNativeCodex(config, body, {edit = false, signal} = {}) {
+export async function imageWithNativeCodex(config, body, {edit = false, signal,onUsage,onSubmitted} = {}) {
   const references = validateImageRequest(body, edit);
   if (!config.enabled) throw new NativeToolError('Native image tools are disabled. Run Enable-Codex-NativeTools.ps1 to opt into OpenAI/ChatGPT image usage.', 'native_tools_disabled', 501);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-native-image-'));
@@ -152,7 +153,7 @@ export async function imageWithNativeCodex(config, body, {edit = false, signal} 
     const referenceInstruction = edit ? 'Use num_last_images_to_include=' + references.length + ' for the supplied reference images. ' : '';
     const result = await runNativeCodex(config, 'image',
       'Use only image_gen.imagegen exactly once. ' + referenceInstruction +
-      'Pass the following prompt verbatim. No local reads, other tools, variants or retries. After generation return only the saved path provided by the tool. Image prompt:\n' + body.prompt, {signal, imagePaths, cwd: directory});
+      'Pass the following prompt verbatim. No local reads, other tools, variants or retries. After generation return only the saved path provided by the tool. Image prompt:\n' + body.prompt, {signal, imagePaths, cwd: directory,onUsage,onSubmitted});
     if (!result.threadId) throw new NativeToolError('Native image result has no thread ID.', 'native_image_missing');
     const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
     // Read only an actual PNG inside this newly-created native thread. Never

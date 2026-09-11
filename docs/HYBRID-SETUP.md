@@ -1,6 +1,6 @@
-# Hybrid setup: Copilot first, explicit OpenAI fallback
+# Hybrid setup: Copilot first, explicit OpenAI services
 
-Version 1.3.22 keeps the 1.3 dashboard and ordinary Copilot inference path.
+Version 1.3.23 keeps the 1.3 dashboard and ordinary Copilot inference path.
 It adds an **optional public OpenAI API transport**, not a subscription or
 authentication bypass. It does not promise identical behavior across providers.
 
@@ -11,7 +11,7 @@ flowchart TD
     Client[Codex or a Responses-compatible agent] --> Gateway[Local relay]
     Gateway -->|Normal model requests and outer tool calls| Copilot[Official GitHub Copilot SDK]
     Gateway -->|Basic search and GPT Image 2| Helper[Isolated signed-in native Codex helper]
-    Gateway -->|Hosted tools and extended options: opt-in| API[Public OpenAI API]
+    Gateway -->|Explicit OpenAI model or endpoint only| API[Public OpenAI API]
     Voice[Trusted local voice client] -->|Realtime WebSocket / WebRTC signaling| Gateway
     API -->|Computer action or function call| Client
     Client --> Harness[Client executes tools under its own approvals]
@@ -22,9 +22,9 @@ flowchart TD
 | Reasoning, coding, ordinary function tools, child-agent model turns | Copilot | Your own Copilot subscription/access and CLI login |
 | Capturing a screen, local files, shell, browser, MCP | Client/harness; results interpreted by Copilot | Client supplies and executes tools |
 | Basic hosted web search, built-in image tool with basic GPT Image 2 options | Existing native Codex helper | Current native Codex installation and sign-in; separate subscription allowance |
-| Hosted `file_search`, `code_interpreter`, `computer_use_preview` / `computer`, Responses `image_generation` | Entire Responses turn goes to public OpenAI | Platform API key, local gateway token, supported upstream model and account access |
-| Search domain/location/context options, stored/background Responses, structured outputs | Entire Responses turn goes to public OpenAI | Same public-API setup |
-| Multipart image edits, masks, explicit size/quality, multiple images, other image models | Public Images API, original request preserved | Same; upstream validates actual supported combinations |
+| Hosted `file_search`, `code_interpreter`, `computer_use_preview` / `computer`, Responses `image_generation` | Explicit `openai/<model>` or `/v1/openai/responses` only | Platform API key, local gateway token, supported upstream model and account access |
+| Search domain/location/context options, stored/background Responses, structured outputs | Explicit public OpenAI request only; otherwise rejected | Same public-API setup |
+| Multipart image edits, masks, explicit size/quality, multiple images, other image models | Explicit `/v1/openai/images/...` endpoint | Same; upstream validates actual supported combinations |
 | Realtime WebSocket, WebRTC signaling, speech/transcription endpoints | Public OpenAI | Same; voice client still captures/plays audio |
 | Several images sent to a one-image Copilot model | Bounded labelled contact sheet | No OpenAI key; may reduce resolution |
 | Exact separate native image inputs | Explicit `openai/<model>` Responses request | Public-API setup |
@@ -67,12 +67,14 @@ Codex authentication to public APIs. Use your own
 [Platform project key](https://platform.openai.com/api-keys), billing, model
 access and project limits. A key may not grant every model/tool.
 
-Enabling public fallback authorizes eligible requests, including their full
+Enabling the public gateway authorizes explicitly routed requests, including their full
 conversation/tools and uploaded files, to leave your computer for OpenAI. For
 hosted tools, the **entire model turn**, not just the tool's execution, is billed
 by OpenAI. No key or local token is printed, stored in TOML, or committed.
 
-Fallback is **capability-based**, not an automatic retry after a Copilot error.
+**There is no automatic fallback**, whether from an error, a quota limit, or an
+unsupported tool declaration. Normal model turns remain on Copilot. Dedicated
+native search/image and explicitly requested public API/voice calls use OpenAI.
 No already-submitted paid request is retried or sent to a second provider.
 
 ## 3. Windows: optional authenticated hybrid launcher
@@ -143,14 +145,14 @@ Runnable client examples: [Responses](../examples/responses-client.mjs) and
 ## 5. Routing, state and options
 
 - Ordinary `/v1/responses` remains Copilot. Basic hosted search stays on the
-  signed-in helper when enabled. Unsupported search constraints select public
-  OpenAI instead of being silently ignored.
+  signed-in helper when enabled. Unsupported search constraints return an error;
+  they do not select another provider.
 - Request `model: "openai/<actual-model-id>"` to explicitly select OpenAI. Or
   use `/v1/openai/responses` with a normal OpenAI model ID. Explicit mode also
   handles separate native image inputs and controls the Copilot path cannot.
-- Hosted tool declarations automatically select public OpenAI. The fallback
-  requires the opt-in, credentials and a configured native model; otherwise it
-  returns an actionable error before inference. It never fabricates tool results.
+- Hosted tool declarations alone never change provider. Explicit OpenAI requests
+  require the opt-in and credentials. Unsupported Copilot semantics are rejected
+  before inference, not secretly forwarded or emulated.
 - OpenAI response IDs stay on OpenAI across continuations/restarts. A bounded
   metadata file stores only hashed response IDs for 30 days/10,000 responses.
   Once metadata expires, resend full context with an explicit provider. It is
@@ -201,11 +203,38 @@ bitmap-digit regression. OCR success on arbitrary screenshots is not guaranteed.
 
 `/health` exposes `openaiFallback.enabled`, `configured`, `activeJobs` and a
 non-secret error code. Responses carry `x-relay-backend` and route-reason headers.
-Public usage is **excluded from Copilot counters**; inspect OpenAI's project
-usage for bills. Gateway telemetry logs only backend/reason/status, not request
-bodies. A maximum of eight public jobs, 128 MiB uploads and a 15-minute inactivity
+Public usage is **excluded from Copilot counters**. The dashboard's provider
+panel and filterable call ledger show destination, model, feature, status,
+submitted state, observed tokens and partial/missing telemetry. Select a row for
+cached, reasoning, audio and image token breakdowns. These are subsets of the
+input/output totals, not extra charges. Inspect OpenAI's project usage for bills.
+No prompts, audio, images, keys or authentication tokens enter this new ledger.
+A maximum of eight public jobs, 128 MiB uploads and a 15-minute inactivity
 deadline bound resource use. Client disconnects cancel upstream work. Cancellation
 does not undo work already performed or guarantee zero charges.
+
+`runtime/provider-telemetry.json` retains up to 1,000 metadata records and
+lifetime observed counters within an 8 MiB cap. Usage event IDs are hashed and
+deduplicated within a bounded 10,000-ID window. Large Images/Responses JSON and
+SSE bodies are inspected with a streaming projection; media strings are not
+accumulated for telemetry. Realtime observes `response.done` usage and
+`rate_limits.updated` signals. WebRTC media outside this relay cannot be metered.
+Rate-limit signals are timestamped observations, **not an account balance or a
+promise that a quota remains exhausted**. Native image calls expose helper-model
+usage when available; image-generation token counts may still be unavailable.
+Missing counts are `null` / “not reported,” never inferred as zero.
+
+On upgrade, retained legacy native-tool log entries are imported once, with
+their source labelled. Logs that already rotated away cannot be reconstructed;
+concurrent legacy start/finish matching is best effort. Existing Copilot
+history/mileage is left untouched.
+
+An OpenAI feature failure is isolated: native search returns structured failure
+data so the Copilot agent can continue independent work without retrying search.
+An unavailable image/voice feature still cannot finish without its own allowance.
+Explicit OpenAI model sessions receive the OpenAI error; the relay does not
+silently migrate them to Copilot. This cannot bypass an account-level gate that
+the Codex desktop app itself imposes before contacting the relay.
 
 The relay must be running to proxy anything. The watchdog recovers processes;
 it does not transparently switch the desktop to OpenAI when the whole relay is

@@ -31,11 +31,11 @@ $env:RELAY_OPENAI_ENABLED = '1'
 & (Join-Path $PSScriptRoot 'Repair-Codex-CopilotProxy.ps1') -Port $Port -Model $CopilotModel -NoDashboard
 $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 10
 if (-not $health.openaiFallback.enabled -or -not $health.openaiFallback.configured) {
-    throw 'Public API fallback did not load its environment. No live API verification was performed.'
+    throw 'Explicit public API gateway did not load its environment. No live API verification was performed.'
 }
 # The watchdog/relay inherited the key already. The client only needs the local
 # token; remove the upstream credential before launching an agent from this shell.
 Remove-Item -LiteralPath 'Env:RELAY_OPENAI_API_KEY' -ErrorAction SilentlyContinue
-Write-Output 'Hybrid gateway configured. Normal inference stays on Copilot; routed public APIs incur separate OpenAI Platform charges.'
+Write-Output 'Explicit OpenAI services configured. No automatic fallback. Normal inference stays on Copilot; explicitly routed public APIs incur separate OpenAI Platform charges.'
 Write-Output 'Run codex (or launch a fully exited desktop app) FROM THIS PowerShell session so it inherits the local gateway token.'
 Write-Output 'Credentials remain process-local. Re-run this script after reboot; never paste keys or the local token into config.toml or GitHub.'

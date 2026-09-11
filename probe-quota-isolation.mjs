@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {nativeFeatureError} from './provider-telemetry.mjs';
+const args=new Map();for(let i=2;i<process.argv.length;i+=2)args.set(process.argv[i],process.argv[i+1]);
+const base=args.get('--url')||'http://127.0.0.1:4144/v1';
+const model=args.get('--model')||'gpt-6-astra';
+const request=async body=>{const r=await fetch(base+'/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model,stream:false,...body}),signal:AbortSignal.timeout(120000)});const data=await r.json();assert.equal(r.status,200,data.error?.message);return data;};
+const tool={type:'function',name:'optional_native_search',description:'Attempt the optional native OpenAI search feature.',parameters:{type:'object',properties:{},additionalProperties:false}};
+const first=await request({tools:[tool],tool_choice:{type:'function',name:tool.name},input:'Call optional_native_search. If it is unavailable, do not retry or change model/provider. Continue independent work by computing 17*19 and reply exactly COPILOT_CONTINUES_323.'});
+const call=first.output.find(item=>item.type==='function_call');assert.ok(call);
+const reply=await request({previous_response_id:first.id,input:[{type:'function_call_output',call_id:call.call_id,output:JSON.stringify(nativeFeatureError({code:'insufficient_quota'}))}]});
+const text=reply.output.filter(item=>item.type==='message').flatMap(item=>item.content||[]).map(item=>item.text||'').join('');
+assert.match(text,/COPILOT_CONTINUES_323/);assert.equal(reply.model,model);
+const next=await request({input:'Reply exactly NEW_COPILOT_TASK_OK.'});
+assert.ok(JSON.stringify(next.output).includes('NEW_COPILOT_TASK_OK'));
+console.log(JSON.stringify({ok:true,simulatedFeatureQuota:true,continuedSameCopilotExchange:true,newCopilotRequest:true,model}));

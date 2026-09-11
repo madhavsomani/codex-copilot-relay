@@ -4,13 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash, timingSafeEqual} from 'node:crypto';
 import {once} from 'node:events';
-import {StringDecoder} from 'node:string_decoder';
 import WebSocket, {WebSocketServer} from 'ws';
-import {validateSearchDeclaration} from './native-codex-tools.mjs';
+import {ProviderUsageObserver} from './provider-usage-observer.mjs';
+import {featureFailure} from './provider-telemetry.mjs';
 
 const ORIGIN = 'https://api.openai.com';
 const MAX_BODY = 128 * 1024 * 1024;
-const HOSTED = new Set(['file_search','code_interpreter','computer_use_preview','computer','image_generation']);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (message, code='openai_fallback_unavailable', statusCode=503) => Object.assign(new Error(message),{code,statusCode});
 const secureEqual = (a,b) => {
@@ -29,7 +28,7 @@ export function fallbackConfig(environment=process.env) {
 }
 
 export function authorizeFallback(request, config) {
-  if (!config.enabled) throw fail('Public OpenAI fallback is disabled. See docs/HYBRID-SETUP.md.', 'openai_fallback_disabled',501);
+  if (!config.enabled) throw fail('Explicit public OpenAI services are disabled. See docs/HYBRID-SETUP.md.', 'openai_fallback_disabled',501);
   if (!config.apiKey || config.localToken.length<32)
     throw fail('Configure RELAY_OPENAI_API_KEY and a separate RELAY_OPENAI_LOCAL_TOKEN (at least 32 characters).');
   // A webpage, even localhost, must not be able to spend this account's money.
@@ -40,19 +39,11 @@ export function authorizeFallback(request, config) {
   if (!secureEqual(token, config.localToken)) throw fail('Missing or invalid local OpenAI gateway token.', 'unauthorized',401);
 }
 
-export function responseFallbackReason(body, {nativeEnabled=false, knownResponse=false}={}) {
+export function responseFallbackReason(body, {knownResponse=false}={}) {
   if (typeof body?.model==='string' && body.model.startsWith('openai/')) return 'explicit_openai_model';
   if (knownResponse) return 'openai_continuation';
-  for (const tool of Array.isArray(body?.tools) ? body.tools : []) {
-    if (HOSTED.has(tool?.type)) return 'hosted_' + tool.type;
-    if (['web_search','web_search_preview'].includes(tool?.type)) {
-      if (!nativeEnabled) return 'hosted_web_search';
-      try {validateSearchDeclaration(tool);} catch {return 'extended_web_search';}
-      if (body.max_tool_calls != null) return 'extended_web_search';
-    }
-  }
-  if (body?.store===true || body?.background===true) return 'stored_response';
-  if (body?.text?.format && body.text.format.type!=='text') return 'structured_output';
+  // No capability-driven fallback. A hosted declaration is not permission to
+  // move an ordinary Copilot model turn (and its whole history) to OpenAI.
   return null;
 }
 
@@ -111,32 +102,6 @@ export class OpenAIResponseRoutes {
   }
 }
 
-// Observe only response IDs in bounded event lines; never retain image/audio
-// bodies, prompts, API keys, cookies, or opaque reasoning in gateway telemetry.
-function responseObserver(contentType, remember) {
-  const decoder=new StringDecoder('utf8');let line='',discard=false,json='';
-  const isSse=contentType.includes('text/event-stream');
-  const observe=text=>{try {const value=JSON.parse(text);remember(value.response?.id || (value.object==='response'?value.id:null));}catch{}};
-  return {chunk(bytes){const text=decoder.write(bytes);
-    if(!isSse){
-      if(json.length<65536) {
-        json=(json+text).slice(0,65536);
-        // Responses containing base64 images can be enormous. Read just the
-        // envelope prefix for affinity, without buffering generated media.
-        if(/"object"\s*:\s*"response"/.test(json)) {
-          const id=/"id"\s*:\s*"(resp_[\w-]+)"/.exec(json);if(id)remember(id[1]);
-        }
-      }
-      return;
-    }
-    for(const part of text.split(/(?<=\n)/)) {
-      if(!discard)line+=part;
-      if(line.length>65536){line='';discard=true;}
-      if(part.endsWith('\n')) {if(!discard && line.startsWith('data:'))observe(line.slice(5).trim());line='';discard=false;}
-    }
-  },end(){if(!isSse&&json.length<2_000_000)observe(json+decoder.end());}};
-}
-
 async function readRaw(request) {
   if(Number(request.headers['content-length'])>MAX_BODY)throw fail('Public API upload exceeds 128 MiB.','request_too_large',413);
   const chunks=[];let count=0;
@@ -145,8 +110,9 @@ async function readRaw(request) {
 }
 
 export class OpenAIFallback {
-  constructor({directory,config=()=>fallbackConfig(),fetchImpl=fetch,WebSocketImpl=WebSocket,log=()=>{}}={}) {
+  constructor({directory,config=()=>fallbackConfig(),fetchImpl=fetch,WebSocketImpl=WebSocket,log=()=>{},telemetry}={}) {
     this.config=config;this.fetch=fetchImpl;this.WebSocket=WebSocketImpl;this.log=log;
+    this.telemetry=telemetry;
     this.metadataError=null;
     try {this.routes=new OpenAIResponseRoutes(directory);}
     catch(error) {this.metadataError=error;this.routes=new OpenAIResponseRoutes();}
@@ -154,7 +120,7 @@ export class OpenAIFallback {
     this.wss=new WebSocketServer({noServer:true,maxPayload:4*1024*1024,perMessageDeflate:false});
   }
   health() {const c=this.config();return {enabled:c.enabled,configured:Boolean(c.apiKey&&c.localToken.length>=32),
-    backend:'openai-platform',billing:'Separate OpenAI Platform billing; not Copilot or ChatGPT subscription',
+    backend:'openai-platform',automaticFallback:false,billing:'Separate OpenAI Platform billing; not Copilot or ChatGPT subscription',
     activeJobs:this.jobs.size,responseRouteCount:this.routes.entries.size,error:this.metadataError?.code ?? null,
     realtime:'WebSocket and WebRTC signaling API; desktop voice integration not verified'};}
   admit(request) {const c=this.config();authorizeFallback(request,c);
@@ -163,13 +129,29 @@ export class OpenAIFallback {
     return c;}
   headers(c) {return {authorization:'Bearer '+c.apiKey,
     ...(c.organization?{'OpenAI-Organization':c.organization}:{}),...(c.project?{'OpenAI-Project':c.project}:{})};}
+  observe(record,event,{billable=true}={}) {
+    const value=event.response||event;
+    if(value.object==='response'||event.response)this.routes.remember(value.id);
+    if(value.model && /^[\w.:-]{1,120}$/.test(value.model) && record)record.model=value.model;
+    if(event.session?.model&&record&&/^[\w.:-]{1,120}$/.test(event.session.model))record.model=event.session.model;
+    const terminal=!event.type||['response.done','response.completed','response.failed','response.incomplete','image_generation.completed','image_edit.completed','conversation.item.input_audio_transcription.completed'].includes(event.type);
+    if(value.usage&&terminal)this.telemetry?.usage(record,value.usage,{key:value.id||event.item_id||record?.id,model:value.model,billable});
+    if(event.type==='rate_limits.updated')this.telemetry?.observeLimit(record,'observed',null,event.rate_limits);
+    const error=event.error||value.error||value.status_details?.error;
+    if(error&&record) {record.observedError=featureFailure(error);if(['quota_exhausted','rate_limited'].includes(record.observedError))this.telemetry?.observeLimit(record,record.observedError);}
+    if(value.status==='failed'&&record)record.observedError||='feature_unavailable';
+    if(record&&['incomplete','cancelled'].includes(value.status))record.outcome=value.status;
+  }
   async forward(request,response,url,{body,reason='explicit_endpoint'}={}) {
-    const c=this.admit(request), route=upstreamPath(url,request.method);
+    const record=this.telemetry?.start({provider:'openai-platform',kind:url.pathname.replace('/v1/openai/','/v1/').split('/')[2]});
+    let c,route;
+    try{c=this.admit(request);route=upstreamPath(url,request.method);}
+    catch(error){this.telemetry?.finish(record,{status:'rejected',error,statusCode:error.statusCode});throw error;}
     const controller=new AbortController();this.jobs.add(controller);
     const cancel=()=>{if(!response.writableEnded)controller.abort();};
     response.once('close',cancel);request.once('aborted',cancel);
     let timer;const touch=()=>{clearTimeout(timer);timer=setTimeout(()=>controller.abort(),15*60_000);timer.unref();};touch();
-    let status='failed';
+    let status='failed',reportedError=null,statusCode=null,retryAfter=null;
     try {
       let payload=body;
       const hasBody=!['GET','HEAD','DELETE'].includes(request.method);
@@ -179,58 +161,75 @@ export class OpenAIFallback {
         // Explicit /openai/responses accepts ordinary native model IDs too.
         if(url.pathname.startsWith('/v1/openai/')&&typeof payload?.model==='string'&&!payload.model.startsWith('openai/'))
           payload={...payload,model:'openai/'+payload.model};
-        payload=Buffer.from(JSON.stringify(openAIResponseBody(payload,c)));
+        payload=openAIResponseBody(payload,c);if(record)record.model=payload.model;
+        payload=Buffer.from(JSON.stringify(payload));
       } else if(payload!==undefined&&!Buffer.isBuffer(payload))payload=Buffer.from(JSON.stringify(payload));
+      if(record&&!record.model&&payload&&String(request.headers['content-type']).includes('application/json')){
+        const metadata=new ProviderUsageObserver('application/json',value=>{if(/^[\w.:-]{1,120}$/.test(value.model||''))record.model=value.model;});
+        await metadata.chunk(payload);await metadata.end();
+      }
       const headers={...this.headers(c),accept:request.headers.accept || '*/*'};
       for(const key of ['openai-safety-identifier','openai-beta','idempotency-key'])
         if(request.headers[key])headers[key]=request.headers[key];
       if(hasBody)headers['content-type']=route.startsWith('/v1/responses')?'application/json':(request.headers['content-type']||'application/json');
       // These headers contain neither caller auth nor cookies; upstream is fixed.
+      this.telemetry?.submitted(record);
       const upstream=await this.fetch(ORIGIN+route,{method:request.method,headers,body:hasBody?payload:undefined,signal:controller.signal,redirect:'manual'});
+      statusCode=upstream.status;retryAfter=Number(upstream.headers.get('retry-after'))||null;
       if(upstream.status>=300&&upstream.status<400)throw fail('OpenAI returned a redirect; not followed.','upstream_redirect',502);
       const responseHeaders={'content-type':upstream.headers.get('content-type')||'application/json',
         'cache-control':'no-store','x-relay-backend':'openai-platform','x-relay-route-reason':reason};
       for(const key of ['retry-after','x-request-id','content-disposition'])if(upstream.headers.has(key))responseHeaders[key]=upstream.headers.get(key);
       response.writeHead(upstream.status,responseHeaders);
-      const observer=responseObserver(responseHeaders['content-type'],id=>this.routes.remember(id));
-      if(upstream.body)for await(const chunk of upstream.body){touch();observer.chunk(chunk);
+      const observer=new ProviderUsageObserver(responseHeaders['content-type'],event=>this.observe(record,event,{billable:request.method==='POST'}));
+      if(upstream.body)for await(const chunk of upstream.body){touch();await observer.chunk(chunk);
         if(!response.write(chunk))await once(response,'drain',{signal:controller.signal});}
-      observer.end();response.end();status=upstream.ok?'completed':'upstream_error';
+      await observer.end();response.end();status=upstream.ok&&!record?.observedError?(record?.outcome||'completed'):'failed';
+      reportedError=record?.observedError||(upstream.ok?null:{code:upstream.status===429?'rate_limit_exceeded':'upstream_error'});
     } catch(error) {
+      reportedError=error;
       if(response.headersSent){response.destroy();}
       else if(!response.destroyed){const code=error.code||'openai_upstream_failed';response.writeHead(error.statusCode||502,{'content-type':'application/json','cache-control':'no-store'});
         response.end(JSON.stringify({error:{code,message:error.statusCode?error.message:'OpenAI request failed or timed out. No automatic retry was performed.'}}));}
     } finally {clearTimeout(timer);response.off('close',cancel);request.off('aborted',cancel);this.jobs.delete(controller);
+      this.telemetry?.finish(record,{status,error:reportedError,statusCode});
+      if(record?.status==='limited'&&retryAfter)this.telemetry?.observeLimit(record,record.errorCode,retryAfter);
       this.log('openai_gateway.request',{backend:'openai-platform',reason,status});}
   }
   attachRealtime(server) {
     server.on('upgrade',(request,socket,head)=>{
-      let url,c;
+      let url,c,record;
       const reject=(status,message)=>{if(!socket.destroyed)socket.end(`HTTP/1.1 ${status} Error\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`);};
       try {url=new URL(request.url,'http://127.0.0.1');
         if(!['/v1/realtime','/v1/openai/realtime'].includes(url.pathname))throw fail('Unsupported WebSocket endpoint.','not_found',404);
         if([...url.searchParams.keys()].some(key=>!['model','intent'].includes(key)))throw fail('Unsupported Realtime query parameter.','invalid_query',400);
         if(request.headers['sec-websocket-protocol'])throw fail('Use server-side header authentication, not credential-bearing WebSocket subprotocols.','invalid_protocol',400);
+        record=this.telemetry?.start({provider:'openai-platform',kind:'voice',model:url.searchParams.get('model')});
         c=this.admit(request);
-      } catch(error){reject(error.statusCode||503,error.message);return;}
+      } catch(error){this.telemetry?.finish(record,{status:'rejected',error,statusCode:error.statusCode});reject(error.statusCode||503,error.message);return;}
       let upstream;
-      try {upstream=new this.WebSocket('wss://api.openai.com/v1/realtime'+url.search,
+      try {this.telemetry?.submitted(record);upstream=new this.WebSocket('wss://api.openai.com/v1/realtime'+url.search,
         {headers:{...this.headers(c),...(request.headers['openai-safety-identifier']?{'OpenAI-Safety-Identifier':request.headers['openai-safety-identifier']}:{})},
           handshakeTimeout:15_000,maxPayload:4*1024*1024,perMessageDeflate:false,followRedirects:false});}
-      catch {reject(502,'Unable to open the configured OpenAI Realtime connection.');return;}
+      catch {this.telemetry?.finish(record,{status:'failed',error:'connection_failed'});reject(502,'Unable to open the configured OpenAI Realtime connection.');return;}
       let client,closed=false;let heartbeat,lifetime;
+      let observation=Promise.resolve();
       const job={abort:()=>close()};this.jobs.add(job);
       const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);clearTimeout(lifetime);this.jobs.delete(job);
+        observation.finally(()=>this.telemetry?.finish(record,{status:record?.observedError?'failed':'completed',error:record?.observedError}));
         upstream.on('error',()=>{});
         if(upstream.readyState===WebSocket.OPEN)upstream.close();else if(upstream.readyState===WebSocket.CONNECTING)upstream.terminate();
         if(client?.readyState===WebSocket.OPEN)client.close();
         const cleanup=setTimeout(()=>{upstream.terminate();client?.terminate();if(!client)socket.destroy();},1000);cleanup.unref();};
       socket.once('close',close);
-      upstream.once('unexpected-response',(_req,res)=>{res.resume();reject(res.statusCode===401?502:res.statusCode,'OpenAI Realtime rejected the connection.');close();});
-      upstream.on('error',()=>{if(client)client.close(1011,'OpenAI Realtime connection failed');else reject(502,'OpenAI Realtime connection failed');close();});
+      upstream.once('unexpected-response',(_req,res)=>{if(record)record.observedError=featureFailure({},res.statusCode);res.resume();reject(res.statusCode===401?502:res.statusCode,'OpenAI Realtime rejected the connection.');close();});
+      upstream.on('error',()=>{if(record)record.observedError='connection_failed';if(client)client.close(1011,'OpenAI Realtime connection failed');else reject(502,'OpenAI Realtime connection failed');close();});
       upstream.once('open',()=>{if(closed||socket.destroyed){close();return;}
         this.wss.handleUpgrade(request,socket,head,ws=>{client=ws;
           const relay=(source,target)=>source.on('message',(data,isBinary)=>{
+            if(source===upstream&&!isBinary&&data.length<256*1024){
+              observation=observation.then(()=>{try{this.observe(record,JSON.parse(data.toString()));}catch{}});
+            }
             if(target.readyState!==WebSocket.OPEN||target.bufferedAmount>16*1024*1024){close();return;}
             target.send(data,{binary:isBinary},error=>{if(error)close();});});
           relay(client,upstream);relay(upstream,client);

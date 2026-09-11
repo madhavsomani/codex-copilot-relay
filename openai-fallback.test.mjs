@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {once} from 'node:events';
 import WebSocket, {WebSocketServer} from 'ws';
+import {ProviderTelemetry} from './provider-telemetry.mjs';
 import {OpenAIFallback,OpenAIResponseRoutes,authorizeFallback,fallbackConfig,
   openAIResponseBody,responseFallbackReason,upstreamPath} from './openai-fallback.mjs';
 
@@ -24,14 +25,15 @@ test('public fallback is opt-in and does not reuse general API or Codex credenti
   authorizeFallback(request,config);
 });
 
-test('hosted tools route whole turns; normal tools and native search remain Copilot',()=>{
+test('no implicit provider fallback for unsupported tools or controls',()=>{
   for(const type of ['file_search','code_interpreter','computer_use_preview','image_generation'])
-    assert.equal(responseFallbackReason({tools:[{type}]}),'hosted_'+type);
+    assert.equal(responseFallbackReason({tools:[{type}]}),null);
   assert.equal(responseFallbackReason({tools:[{type:'function',name:'exec_command'}]}),null);
   assert.equal(responseFallbackReason({tools:[null]}),null);
   assert.equal(responseFallbackReason({tools:[{type:'web_search'}]},{nativeEnabled:true}),null);
-  assert.equal(responseFallbackReason({tools:[{type:'web_search',filters:{allowed_domains:['example.com']}}]},{nativeEnabled:true}),'extended_web_search');
-  assert.equal(responseFallbackReason({tools:[{type:'web_search',search_context_size:'high'}]},{nativeEnabled:true}),'extended_web_search');
+  assert.equal(responseFallbackReason({tools:[{type:'web_search',filters:{allowed_domains:['example.com']}}]},{nativeEnabled:true}),null);
+  assert.equal(responseFallbackReason({tools:[{type:'web_search',search_context_size:'high'}]},{nativeEnabled:true}),null);
+  assert.equal(responseFallbackReason({store:true,background:true,text:{format:{type:'json_schema'}}}),null);
   assert.equal(responseFallbackReason({model:'openai/test-native-model'}),'explicit_openai_model');
   assert.equal(responseFallbackReason({previous_response_id:'resp_a'},{knownResponse:true}),'openai_continuation');
 });
@@ -44,6 +46,13 @@ test('model mapping is explicit and safety, tool and image parameters are unchan
   assert.equal(body.model,'gpt-6-astra');
   assert.throws(()=>openAIResponseBody(body,{model:''}),{code:'openai_model_required'});
   assert.equal(openAIResponseBody({model:'openai/explicit-native'},{model:''}).model,'explicit-native');
+});
+test('only final reported usage is metered, not provisional zero counters',()=>{
+  const telemetry=new ProviderTelemetry();const gateway=new OpenAIFallback({telemetry});
+  const record=telemetry.start({provider:'openai-platform',kind:'responses'});
+  gateway.observe(record,{type:'response.created',response:{id:'resp_early',usage:{input_tokens:0,output_tokens:0}}});
+  gateway.observe(record,{type:'response.completed',response:{id:'resp_early',usage:{input_tokens:15,output_tokens:2}}});
+  assert.equal(telemetry.total('openai-platform').inputTokens,15);assert.equal(record.usageReports,1);gateway.close();
 });
 
 test('fixed public route allowlist rejects admin/proxy targets and preserves query strings',()=>{
@@ -64,12 +73,12 @@ test('response affinity persists only hashed IDs; corrupt state fails closed',()
 });
 
 async function fixture(t, fetchImpl) {
-  const logs=[];const gateway=new OpenAIFallback({config:()=>config,fetchImpl,log:(event,data)=>logs.push({event,...data})});
+  const logs=[];const telemetry=new ProviderTelemetry();const gateway=new OpenAIFallback({config:()=>config,fetchImpl,telemetry,log:(event,data)=>logs.push({event,...data})});
   const server=http.createServer(async(req,res)=>{try{await gateway.forward(req,res,new URL(req.url,'http://127.0.0.1'));}
     catch(error){res.writeHead(error.statusCode||500);res.end(error.code);}});
   server.listen(0,'127.0.0.1');await once(server,'listening');
   t.after(()=>{gateway.close();server.closeAllConnections();server.close();});
-  return {gateway,logs,url:'http://127.0.0.1:'+server.address().port};
+  return {gateway,logs,telemetry,url:'http://127.0.0.1:'+server.address().port};
 }
 
 test('HTTP Responses preserves payload and isolates credentials/telemetry',async t=>{
@@ -83,6 +92,8 @@ test('HTTP Responses preserves payload and isolates credentials/telemetry',async
   assert.equal(sent.options.headers.cookie,undefined);assert.equal(sent.options.headers['x-relay-openai-token'],undefined);
   assert.equal(JSON.parse(sent.options.body).tools[0].vector_store_ids[0],'vs_test');
   assert.equal(fixtureValue.gateway.routes.has('resp_http_test'),true);
+  assert.equal(fixtureValue.telemetry.total('openai-platform').inputTokens,10);
+  assert.equal(fixtureValue.telemetry.total('openai-platform').outputTokens,null);
   assert.ok(!JSON.stringify(fixtureValue.logs).includes('private fixture'));
 });
 
@@ -112,6 +123,9 @@ test('upstream failures are not retried or converted to successful completions',
   let calls=0;const f=await fixture(t,async()=>{calls++;return new Response('{"error":{"message":"quota exhausted"}}',{status:429,headers:{'content-type':'application/json','retry-after':'30'}});});
   const res=await fetch(f.url+'/v1/responses',{method:'POST',headers,body:JSON.stringify({model:'openai/test',input:'hi'})});
   assert.equal(res.status,429);assert.equal(res.headers.get('retry-after'),'30');assert.match(await res.text(),/quota exhausted/);assert.equal(calls,1);
+  assert.equal(f.telemetry.records[0].status,'limited');
+  assert.equal(f.telemetry.total('openai-platform').inputTokens,null);
+  assert.equal(f.telemetry.totals['github-copilot-sdk'],undefined);
 });
 
 test('redirects fail closed and unauthorized requests never contact upstream',async t=>{
@@ -137,12 +151,20 @@ test('Realtime proxies actual WebSocket text/binary frames with isolated upstrea
   upstreamServer.listen(0,'127.0.0.1');await once(upstreamServer,'listening');
   class LocalUpstream extends WebSocket {constructor(url,options){assert.match(url,/^wss:\/\/api.openai.com\/v1\/realtime\?model=/);
     super('ws://127.0.0.1:'+upstreamServer.address().port,options);}}
-  const gateway=new OpenAIFallback({config:()=>config,WebSocketImpl:LocalUpstream});
+  const telemetry=new ProviderTelemetry();const gateway=new OpenAIFallback({config:()=>config,WebSocketImpl:LocalUpstream,telemetry});
   const server=http.createServer();gateway.attachRealtime(server);server.listen(0,'127.0.0.1');await once(server,'listening');
   t.after(()=>{gateway.close();for(const client of upstreamWss.clients)client.terminate();upstreamWss.close();upstreamServer.close();server.close();});
   const client=new WebSocket('ws://127.0.0.1:'+server.address().port+'/v1/realtime?model=test-realtime',{headers});
   await once(client,'open');client.send(JSON.stringify({type:'session.update',session:{instructions:'fixture'}}));
   const [text,binary]=await once(client,'message');assert.equal(binary,false);assert.equal(JSON.parse(text).type,'session.update');
   client.send(Buffer.from([0,1,255]));const [bytes,isBinary]=await once(client,'message');assert.equal(isBinary,true);assert.deepEqual(bytes,Buffer.from([0,1,255]));
-  assert.equal(upstreamHeaders.authorization,'Bearer '+config.apiKey);assert.equal(upstreamHeaders['x-relay-openai-token'],undefined);client.close();
+  assert.equal(upstreamHeaders.authorization,'Bearer '+config.apiKey);assert.equal(upstreamHeaders['x-relay-openai-token'],undefined);
+  const ws=[...upstreamWss.clients][0];
+  const usageEvent={type:'response.done',response:{id:'resp_voice',status:'completed',usage:{input_tokens:80,output_tokens:20,input_token_details:{audio_tokens:70},output_token_details:{audio_tokens:18}}}};
+  ws.send(JSON.stringify(usageEvent));ws.send(JSON.stringify(usageEvent));
+  ws.send(JSON.stringify({type:'rate_limits.updated',rate_limits:[{name:'tokens',limit:1000,remaining:100,reset_seconds:10}]}));
+  for(let i=0;i<100&&!telemetry.observedLimits['openai-platform'];i++)await new Promise(r=>setTimeout(r,5));
+  assert.equal(telemetry.total('openai-platform').inputTokens,80);assert.equal(telemetry.total('openai-platform').inputAudioTokens,70);
+  assert.equal(telemetry.total('openai-platform').usageReports,1);assert.equal(telemetry.observedLimits['openai-platform'].rates[0].remaining,100);
+  client.close();
 });

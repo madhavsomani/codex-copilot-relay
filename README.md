@@ -51,13 +51,18 @@ SDK.
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
 
-### Optional hybrid capabilities (1.3.22)
+### Explicit providers and usage visibility (1.3.23)
 
 Keep Copilot for normal agent work and use an explicitly enabled public OpenAI
 connection for hosted tools, advanced search/image options and Realtime API
 transport. The existing signed-in Codex search/GPT Image 2 helper remains
 available without a Platform key. Multi-image Copilot requests use bounded,
 labelled overviews; the original dashboard is unchanged.
+The dashboard now separates Copilot, native Codex/OpenAI, and public OpenAI
+calls, with provider filters and observed token breakdowns. Missing usage is
+labelled, not invented. **No automatic fallback:** normal inference remains
+Copilot, unsupported requests do not silently change provider, and OpenAI
+feature quotas do not disable independent Copilot work.
 
 **[Step-by-step hybrid setup and client examples](docs/HYBRID-SETUP.md)** covers
 credentials, billing, restoration, generic Responses clients and honest limits.

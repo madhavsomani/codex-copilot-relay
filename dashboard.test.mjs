@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DASHBOARD_HTML } from "./dashboard.mjs";
+test('provider visibility is explicit and never conflates OpenAI usage with Copilot',()=>{
+  for(const id of ['provider-routing','provider-native-in','provider-platform-out','provider-filter','provider-call-detail','no-fallback'])assert.ok(DASHBOARD_HTML.includes('id="'+id+'"'));
+  assert.match(DASHBOARD_HTML,/No automatic fallback/);assert.match(DASHBOARD_HTML,/not reported/);
+  assert.match(DASHBOARD_HTML,/WebRTC media bypassing the relay is not metered/);
+  assert.match(DASHBOARD_HTML,/if\(event.type==='provider.activity'\)/);
+});
 
 test("dashboard credits the author and reports the compatibility policy", () => {
   assert.match(DASHBOARD_HTML, /Created by\s*<a[^>]*>Madhav Somani<\/a>/);

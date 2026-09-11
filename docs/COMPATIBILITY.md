@@ -21,7 +21,7 @@ or that every native OpenAI feature is available.
 | Worker crash and session churn | Isolated fault and capacity probes; interrupted in-memory work still needs retry |
 | Live hosted web search | Optional native Codex helper; actual search actions streamed as web_search_call, sources returned as URLs |
 | Built-in image_gen tool | Optional native Codex helper serves Images generations/edits endpoints with GPT Image 2 |
-| Hosted image_generation Responses declaration, file search, code interpreter, computer-use API | Optional authenticated public OpenAI transport; whole turn uses OpenAI, upstream model/access requirements apply |
+| Hosted image_generation Responses declaration, file search, code interpreter, computer-use API | Explicit OpenAI model/endpoint only; no automatic fallback, whole explicit turn uses OpenAI |
 | Realtime WebSocket / WebRTC signaling and public Audio API | Optional public transport; compatible client required, built-in desktop voice not certified |
 | Third-party image/video generators | Ordinary connector/browser tools; service authentication and generation costs are separate |
 | Stored Responses and JSON-schema output enforcement | Optional public OpenAI transport; not implemented inside Copilot |
