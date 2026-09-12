@@ -5,6 +5,24 @@ import path from "node:path";
 import test from "node:test";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
 
+test('numeric ingress evidence survives lightweight retention without private fields', () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'relay-ingress-record-'));
+  try {
+    const filePath=path.join(directory,'events.jsonl');
+    const recorder=new ProxyRecorder({filePath,limit:3,detailedLimit:1});
+    const ingress={wireBytes:1500,retainedBytes:600,omittedHistoricalImages:9,omittedImageChars:900,
+      retainedImages:2,maxWireBytes:4000,maxRetainedBytes:2000,privateBody:'must not survive',invalid:Infinity};
+    const expected={...ingress};delete expected.privateBody;delete expected.invalid;
+    const first=recorder.start({body:{input:'first'},inputBytes:1500,ingress});
+    recorder.finish(first,{status:'completed'});
+    const second=recorder.start({body:{input:'second'},inputBytes:1});recorder.finish(second,{status:'completed'});
+    recorder.compact();
+    const restored=new ProxyRecorder({filePath,limit:3,detailedLimit:1}).snapshot({includeDetails:false}).records.find(r=>r.id===first.id);
+    assert.equal(restored.detailTier,'lightweight');assert.equal(restored.inputBytes,1500);
+    assert.deepEqual(restored.ingress,expected);assert.ok(!fs.readFileSync(filePath,'utf8').includes('must not survive'));
+  } finally {assert.equal(path.dirname(directory),os.tmpdir());fs.rmSync(directory,{recursive:true,force:true});}
+});
+
 test("records structured relay failures with their actual message and code", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-error-test-"));
   try {

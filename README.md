@@ -51,7 +51,16 @@ SDK.
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
 
-### Images-only native adapter and connection center (1.3.27)
+### Large image-history ingress repair (1.3.28)
+
+Long Codex tasks can resend more image history than the model ever needs. The
+Responses reader now streams up to 512 MiB of incoming JSON, retaining a bounded
+image window before the existing 128 MiB assembled-body check. Older eligible
+images receive explicit omission markers; text, tool IDs and ordering remain
+unchanged. The newest image batch is never silently evicted. Original task files
+are untouched. See [the fix, safeguards and verification](docs/RELEASE-1.3.28.md).
+
+### Images-only native adapter and connection center
 
 Keep Copilot for normal agent work and use an explicitly enabled public OpenAI
 connection for hosted tools, advanced search/image options and Realtime API
@@ -280,8 +289,8 @@ or product changes can require updates to the relay.
   token budget into a bounded, salience-aware continuity ledger
   that prioritizes user corrections, failures, tool inputs/results, and the latest
   tool chain; the legacy character ceiling is used only if no token limit is available
-- A bounded 128 MiB request envelope lets media-heavy Codex history reach the
-  compactor instead of failing at the old 32 MiB HTTP-reader ceiling
+- A streaming Responses reader separates the 512 MiB wire limit from the
+  128 MiB retained JSON limit, with a bounded historical-image window
 - Streaming failures end with a standard `response.failed` event instead of a silent disconnect
 - Loopback-only listener on `127.0.0.1`
 - Modern loopback dashboard with a real-time dotted Codex → relay → Copilot →
@@ -853,17 +862,29 @@ limit remains an emergency fallback only for models that do not advertise a
 prompt-token limit; it no longer rejects a valid long-context request merely
 because its UTF-16 character count exceeds one million.
 
-Codex resends its full task envelope before the relay can compact it. Drive,
-browser, and image tools can place large base64 results in that local history, so
-the relay accepts up to 128 MiB by default and then applies the separate
-model-token context guard described above. The raw envelope is
-never forwarded unchanged to Copilot. The effective limit is reported by
-`/health` under `reliability.contextGuard`; the local HTTP envelope is reported
-separately as `reliability.maxRequestBodyBytes`.
+Codex resends its full task envelope. Drive, browser and image tools can put large
+base64 results in that history. Ordinary `/v1/responses` now streams up to
+512 MiB on the wire, replaces only eligible older embedded image nodes with
+explicit text markers, and limits retained JSON to 128 MiB by default. The image
+window is at most 12 images and 32 MiB of image URL characters. It never silently
+evicts the newest image-bearing input item. Instructions, non-image text and tool
+metadata remain intact at ingress; the separate model-token compactor still
+applies afterward. Original Codex files are never edited.
 
-For an unusual workload, set `BRIDGE_MAX_REQUEST_BODY_BYTES` before starting the
-relay. Values are clamped between 1 MiB and 512 MiB; the limit is deliberately
-bounded because concurrent requests occupy local memory while JSON is parsed.
+`/health` reports `reliability.maxRequestWireBytes`, `maxRequestBodyBytes` and
+`requestUploadTimeoutMs`. Four uploads may be parsed concurrently; another gets
+429 with a retry hint. A two-minute total upload deadline returns 408; this is
+only request ingestion, not the model-generation or long tool-wait deadline. Oversized
+current images return 400; excess text, wire bytes or retained JSON return 413.
+Explicit OpenAI requests are never forwarded with pruned history: a route named
+late after pruning is rejected. Other endpoints retain their existing strict
+body reader and limits.
+
+For an unusual workload, set `BRIDGE_MAX_REQUEST_BODY_BYTES` and optionally
+`BRIDGE_MAX_REQUEST_WIRE_BYTES` before starting the relay. Values are clamped
+between 1 MiB and 512 MiB; wire capacity is never lower than retained capacity.
+These are payload limits, not promises of equally small process memory: parsing,
+serialization and later image decoding need additional bounded working space.
 Prefer connector calls that omit unneeded base64 media, and start a fresh Codex
 task if even the bounded envelope is exhausted.
 

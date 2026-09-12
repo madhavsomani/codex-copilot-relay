@@ -334,6 +334,11 @@ function incrementRollup(metrics, at, changes, fallback) {
   addCounters(metrics.daily[dailyKey], changes);
 }
 
+function numericIngress(ingress) {
+  return Object.fromEntries(['wireBytes','retainedBytes','omittedHistoricalImages','omittedImageChars','retainedImages','maxWireBytes','maxRetainedBytes']
+    .filter(key=>Number.isSafeInteger(ingress[key])&&ingress[key]>=0).map(key=>[key,ingress[key]]));
+}
+
 function lightweightRecord(record) {
   const message = record?.error?.message ?? record?.errorSummary;
   const errorMessage = typeof message === "string" ? scrubString(message, 512) : null;
@@ -343,6 +348,7 @@ function lightweightRecord(record) {
     receivedAt: record.receivedAt ?? null,
     completedAt: record.completedAt ?? null,
     requestPath: record.requestPath ?? null,
+    ...(record.ingress ? {ingress:numericIngress(record.ingress)} : {}),
     status: record.status ?? "unknown",
     requestedModel: record.requestedModel ?? null,
     selectedModel: record.selectedModel ?? null,
@@ -619,7 +625,7 @@ export class ProxyRecorder {
     }
   }
 
-  start({ requestPath, body, inputBytes, streaming, relayVersion = null, routingMode = null }) {
+  start({ requestPath, body, inputBytes, streaming, ingress = null, relayVersion = null, routingMode = null }) {
     const now = this.now();
     const record = {
       id: newId(now),
@@ -633,6 +639,7 @@ export class ProxyRecorder {
       routingMode,
       streaming: Boolean(streaming),
       inputBytes: Number.isFinite(inputBytes) ? inputBytes : 0,
+      ...(ingress ? {ingress:numericIngress(ingress)} : {}),
       outputBytes: 0,
       latencyMs: null,
       replayCount: 0,

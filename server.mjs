@@ -28,6 +28,7 @@ import {
 import { publicPricingSnapshot } from "./pricing.mjs";
 import { defaultEffort, routeEffort } from "./reasoning-routing.mjs";
 import { readJsonBody } from "./request-body.mjs";
+import { readResponsesBody, DEFAULT_RESPONSES_WIRE_BYTES, DEFAULT_RESPONSES_READ_MS } from './responses-body.mjs';
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import {loadNativeToolsConfig, nativeJobs, prepareNativeSearch,
   imageWithNativeCodex, validateImageRequest} from './native-codex-tools.mjs';
@@ -146,6 +147,8 @@ const maxRequestBodyBytes = environmentInteger(
   512 * 1024 * 1024,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
+const maxRequestWireBytes = Math.max(maxRequestBodyBytes, environmentInteger(
+  'BRIDGE_MAX_REQUEST_WIRE_BYTES', DEFAULT_RESPONSES_WIRE_BYTES, 1024*1024, 512*1024*1024));
 const providerTelemetry = new ProviderTelemetry({directory:runtimeDirectory});
 const openaiFallback = new OpenAIFallback({directory:runtimeDirectory,telemetry:providerTelemetry,log:(event,data)=>log(event,data)});
 const recorderHistoryLimit = environmentInteger("BRIDGE_HISTORY_LIMIT", 1_000, 1_000, 10_000);
@@ -1579,6 +1582,8 @@ const server = http.createServer(async (request, response) => {
             defaultModelCompatibility.maxSingleAttachmentBase64Chars,
         },
         maxRequestBodyBytes,
+        maxRequestWireBytes,
+        requestUploadTimeoutMs: DEFAULT_RESPONSES_READ_MS,
         maxSerializedContextChars,
       },
       telemetry: {
@@ -1715,10 +1720,15 @@ const server = http.createServer(async (request, response) => {
 
   let parsedBody;
   try {
-    parsedBody = await readJsonBody(request, { maxBytes: maxRequestBodyBytes });
+    parsedBody = await readResponsesBody(request, {maxBytes:maxRequestBodyBytes,maxWireBytes:maxRequestWireBytes,
+      preserveBody:body=>Boolean(responseFallbackReason(body,{knownResponse:openaiFallback.routes.has(body?.previous_response_id)}))});
   } catch (error) {
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
     const code = typeof error?.code === "string" ? error.code : "invalid_json";
+    // Close only after delivering a useful error; never reset the socket from
+    // the parser, and do not leave a rejected/slow upload occupying keep-alive.
+    response.setHeader('Connection','close');
+    if(statusCode===429)response.setHeader('Retry-After','2');
     log("bridge.request_rejected", {
       statusCode,
       code,
@@ -1734,6 +1744,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   const body = parsedBody.body;
+  if (parsedBody.ingress.omittedHistoricalImages) log('bridge.image_history_compacted', parsedBody.ingress);
   const publicReason = responseFallbackReason(body,{nativeEnabled:nativeToolsConfig.enabled,
     knownResponse:openaiFallback.routes.has(body?.previous_response_id)});
   if (publicReason) {
@@ -1766,6 +1777,7 @@ const server = http.createServer(async (request, response) => {
     requestPath: url.pathname,
     body,
     inputBytes: parsedBody.bytes,
+    ingress: parsedBody.ingress,
     streaming: body?.stream !== false,
     relayVersion,
     routingMode: modelRoutingPolicy.mode,
