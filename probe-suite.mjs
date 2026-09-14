@@ -46,6 +46,7 @@ try {
     ['probe-quota-isolation.mjs',[]],
     ['probe-failure-stream.mjs',[]], ['probe-parallel-tools.mjs',[]], ['probe-steering.mjs',[]],
     ['probe-routing-agents.mjs',[]],
+    ['probe-instructions.mjs',[]],
   ];
   if (args.get('--long-context') === 'true') probes.push(['probe-long-context.mjs',[]]);
   const only = args.get('--only');

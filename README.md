@@ -51,6 +51,16 @@ SDK.
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
 
+### Oversized instruction-field repair (1.3.29)
+
+Copilot can reject a single `instructions` string over 1,048,576 characters even
+when the overall prompt fits the model's token window. The relay now checks this
+separate field limit. If necessary, older exact copies of complete skill catalogs
+become explicit references to their unchanged latest copy. Differing catalogs,
+ordinary instructions, source roles, and ordering are preserved. Genuinely unique
+oversized instructions fail locally with an actionable error before session
+creation. See [the fix and verification](docs/RELEASE-1.3.29.md).
+
 ### Large image-history ingress repair (1.3.28)
 
 Long Codex tasks can resend more image history than the model ever needs. The
@@ -843,7 +853,7 @@ outer instruction image, then older user/history images. It replaces omitted
 image markers with an explicit explanation instead of silently showing the model
 an attachment name that was not sent.
 When instructions, tool schemas, and accumulated history approach 90% of the
-selected model's advertised prompt-token limit, the relay preserves every outer instruction,
+selected model's advertised prompt-token limit, the relay preserves every distinct outer instruction,
 the latest user request, and the newest tool chain while replacing older history
 with a bounded continuity ledger. That ledger gives omitted user corrections and
 constraints priority and retains compact excerpts of tool inputs and results.
@@ -861,6 +871,16 @@ wrappers and tokenizer drift. The old `BRIDGE_MAX_SERIALIZED_CONTEXT_CHARS`
 limit remains an emergency fallback only for models that do not advertise a
 prompt-token limit; it no longer rejects a valid long-context request merely
 because its UTF-16 character count exceeds one million.
+
+Independently, the Copilot `instructions` field is bounded to the observed
+1,048,576-character maximum (`reliability.maxInstructionsChars` in `/health`).
+Only envelopes exceeding that cap use exact, same-role deduplication of complete
+standalone skill catalogs. Latest copies stay in place; older copies become
+explicit numbered references. Unique rules and catalogs are not truncated or
+moved into user text. Numeric context diagnostics include `originalSystemChars`,
+`deduplicatedSkillCatalogs`, `deduplicatedInstructionChars` and the limit.
+The field check runs again after image annotations. It does not increase the
+token window, HTTP payload limits, or the capacity for genuinely unique rules.
 
 Codex resends its full task envelope. Drive, browser and image tools can put large
 base64 results in that history. Ordinary `/v1/responses` now streams up to

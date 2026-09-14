@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import {buildBoundedInstructions,assertInstructionsWithinLimit} from './instruction-budget.mjs';
 
 const MAX_TOOL_NAME_LENGTH = 64;
 const MAX_HISTORY_TOOL_OUTPUT_CHARS = 64 * 1024;
@@ -799,6 +800,7 @@ export function buildSessionInput(
     systemChars: 0,
   };
   const developerInstructions = [];
+  const instructionRoles = [];
   const transcript = [];
 
   const rootInstructions = stringifyInstructions(
@@ -806,7 +808,10 @@ export function buildSessionInput(
     attachments,
     contextStats,
   );
-  if (rootInstructions) developerInstructions.push(rootInstructions);
+  if (rootInstructions) {
+    developerInstructions.push(rootInstructions);
+    instructionRoles.push('root');
+  }
 
   const inputItems = typeof body?.input === "string"
     ? [{
@@ -825,6 +830,7 @@ export function buildSessionInput(
     if (!entry) continue;
     if (["developer", "system"].includes(entry.role)) {
       developerInstructions.push(entry.content);
+      instructionRoles.push(entry.role);
     } else {
       transcript.push(entry);
     }
@@ -868,11 +874,9 @@ export function buildSessionInput(
       : []),
   ].join("\n");
 
-  let systemContent = [
-    bridgeInstructions,
-    ...developerInstructions.map((instruction, index) =>
-      `\n--- Outer developer instruction ${index + 1} ---\n${instruction}`),
-  ].join("\n");
+  const boundedInstructions = buildBoundedInstructions(bridgeInstructions, developerInstructions, instructionRoles);
+  let systemContent = boundedInstructions.systemContent;
+  Object.assign(contextStats, boundedInstructions.stats);
 
   let prompt = compactTranscriptWithinBudget({
     transcript,
@@ -939,6 +943,9 @@ export function assertSerializedContextWithinLimit(
   const normalizedBudget = legacySignature
     ? { maxSerializedTextChars: contextBudget }
     : (contextBudget ?? {});
+  // Keep this independent of token budgeting, including any image-reference
+  // annotations added after the initial system message was built.
+  assertInstructionsWithinLimit(sessionInput?.systemContent);
   const serializedToolDefinitions = JSON.stringify(Array.isArray(sdkTools) ? sdkTools : []);
   const measurement = serializedContextMeasurement({
     systemContent: sessionInput?.systemContent,
@@ -1428,7 +1435,8 @@ export function makeFailedResponseObject({ responseId, model, code, message }) {
 }
 
 export function classifyResponseFailureCode(message, code) {
-  if (code === 'vision_budget_exceeded') return 'invalid_prompt';
+  if (['vision_budget_exceeded','instructions_too_long'].includes(code)) return 'invalid_prompt';
+  if (/Invalid ['"]instructions['"]:\s*string too long/i.test(String(message ?? ''))) return 'invalid_prompt';
   return /prompt token count|context.*(?:limit|large)|too many tokens/i
     .test(String(message ?? ""))
     ? "invalid_prompt"

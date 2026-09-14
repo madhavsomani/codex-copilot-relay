@@ -29,6 +29,7 @@ import { publicPricingSnapshot } from "./pricing.mjs";
 import { defaultEffort, routeEffort } from "./reasoning-routing.mjs";
 import { readJsonBody } from "./request-body.mjs";
 import { readResponsesBody, DEFAULT_RESPONSES_WIRE_BYTES, DEFAULT_RESPONSES_READ_MS } from './responses-body.mjs';
+import {MAX_INSTRUCTIONS_CHARS} from './instruction-budget.mjs';
 import { ResponsesEventStream } from "./responses-stream.mjs";
 import {loadNativeToolsConfig, nativeJobs, prepareNativeSearch,
   imageWithNativeCodex, validateImageRequest} from './native-codex-tools.mjs';
@@ -1421,6 +1422,7 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     deferredToolCount: sessionTools.filter((tool) => tool.defer === "auto").length,
   });
   if (sessionInput.contextStats.historyCompacted
+    || sessionInput.contextStats.deduplicatedSkillCatalogs > 0
     || sessionInput.contextStats.imageAttachments > 0
     || sessionInput.contextStats.omittedImageAttachments > 0
     || sessionInput.contextStats.truncatedToolOutputs > 0) {
@@ -1582,6 +1584,7 @@ const server = http.createServer(async (request, response) => {
             defaultModelCompatibility.maxSingleAttachmentBase64Chars,
         },
         maxRequestBodyBytes,
+        maxInstructionsChars: MAX_INSTRUCTIONS_CHARS,
         maxRequestWireBytes,
         requestUploadTimeoutMs: DEFAULT_RESPONSES_READ_MS,
         maxSerializedContextChars,
