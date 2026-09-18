@@ -301,13 +301,28 @@ function Restore-CodexCopilotConfigFromBackup {
     }
 }
 
+function Get-CodexCopilotStandardContext {
+    param([psobject]$Capabilities)
+
+    $window = [long]$Capabilities.maxContextWindowTokens
+    $prompt = [long]$Capabilities.maxPromptTokens
+    if ($window -le 0 -or $prompt -le 0 -or $prompt -gt $window) { return $null }
+    $output = [long]$Capabilities.maxOutputTokens
+    if ($output -le 0) { $output = $window - $prompt }
+    $window = [long][Math]::Min(400000, $window)
+    $prompt = [long][Math]::Min($prompt, $window - $output)
+    if ($prompt -le 0) { return $null }
+    return @{ Window = $window; Prompt = $prompt }
+}
+
 function Get-CodexCopilotContextSettings {
     param([psobject]$Health, [string]$Model)
 
     if (-not $Health -or -not $Health.ok -or [string]$Health.model -ne $Model) { return @{} }
-    $window = [long]$Health.compatibility.maxContextWindowTokens
-    $prompt = [long]$Health.compatibility.maxPromptTokens
-    if ($window -le 0 -or $prompt -le 0 -or $prompt -gt $window) { return @{} }
+    $limits = Get-CodexCopilotStandardContext -Capabilities $Health.compatibility
+    if (-not $limits) { return @{} }
+    $window = $limits.Window
+    $prompt = $limits.Prompt
     # Match the relay's 90% prompt budget, reserving room for the compaction turn.
     $compact = [long][Math]::Floor($prompt * 0.9)
     if ($compact -ge 100000) { $compact = [long]([Math]::Floor($compact / 10000) * 10000) }
@@ -363,10 +378,10 @@ function New-CodexCopilotModelCatalog {
         if ($entrySettings.Count -eq 0) { continue }
         $efforts = @($cap.supportedReasoningEfforts | Where-Object { $_ })
         if ($efforts.Count -eq 0) { $efforts = $reasoningEfforts }
-        $preferred = if ($slug -eq 'gpt-6-astra') { 'xhigh' } else { $cap.defaultReasoningEffort }
-        if (-not $preferred -or $efforts -notcontains $preferred) { $preferred = @('none','low','medium','high','xhigh','max' | Where-Object { $efforts -contains $_ }) | Select-Object -Last 1 }
+        $preferred = @('low','none','medium','high','xhigh','max' | Where-Object { $efforts -contains $_ }) | Select-Object -First 1
         $reasoningLevels = @($efforts | ForEach-Object { @{ effort = $_; description = "Copilot reasoning effort: $_" } })
-        $percent = [Math]::Min(95, [Math]::Floor(100 * [double]$cap.maxPromptTokens / [double]$entrySettings.model_context_window))
+        $standardContext = Get-CodexCopilotStandardContext -Capabilities $cap
+        $percent = [Math]::Min(95, [Math]::Floor(100 * [double]$standardContext.Prompt / [double]$standardContext.Window))
         $backend = if ($locked) { $Model } else { $slug }
         [ordered]@{
             slug = $slug; display_name = $slug; description = "Codex metadata for the Copilot relay; selected backend $backend."
@@ -379,7 +394,7 @@ function New-CodexCopilotModelCatalog {
             max_context_window = $entrySettings.model_context_window; auto_compact_token_limit = $entrySettings.model_auto_compact_token_limit
             effective_context_window_percent = $percent; experimental_supported_tools = @()
             input_modalities = if ($cap.maxImageAttachments -eq 0) { @('text') } else { @('text', 'image') }
-            supports_search_tool = $false; use_responses_lite = $false
+            supports_search_tool = $true; use_responses_lite = $false
             include_skills_usage_instructions = $true; include_plugin_usage_instructions = $true; include_apps_usage_instructions = $true
         }
     }

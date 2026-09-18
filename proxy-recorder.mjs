@@ -1,5 +1,8 @@
 import fs from "node:fs";
+import {callReasoning} from './call-reasoning.mjs';
 import path from "node:path";
+import {pacificDay, pacificDailySeries} from './usage-calendar.mjs';
+import {checkpointState, checkpointMessage} from './efficiency-policy.mjs';
 
 const SENSITIVE_KEY = /authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|cookie|credential|private[_-]?key|client[_-]?secret|session[_-]?id/i;
 const SECRET_VALUE = /Bearer\s+[A-Za-z0-9._~+/=-]+|(?:sk|rk|pk)-[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}/gi;
@@ -148,6 +151,8 @@ function createMetrics(now, baseline = {}) {
     hourly: Object.create(null),
     daily: Object.create(null),
     models: Object.create(null),
+    taskDaily: Object.create(null),
+    taskMeteringStartedAt: timestamp,
   };
 }
 
@@ -213,6 +218,13 @@ function normalizeMetrics(value, now) {
   metrics.hourly = normalizeBucketMap(value.hourly);
   metrics.daily = normalizeBucketMap(value.daily);
   metrics.models = normalizeModelMap(value.models);
+  metrics.taskMeteringStartedAt = typeof value.taskMeteringStartedAt === 'string' ? value.taskMeteringStartedAt : now.toISOString();
+  for (const [key, row] of Object.entries(value.taskDaily ?? {})) {
+    if (!/^\d{4}-\d{2}-\d{2}\|(?:[0-9a-f-]{36}|unattributed)$/.test(key)) continue;
+    const [day, taskId] = key.split('|');
+    metrics.taskDaily[key] = {day, taskId, ...normalizedCounterObject(row),
+      stepCheckpointSeen:finiteNumber(row.stepCheckpointSeen), creditCheckpointSeen:finiteNumber(row.creditCheckpointSeen)};
+  }
   return metrics;
 }
 
@@ -340,6 +352,7 @@ function numericIngress(ingress) {
 }
 
 function lightweightRecord(record) {
+  const reasoning = callReasoning(record);
   const message = record?.error?.message ?? record?.errorSummary;
   const errorMessage = typeof message === "string" ? scrubString(message, 512) : null;
   const code = record?.error?.code ?? record?.errorCode;
@@ -348,10 +361,18 @@ function lightweightRecord(record) {
     receivedAt: record.receivedAt ?? null,
     completedAt: record.completedAt ?? null,
     requestPath: record.requestPath ?? null,
+    taskId: record.taskId ?? null,
+    sessionReason: record.sessionReason ?? null,
+    costCheckpoint: record.costCheckpoint ?? null,
     ...(record.ingress ? {ingress:numericIngress(record.ingress)} : {}),
     status: record.status ?? "unknown",
     requestedModel: record.requestedModel ?? null,
     selectedModel: record.selectedModel ?? null,
+    requestedReasoningEffort: reasoning.requested,
+    selectedReasoningEffort: reasoning.selected,
+    reasoningSource: reasoning.source,
+    reasoningCapped: reasoning.capped,
+    ...(record.contextStats ? {contextStats:numericContextStats(record.contextStats)} : {}),
     relayVersion: record.relayVersion ?? null,
     routingMode: record.routingMode ?? null,
     streaming: Boolean(record.streaming),
@@ -376,6 +397,12 @@ function recordIndex(record) {
   index.detailTier = record.detailTier === "lightweight" ? "lightweight" : "detailed";
   index.detailAvailable = index.detailTier === "detailed";
   return index;
+}
+
+function numericContextStats(stats) {
+  return Object.fromEntries(['deduplicatedSearchTools','deduplicatedSearchChars','deduplicatedSkillCatalogs',
+    'deduplicatedInstructionChars','systemChars','promptChars','toolDefinitionChars','serializedTextTokens',
+    'omittedHistoryEntries','retainedHistoryEntries'].filter(key=>Number.isSafeInteger(stats[key]) && stats[key]>=0).map(key=>[key,stats[key]]));
 }
 
 function previewValue(value, maxBytes) {
@@ -572,6 +599,8 @@ export class ProxyRecorder {
   }
 
   pruneMetrics() {
+    const taskDays = [...new Set(Object.values(this.metrics.taskDaily).map(row => row.day))].sort().slice(-31);
+    for (const [key, row] of Object.entries(this.metrics.taskDaily)) if (!taskDays.includes(row.day)) delete this.metrics.taskDaily[key];
     const hourlyKeys = Object.keys(this.metrics.hourly).sort();
     for (const key of hourlyKeys.slice(0, -this.hourlyRetention)) delete this.metrics.hourly[key];
     const dailyKeys = Object.keys(this.metrics.daily).sort();
@@ -625,16 +654,20 @@ export class ProxyRecorder {
     }
   }
 
-  start({ requestPath, body, inputBytes, streaming, ingress = null, relayVersion = null, routingMode = null }) {
+  start({ requestPath, body, inputBytes, streaming, ingress = null, relayVersion = null, routingMode = null, taskId = null }) {
     const now = this.now();
     const record = {
       id: newId(now),
       receivedAt: now.toISOString(),
       completedAt: null,
       requestPath,
+      taskId: typeof taskId === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(taskId) ? taskId : null,
       status: "active",
       requestedModel: typeof body?.model === "string" ? body.model : null,
       selectedModel: null,
+      requestedReasoningEffort: callReasoning({requestedReasoningEffort:body?.reasoning?.effort}).requested,
+      selectedReasoningEffort: null,
+      reasoningSource: null,
       relayVersion,
       routingMode,
       streaming: Boolean(streaming),
@@ -671,6 +704,12 @@ export class ProxyRecorder {
 
   replay(record, details) {
     if (!record) return;
+    if (['initial','continuation'].includes(details?.phase)) {
+      record.selectedReasoningEffort = callReasoning({selectedReasoningEffort:details.reasoningEffort}).selected;
+      record.reasoningSource = record.selectedReasoningEffort ? details.phase : null;
+      record.reasoningCapped = details.modelRouting?.reasoningCapped === true;
+    }
+    if (details?.contextStats) record.contextStats = numericContextStats(details.contextStats);
     const at = this.now().toISOString();
     record.replayCount += 1;
     record.copilotReplays.push(payloadWithinLimit({ at, ...details }, this.options));
@@ -741,6 +780,9 @@ export class ProxyRecorder {
     }
     const finalStatus = status === "failed" ? "failed" : "completed";
     const usageChanges = usageCounterChanges(record.usage);
+    const taskKey = pacificDay(record.completedAt) + '|' + (record.taskId ?? 'unattributed');
+    this.metrics.taskDaily[taskKey] ??= {day:pacificDay(record.completedAt),taskId:record.taskId ?? 'unattributed',...emptyCounters()};
+    addCounters(this.metrics.taskDaily[taskKey], {[finalStatus]:1,...usageChanges});
     this.updateMetrics(record.completedAt, {
       [finalStatus]: 1,
       outputBytes: record.outputBytes,
@@ -883,12 +925,16 @@ export class ProxyRecorder {
       const counters = source[key] ?? emptyCounters();
       rows.push({
         bucket: key,
+        telemetryAvailable: Object.hasOwn(source, key) || date.getTime() >= Date.parse(this.metrics.createdAt),
+        telemetryPartial: date.getTime() < Date.parse(this.metrics.createdAt) && Date.parse(this.metrics.createdAt) < date.getTime() + (unit === 'hour' ? 3600000 : 86400000),
         received: counters.received,
         replayed: counters.replayed,
         completed: counters.completed,
         failed: counters.failed,
         toolCalls: counters.toolCalls,
         meteredCalls: counters.meteredCalls,
+        sdkApiCalls: counters.sdkApiCalls,
+        creditMeteredApiCalls: counters.creditMeteredApiCalls,
         inputTokens: counters.inputTokens,
         outputTokens: counters.outputTokens,
         cacheReadTokens: counters.cacheReadTokens,
@@ -903,7 +949,24 @@ export class ProxyRecorder {
     const models = Object.entries(this.metrics.models)
       .map(([model, counters]) => ({ model, ...counters }))
       .sort((left, right) => ((right.received + right.replayed) - (left.received + left.replayed)));
-    return { hourly: this.series("hour", 24), daily: this.series("day", 30), models };
+    return { hourly: this.series("hour", 24), daily: this.series("day", 30), models,
+      pacificDaily:pacificDailySeries(this.series('hour', Math.min(this.hourlyRetention, 24 * 31)), this.now()),
+      taskDaily:Object.values(this.metrics.taskDaily), taskMeteringStartedAt:this.metrics.taskMeteringStartedAt };
+  }
+
+  taskUsage(taskId) {
+    return this.metrics.taskDaily[pacificDay(this.now()) + '|' + taskId] ?? emptyCounters();
+  }
+
+  costCheckpoint(taskId, policy) {
+    if (!taskId) return null;
+    const usage = this.taskUsage(taskId);
+    const state = checkpointState(usage, policy);
+    if (state.stepCheckpoint <= (usage.stepCheckpointSeen || 0) && state.creditCheckpoint <= (usage.creditCheckpointSeen || 0)) return null;
+    usage.stepCheckpointSeen = state.stepCheckpoint;
+    usage.creditCheckpointSeen = state.creditCheckpoint;
+    this.persistMetrics();
+    return checkpointMessage(usage, policy);
   }
 
   storage() {

@@ -51,6 +51,71 @@ SDK.
 > GitHub Copilot entitlement and remains subject to GitHub quota, billing,
 > acceptable-use, and product terms.
 
+### Cost controls and Pacific accounting (1.3.36)
+
+- Repeated outer discovery reuses a pending SDK session only when its validated
+  task identity, complete tool declarations, model, effort, and user/instruction/settings
+  contract are unchanged. Changed catalogs still restart safely: SDK 1.0.11
+  does not expose a supported model-visible hot-schema update. Anonymous requests
+  do not qualify for this optimization. Call details record the reuse/start reason.
+- Routine shell diagnostics are bounded to 16 KiB of UTF-8 text with an explicit
+  middle-omission notice; instruction/document reads retain their full returned
+  text, other tool results retain the existing 64 KiB limit, and images remain
+  separate. This is not a limit on input context. Required instructions and
+  verification must still be read fully; ask for narrower output when necessary.
+- Creative/editing guidance bounds a requested batch to three revision passes
+  unless explicitly extended, then calls for a complete reviewable result rather
+  than unrequested polishing. Explicitly authorized work and approval gates remain.
+- Per-task daily checkpoints default to **20 model steps or 500 SDK AI credits**.
+  Override with positive integer process settings `BRIDGE_CHECKPOINT_STEPS` and
+  `BRIDGE_CHECKPOINT_AI_CREDITS` before starting the watchdog. These are **advisory
+  checkpoints, not hard budgets**: the next outer boundary receives one cost/progress
+  notice per crossed interval; active inference is never cancelled. An individual
+  response can exceed an interval before the next checkpoint. Missing credits stay
+  unreported; partial metering can understate cost. Model compliance is not guaranteed.
+- The task ledger uses validated task UUIDs, not shared cache keys or directories.
+  It retains 31 Pacific dates and survives history clearing/restarts. Attribution
+  begins with this release; older costs are not guessed or backfilled. The table
+  distinguishes relay responses, SDK **model steps**, tokens, and SDK AI credits.
+
+The relay and generated catalog default omitted effort to low where supported.
+A user's top-level `model_reasoning_effort` in Codex overrides that default: set it
+to `"low"` for future routine tasks. Explicit task efforts and existing sessions
+remain unchanged. The standard 400k context / 272k effective input budget,
+compaction, native Codex images, authentication and Remote boundaries are preserved.
+
+### Compact dashboard layout (1.3.35)
+
+Provider routing is a slim expandable strip; its complete account counters and
+provider ledger remain available on expansion. Token and AI-credit charts sit
+directly beneath it with the existing 24-hour, 5-day and 30-day ranges.
+Recent call history uses the full dashboard width, retaining all 13 fields.
+Selected-call details appear beneath the table, with keyboard focus, direct
+navigation on selection, and a return link. Smaller screens retain horizontal
+table scrolling instead of hiding measurements. Ordinary live refreshes do not
+move the page to the details panel.
+
+### Reasoning visibility and efficiency (1.3.34)
+
+Recent call history shows **Intelligence · effort**: applied SDK session effort,
+the requested level, and any continuation or capability cap in call details.
+It is not an intelligence score. Missing historical effort stays **not recorded**;
+only intact replay evidence can recover it. These fields survive lightweight retention.
+
+Omitted effort now defaults to **low** where supported, including the generated
+Codex model catalog. Explicit high/xhigh/max choices are unchanged. Existing SDK
+continuations keep their original effort until a fresh exchange starts.
+Already-loaded tool-search definitions are referenced rather than copied into
+history again, but their full registered schemas, constraints, namespace rules,
+changed historical versions, and Codex approval boundaries remain intact.
+Per-call local character savings are recorded separately from measured SDK usage.
+
+The supplied native `image_gen.imagegen` tool stays eager in large catalogs.
+Use that built-in Codex tool rather than discovering another image provider;
+no paid or browser fallback is implied by failure. Direct image generation uses
+Codex/OpenAI limits and may bypass this relay's ledger. The optional relay image
+helper is separate, enabled-only, and not included in Copilot credit totals.
+
 ### Oversized instruction-field repair (1.3.29)
 
 Copilot can reject a single `instructions` string over 1,048,576 characters even
@@ -287,7 +352,7 @@ or product changes can require updates to the relay.
 - Copilot SDK session idling disabled and automatic context compaction enabled
 - Model-advertised long-context tier selected explicitly when the authenticated
   Copilot model exposes it
-- Astra at `xhigh` by default, with explicit Sol/Terra and other available
+- Low effort by default, with explicit Sol/Terra and other available
   model choices honored for both parent and child tasks. Per-model catalogs
   preserve each backend's actual context and reasoning limits.
 - Outer Codex developer instructions, task memory, roles, reasoning effort, and
@@ -590,6 +655,30 @@ With the persistent relay running:
 
 - Dashboard: <http://127.0.0.1:4144/dashboard>
 - Health: <http://127.0.0.1:4144/health>
+
+The **Tokens & Copilot cost over time** charts share a 24-hour (hourly),
+5-day (default, daily), or 30-day (daily) range. Pacific (America/Los_Angeles)
+is the default timezone; UTC is selectable. Pacific dates are summed from retained
+UTC hours, including 23/25-hour DST days, never relabelled UTC-day totals. Missing
+retained hours are gaps or explicit partial-day subtotals. The current hour/day is
+partial, and usage is counted when a relay response finalizes.
+Tokens are input plus output; cached input is already included. Cost is only
+SDK-reported `totalNanoAiu / 1_000_000_000` AI credits, never dollar estimates,
+premium-request multipliers, or account balance changes. Hover, tap, or focus a
+bucket for exact input/output/cache tokens and credits. Coverage is shown for
+each range: unreported credits remain gaps and partial telemetry is a subtotal.
+These durable rollups survive detailed-history clearing and relay restarts;
+they exclude other Copilot clients and all OpenAI-provider usage.
+
+**Recent call history** shows exact per-response total/input/output tokens,
+cached and non-cached input, SDK-call count, and AI credits. Tokens are summed
+across that response's SDK calls, not divided into an average. Cached input and
+reasoning tokens are subsets, not additions to the total. Missing measurements
+say `not reported`; in-progress usage is partial. The separate **Payload bytes**
+column splits request and recorded response sizes. Those are structured
+Codex-to-relay payload sizes (history, instructions, tools, encoded images and
+JSON), not new text tokens or a measurement of the upstream SDK request size.
+Select a row for the same token breakdown, exact bytes, and retained-image count.
 
 The dashboard is a local command center as well as a history viewer:
 
@@ -913,12 +1002,37 @@ task if even the bounded envelope is exhausted.
 See [the compatibility matrix and context-window setup](docs/COMPATIBILITY.md)
 for the verified feature classes, hosted-tool limits, and live regression probes.
 
-Windows enable/repair now synchronizes the advertised context window and a
-generated Codex model catalog. Codex 0.147.0 otherwise clamps unknown Astra
-metadata to 272,000 tokens even when a larger context override is configured.
-The catalog preserves that Codex version's original fallback instructions and
-records Copilot's actual limits. Its generated files and cached upstream prompt
-stay in ignored runtime storage. Original configuration values remain restorable.
+The relay uses Copilot's standard context tier, never automatically opting into
+the more expensive long-context tier. Astra and Sol have a 400,000-token total
+window: 272,000 input plus 128,000 output. Model-specific smaller limits remain
+smaller. Windows enable/repair synchronizes this profile into the Codex model
+catalog, with automatic history compaction at 240,000 tokens for these models.
+SDK background compaction starts at 80% of the prompt budget (217,600 tokens).
+Existing in-flight exchanges retain their original settings until they finish;
+busy upgrades are deferred, and existing Codex tasks must reload their catalog.
+
+The generated catalog enables Codex's client-side tool discovery with
+`supports_search_tool = true`. This capability is unrelated to hosted web search,
+which remains disabled through `web_search = "disabled"`. Disabling discovery makes
+Codex send all connected tool definitions instead of discovering a relevant subset.
+Discovered tools stay loaded across rebuilds, and namespace deferral survives
+translation. No plugins are uninstalled and no approval policy is relaxed.
+
+Legacy catalogs above 30 tools keep core execution tools eager and defer the remaining
+definitions through SDK tool search. Tools, full descriptions, schemas and Codex
+approval handling remain intact. The local context guard measures eager schemas
+and complete deferred names/descriptions, not all inactive parameter schemas.
+It never shortens a description merely to make a context estimate fit. Each
+`context.prepared` event separates registered, eager and deferred tool counts and
+labels local estimates separately from SDK-reported usage.
+Exact duplicate standalone skill catalogs are reduced before reaching the provider
+field cap; unique rules, differing snapshots and authority boundaries stay intact.
+SDK context usage and compaction start/complete events record numeric before/after
+counts and success without logging summaries. Transport history reduction is not
+the same as Codex history compaction: old screenshots can still arrive over the
+loopback connection. Compaction cannot shrink unique system/developer rules.
+The catalog preserves the stock Codex instruction template. Generated files stay
+in ignored runtime storage; original configuration values remain restorable.
 Native hosted search is removed. The optional [native image adapter](docs/NATIVE-TOOLS.md)
 enables GPT Image 2 through the installed stock Codex engine and
 its existing ChatGPT sign-in. These calls use separate OpenAI/ChatGPT allowance;
@@ -934,8 +1048,9 @@ memory and skills and still executes every local/browser/connector tool. The
 Copilot SDK receives those outer instructions and declaration-only tool schemas;
 its own memory and built-in tools are intentionally off so they cannot conflict
 with the desktop harness. The sole conditional built-in is Copilot's
-`tool_search_tool`, used only to discover outer declarations that Codex explicitly
-marked for deferred loading.
+`tool_search_tool`, used only to discover outer declarations deferred explicitly
+or by the relay's large-catalog policy. Codex's separate client-executed
+`tool_search` remains the preferred route for discovering connector tools.
 
 | Responses capability | Relay status |
 |---|---|
@@ -945,7 +1060,7 @@ marked for deferred loading.
 | Local Codex parent/child-agent messages | Supported in both directions; Codex collaboration payloads are preserved while provider-encrypted reasoning stays opaque |
 | Reasoning effort | Forwarded to Copilot; an explicit locked-default policy can pin it for all requests |
 | Readable reasoning summary | Forwarded when Copilot emits it; the provider may return reasoning usage without summary text |
-| Long context | Token-budgeted against the selected Copilot model, with salience-aware local compaction |
+| Context window | Standard tier, at most 400k total; no automatic 1M-tier opt-in |
 | Data-URL images | Supported within the selected model's advertised image limits |
 | Native hosted web search | Removed; use harness browser/connector tools |
 | Built-in GPT Image 2 | Optional native image adapter; separate OpenAI/ChatGPT helper and image usage |

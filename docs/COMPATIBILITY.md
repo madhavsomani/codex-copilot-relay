@@ -47,13 +47,15 @@ routing lock intentionally assigns its selected backend's limits to aliases.
 Configuration and catalog selection remain reversible through the protected backup
 and line-level fallback restoration. See [agent routing](AGENT-ROUTING.md).
 
-For the Astra account checked on September 9, 2026 UTC:
+Standard profile restored in 1.3.30 (September 15, 2026):
 
-- Total context: 1,000,000 tokens.
-- Advertised maximum input: 872,000 tokens; maximum output: 128,000.
-- Codex effective input display: 870,000 (integer 87% of the total).
-- Automatic Codex compaction: 780,000, allowing room before the input ceiling.
-- Relay history target and SDK background compaction: 90% of the prompt budget.
+- Total context: 400,000 tokens on Astra and Sol, with the default SDK tier.
+- Maximum input: 272,000 tokens; maximum output: 128,000.
+- Codex effective input display: 272,000 (integer 68% of the total).
+- Automatic Codex compaction: 240,000, allowing room before the input ceiling.
+- Relay history target: 90% of the prompt budget; SDK background compaction: 80%.
+- More than 30 tools: core execution stays eager; other full definitions are
+  discovered lazily. Approval and execution remain with Codex.
 - SDK exhaustion buffer: 95%; explicit truncation=disabled disables both relay
   history compaction and SDK automatic compaction.
 - Vision: one image per prompt, at most 3 MiB decoded / 4 MiB base64 on this route.
@@ -65,19 +67,34 @@ new tool screenshots outrank older uploaded references during history rebuild.
 See [hybrid setup](HYBRID-SETUP.md) for exact native multi-image routing and
 separate credentials, billing, endpoint, and desktop voice limitations.
 
-A live synthetic request measured 836,528 input tokens and recovered exact random
+Before 1.3.30, a live synthetic request measured 836,528 input tokens and recovered exact random
 checkpoints from the beginning, middle, and end without compaction. This proves
 large-context admission and retrieval, not perfect reasoning over arbitrary large
-repositories. A fresh real Codex run separately verified the 870,000-token window.
+repositories. That historical long-context result is not the current profile.
 
 ## Reproduce
+
+Version 1.3.31 restores Codex's `supports_search_tool` metadata. This enables
+client-executed tool discovery, not hosted web search. Codex then supplies the
+search tool and loads only the requested connector definitions. The relay keeps
+search results eager on reconstruction and preserves inherited namespace deferral.
+The prior catalog incorrectly set this capability to false to disable web search.
+Hosted web search remains independently disabled.
+
+Run `npm run probe:tool-loading -- --codex <absolute-stock-codex-executable>`
+for a local-only A/B regression using an 80-tool mock MCP and a loopback model
+stub. It verifies initial payload size, native search, relay call translation,
+the selected fixture's execution and its returned result. No paid inference or
+real connector operation is made. Fixture approvals live in an isolated
+CODEX_HOME; real user settings are untouched. These size measurements are not
+provider billing or production-task quality measurements.
 
 See [native tools](NATIVE-TOOLS.md) for opt-in, billing boundaries, restrictions,
 and a live probe. Native tools require a separately installed, signed-in Codex
 engine; they are not capabilities supplied by the GitHub Copilot SDK.
 
 Run npm test and powershell -File proxy-config.test.ps1 for local regressions.
-Run npm run probe:suite -- --model gpt-6-astra --long-context true for an isolated
+Run npm run probe:suite -- --model gpt-6-astra for an isolated
 SDK-backed suite. The long-context probe consumes Copilot allowance. The suite
 starts and stops only its own loopback server and leaves a JSON report in runtime.
 The separate probe:sdk-recovery and probe:session-churn commands test destructive

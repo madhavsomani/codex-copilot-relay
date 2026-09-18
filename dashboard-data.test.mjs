@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {callRoute, sdkCredits, nativeImageStatus} from './dashboard-data.mjs';
+import {callRoute, sdkCredits, nativeImageStatus, callTokenUsage} from './dashboard-data.mjs';
 
 test('native image status is independent of the disabled legacy search flag',()=>{
   assert.equal(nativeImageStatus({enabled:false,imageEnabled:true}),'Images enabled · native search removed');
@@ -30,4 +30,32 @@ test('credits use nano-AIU only, distinguishing missing data from reported zero'
   assert.equal(sdkCredits({totalNanoAiu:0}),null);
   assert.equal(sdkCredits({copilotCostUnits:100,apiEquivalentUsd:42}),null);
   assert.equal(sdkCredits({totalNanoAiu:-1}),null);
+});
+
+test('per-call tokens include cached input once and do not add reasoning or cache writes again', () => {
+  assert.deepEqual(callTokenUsage({metered:true,inputTokens:166078,outputTokens:346,
+    cacheReadTokens:162517,cacheWriteTokens:3558,reasoningTokens:140,sdkApiCalls:1}), {
+    totalTokens:166424,inputTokens:166078,outputTokens:346,cachedInputTokens:162517,
+    nonCachedInputTokens:3561,sdkApiCalls:1,
+  });
+});
+
+test('per-call token reporting distinguishes unavailable counts from measured zero', () => {
+  const missing = {totalTokens:null,inputTokens:null,outputTokens:null,cachedInputTokens:null,nonCachedInputTokens:null,sdkApiCalls:null};
+  assert.deepEqual(callTokenUsage(),missing);
+  assert.deepEqual(callTokenUsage(null),missing);
+  assert.deepEqual(callTokenUsage({metered:false,inputTokens:0,outputTokens:0,cacheReadTokens:0,sdkApiCalls:0}),missing);
+  assert.deepEqual(callTokenUsage({metered:true,inputTokens:0,outputTokens:0,cacheReadTokens:0,sdkApiCalls:1}),
+    {...missing,totalTokens:0,inputTokens:0,outputTokens:0,cachedInputTokens:0,nonCachedInputTokens:0,sdkApiCalls:1});
+  assert.deepEqual(callTokenUsage({metered:true,inputTokens:100}),{...missing,inputTokens:100});
+});
+
+test('per-call tokens preserve aggregates over multiple SDK calls and reject invalid counts', () => {
+  const aggregate = callTokenUsage({metered:true,inputTokens:3100,outputTokens:310,cacheReadTokens:2400,sdkApiCalls:3});
+  assert.equal(aggregate.totalTokens,3410);
+  assert.equal(aggregate.nonCachedInputTokens,700);
+  assert.equal(aggregate.sdkApiCalls,3);
+  const invalid = callTokenUsage({metered:true,inputTokens:-1,outputTokens:Infinity,cacheReadTokens:NaN,sdkApiCalls:-1});
+  assert.ok(Object.values(invalid).every(value=>value===null));
+  assert.equal(callTokenUsage({metered:true,inputTokens:10,cacheReadTokens:11}).nonCachedInputTokens,null);
 });

@@ -10,8 +10,8 @@ const root=path.dirname(fileURLToPath(import.meta.url));
 const base=args.get('--url')??'http://127.0.0.1:4144/v1';
 const home=path.resolve(args.get('--home')??path.join(root,'runtime','codex-context-probe-'+Date.now()));
 await mkdir(home,{recursive:true});
-const context=Number(args.get('--context')??1000000);
-const compact=Number(args.get('--compact')??780000);
+const context=Number(args.get('--context')??400000);
+const compact=Number(args.get('--compact')??240000);
 await writeFile(path.join(home,'config.toml'),[
   'model = "gpt-6-astra"','model_provider = "context_probe"','model_reasoning_effort = "xhigh"',
   'model_context_window = '+context,'model_auto_compact_token_limit = '+compact,
@@ -35,5 +35,5 @@ async function scan(dir){for(const entry of await readdir(dir,{withFileTypes:tru
 }}
 await scan(path.join(home,'sessions'));
 assert.ok(windows.length,'Codex must report its effective context window');
-assert.ok(windows.every(value=>value>=870000),'Codex must stop using the 258400-token fallback');
+assert.ok(windows.every(value=>value>=compact&&value<=context),'Codex must report the configured standard context profile');
 console.log(JSON.stringify({ok:true,configuredContextWindow:context,configuredAutoCompactLimit:compact,codexReportedContextWindow:windows.at(-1),markerObserved:true}));

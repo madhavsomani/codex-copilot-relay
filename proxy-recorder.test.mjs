@@ -5,6 +5,23 @@ import path from "node:path";
 import test from "node:test";
 import { ProxyRecorder } from "./proxy-recorder.mjs";
 
+test('applied reasoning and savings survive truncation, lightweight retention and restart', () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'relay-effort-record-'));
+  try {
+    const filePath=path.join(directory,'events.jsonl');
+    const recorder=new ProxyRecorder({filePath,limit:3,detailedLimit:1,payloadLimit:1024});
+    const record=recorder.start({body:{reasoning:{effort:'low'},input:'private'.repeat(3000)},inputBytes:18000});
+    recorder.replay(record,{phase:'continuation',reasoningEffort:'high',prompt:'private'.repeat(3000),contextStats:{deduplicatedSearchTools:2,deduplicatedSearchChars:15000,secret:'do not keep'}});
+    recorder.finish(record,{status:'completed'});
+    recorder.finish(recorder.start({body:{input:'next'}}),{status:'completed'});
+    recorder.compact();
+    const restored=new ProxyRecorder({filePath,limit:3,detailedLimit:1}).snapshot({includeDetails:false}).records.find(item=>item.id===record.id);
+    assert.equal(restored.requestedReasoningEffort,'low');assert.equal(restored.selectedReasoningEffort,'high');
+    assert.equal(restored.reasoningSource,'continuation');
+    assert.deepEqual(restored.contextStats,{deduplicatedSearchTools:2,deduplicatedSearchChars:15000});
+  } finally {assert.equal(path.dirname(directory),os.tmpdir());fs.rmSync(directory,{recursive:true,force:true});}
+});
+
 test('numeric ingress evidence survives lightweight retention without private fields', () => {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'relay-ingress-record-'));
   try {

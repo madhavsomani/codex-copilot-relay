@@ -788,7 +788,7 @@ test("adds phase-aware assistant and reasoning output items", () => {
   }]);
 });
 
-test("derives long-context and image limits from Copilot model capabilities", () => {
+test("derives standard-context and image limits from Copilot model capabilities", () => {
   const compatibility = resolveModelCompatibility({
     capabilities: {
       limits: {
@@ -810,8 +810,9 @@ test("derives long-context and image limits from Copilot model capabilities", ()
     },
   });
 
-  assert.equal(compatibility.contextTier, "long_context");
-  assert.equal(compatibility.maxPromptTokens, 922_000);
+  assert.equal(compatibility.contextTier, "default");
+  assert.equal(compatibility.maxPromptTokens, 272_000);
+  assert.equal(compatibility.maxContextWindowTokens, 400_000);
   assert.equal(compatibility.maxImageAttachments, 1);
   assert.equal(compatibility.maxAttachmentBase64Chars, 4_194_304);
   assert.deepEqual(compatibility.supportedMediaTypes, ["image/png"]);

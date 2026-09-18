@@ -5,7 +5,8 @@ import path from "node:path";
 import {fileURLToPath} from 'node:url';
 import { CopilotClient } from "@github/copilot-sdk";
 import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
-import { requestOwner, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
+import { requestOwner, requestTaskId, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
+import {sessionSignature, prepareDiscoveryContinuation, checkpointPolicy, toolOutputPolicy} from './efficiency-policy.mjs';
 import { DASHBOARD_HTML } from "./dashboard.mjs";
 import { SETUP_HTML } from './setup-ui.mjs';
 import { createSetupStatus, sameOriginLocal } from './setup-status.mjs';
@@ -37,6 +38,7 @@ import {OpenAIFallback, responseFallbackReason} from './openai-fallback.mjs';
 import {ProviderTelemetry} from './provider-telemetry.mjs';
 import {visionCollectionBudget, prepareVisionAttachments, imageEvidence} from './vision-attachments.mjs';
 import { countModelTokens, tokenizerCompatibility } from "./context-tokenizer.mjs";
+import {prepareContextTools, serializeContextTools, contextEventFields, SDK_BACKGROUND_COMPACTION_RATIO, TOOL_DEFER_THRESHOLD} from './context-policy.mjs';
 import {
   createModelRoutingPolicy,
   MODEL_ROUTING_LOCKED_DEFAULT,
@@ -77,6 +79,7 @@ const relayVersion = (() => {
   }
 })();
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
+const efficiencyPolicy = checkpointPolicy(process.env);
 const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-6-astra";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
 const modelRoutingPolicy = createModelRoutingPolicy({
@@ -259,6 +262,7 @@ function telemetryStorage() {
 function dashboardSnapshot() {
   const snapshot = recorder.snapshot({ includeDetails: false });
   snapshot.sampledAt = new Date().toISOString();
+  snapshot.efficiencyPolicy = efficiencyPolicy;
   snapshot.relayVersion = relayVersion;
   snapshot.defaultModel = defaultModel;
   snapshot.routing = { ...modelRoutingPolicy, lockedModel: modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT ? defaultModel : null };
@@ -670,6 +674,11 @@ class Exchange {
 
   async handleEvent(event) {
     if (this.done) return;
+    const contextFields = contextEventFields(event);
+    if (contextFields) {
+      log('sdk.' + event.type, {responseId: this.sink?.responseId, model: this.model, ...contextFields});
+      return;
+    }
     // Background SDK events must not shorten or perpetually extend an outer
     // tool's bounded continuation lease.
     if (this.sink && !this.sink.closed) this.armModelDeadline();
@@ -1023,7 +1032,13 @@ class Exchange {
     for (const output of outputs) {
       const call = this.pendingCalls.get(output.call_id);
       if (!call) continue;
-      const normalized = normalizeToolOutput(output, visionCollectionBudget(this.modelCompatibility));
+      const result = output.type === 'tool_search_output' ? {...output, output:JSON.stringify({
+        ...output, tools:undefined,
+        registeredTools:extractToolDeclarations({tools:output.tools}).metadata.map(tool => ({name:tool.name,namespace:tool.namespace})),
+        note:'These declarations are already registered. Invoke the tool directly; do not repeat discovery.',
+      })} : output;
+      const normalized = normalizeToolOutput(result, {...visionCollectionBudget(this.modelCompatibility), ...toolOutputPolicy(call.item)});
+      if (this.record.costCheckpoint && output === outputs[0]) normalized.text += '\n' + this.record.costCheckpoint;
       if (normalized.binaryResultsForLlm?.length) {
         const vision = await prepareVisionAttachments(normalized.binaryResultsForLlm, this.modelCompatibility);
         normalized.text += vision.note ? '\n' + vision.note : '';
@@ -1238,7 +1253,7 @@ function selectSessionTools(declarations, toolChoice) {
       "tool_choice is required, but the request does not declare an outer tool.",
     );
   }
-  return declarations.sdkTools;
+  return prepareContextTools(declarations);
 }
 
 function resolveRelayRequest(body) {
@@ -1277,7 +1292,7 @@ function resolveRelayRequest(body) {
 async function startExchange(body, sink, requestCompatibility, owner = null) {
   const declarations = requestCompatibility.declarations;
   const sessionTools = requestCompatibility.sessionTools;
-  const serializedToolDefinitions = JSON.stringify(sessionTools);
+  const serializedToolDefinitions = serializeContextTools(sessionTools);
   const toolDefinitionChars = serializedToolDefinitions.length;
   const reasoningEffort = requestCompatibility.reasoningEffort;
   const model = requestCompatibility.model;
@@ -1288,6 +1303,8 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     countTokens: countModelTokens,
     serializedToolDefinitions,
     toolDefinitionChars,
+    registeredToolNames: sessionTools.filter(tool => tool.defer !== 'auto').map(tool => tool.name),
+    deferredToolCount: sessionTools.filter(tool => tool.defer === 'auto').length,
     useHistoryCompaction: requestCompatibility.useHistoryCompaction,
     reasoningContext: requestCompatibility.reasoningContext,
     systemInstructions: requestCompatibility.systemInstructions,
@@ -1301,6 +1318,7 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     sessionInput.contextStats.attachmentBase64Chars = vision.attachments.reduce((sum,image)=>sum+image.data.length,0);
     log('vision.initial_handoff',{sourceImages:vision.evidence,sentImages:imageEvidence(vision.attachments)});
   }
+  if (sink.record.costCheckpoint) sessionInput.prompt += '\n' + sink.record.costCheckpoint;
   if (requestCompatibility.toolChoice === "none") sessionInput.requiresAction = false;
   if (requestCompatibility.toolChoice === "required"
     || requestCompatibility.toolChoice?.mode === "specific") {
@@ -1359,7 +1377,7 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     largeOutput: { enabled: false },
     infiniteSessions: {
       enabled: requestCompatibility.useHistoryCompaction,
-      backgroundCompactionThreshold: bridgeContextDefaults.aggregateTargetRatio,
+      backgroundCompactionThreshold: SDK_BACKGROUND_COMPACTION_RATIO,
       bufferExhaustionThreshold: 0.95,
     },
     tools: sessionTools,
@@ -1391,6 +1409,7 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     },
   );
   exchanges.add(exchange);
+  exchange.signature = sessionSignature(body, requestCompatibility);
   if (!sdkRuntime.isCurrent(generation)) {
     exchange.backendLost(new Error("Copilot worker changed before the prompt was sent. Please retry."));
     throw new Error("Copilot worker changed before the prompt was sent. Please retry.");
@@ -1398,6 +1417,7 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
   if (!exchange.attachSink(sink)) return;
   recorder.replay(sink.record, {
     phase: "initial",
+    sessionReason: sink.record.sessionReason,
     model,
     reasoningEffort,
     reasoningSummary: requestCompatibility.reasoningSummary,
@@ -1420,6 +1440,17 @@ async function startExchange(body, sink, requestCompatibility, owner = null) {
     compatibility: modelCompatibility,
     toolCount: sessionTools.length,
     deferredToolCount: sessionTools.filter((tool) => tool.defer === "auto").length,
+  });
+  log('context.prepared', {
+    responseId: sink.responseId,
+    model,
+    contextTier: modelCompatibility.contextTier,
+    registeredToolCount: sessionTools.length,
+    eagerToolCount: sessionTools.filter(tool => tool.defer !== 'auto').length,
+    deferredToolCount: sessionTools.filter(tool => tool.defer === 'auto').length,
+    registeredToolDefinitionChars: JSON.stringify(sessionTools).length,
+    measurementBasis: 'local estimate; eager schemas plus complete deferred names/descriptions',
+    ...sessionInput.contextStats,
   });
   if (sessionInput.contextStats.historyCompacted
     || sessionInput.contextStats.deduplicatedSkillCatalogs > 0
@@ -1473,6 +1504,7 @@ async function continueExchange(body, sink, toolOutputs) {
   sink.record.continuedFrom = body.previous_response_id ?? null;
   recorder.replay(sink.record, {
     phase: "continuation",
+    sessionReason: sink.record.sessionReason,
     model: exchange.model,
     reasoningEffort: exchange.reasoningEffort,
     previousResponseId: body.previous_response_id ?? null,
@@ -1545,6 +1577,8 @@ const server = http.createServer(async (request, response) => {
         readableReasoningSummaries: "forwarded when emitted by Copilot",
         streamedToolArguments: true,
         deferredOuterTools: "supported through Copilot tool search",
+        clientToolSearch: true,
+        largeCatalogDeferralThreshold: TOOL_DEFER_THRESHOLD,
         unsupportedRequestSemantics: "rejected before streaming with HTTP 400",
         copilotNativeMemory: false,
         copilotBuiltInTools: "disabled except tool_search_tool for deferred outer declarations",
@@ -1566,7 +1600,7 @@ const server = http.createServer(async (request, response) => {
         responsesStreamingLifecycle: "full",
         sdkSystemMessageMode: "replace",
         sdkAutomaticContextCompaction: true,
-        sdkBackgroundCompactionThreshold: bridgeContextDefaults.aggregateTargetRatio,
+        sdkBackgroundCompactionThreshold: SDK_BACKGROUND_COMPACTION_RATIO,
         sdkBufferExhaustionThreshold: 0.95,
         truncationDisabled: "disables relay history compaction and SDK automatic compaction",
         contextGuard: {
@@ -1784,6 +1818,7 @@ const server = http.createServer(async (request, response) => {
     streaming: body?.stream !== false,
     relayVersion,
     routingMode: modelRoutingPolicy.mode,
+    taskId: requestTaskId(body, request.headers),
   });
   // Header-labelled observation, not authentication or a persistent app connection.
   if (/codex/i.test(String(request.headers.originator ?? '') + ' ' + String(request.headers['user-agent'] ?? ''))) lastCodexRequestAt=new Date().toISOString();
@@ -1791,25 +1826,19 @@ const server = http.createServer(async (request, response) => {
   try {
     await ownership.run(owner, async () => {
       if (response.destroyed) return;
-      const latestToolOutput = (Array.isArray(body.input) ? body.input : []).findLast(item =>
-        ["tool_search_output", "function_call_output", "custom_tool_call_output"].includes(item?.type));
-      const hasSearchOutput = latestToolOutput?.type === "tool_search_output";
-      if (hasSearchOutput) {
-        const prior = exchangesByCallId.get(latestToolOutput.call_id);
-        if (ownsExchange(prior, owner)) {
-          if (prior.sink && !prior.sink.closed) throw Object.assign(new Error("Tool search response is still streaming."), { statusCode: 409 });
-          prior.done = true;
-          await prior.disconnect();
-        }
-      }
-      const toolOutputs = (hasSearchOutput ? [] : extractToolOutputs(body))
+      let toolOutputs = extractToolOutputs(body)
         .filter((item) => ownsExchange(exchangesByCallId.get(item.call_id), owner));
+      const candidates = [...new Set(toolOutputs.map(item => exchangesByCallId.get(item.call_id)))];
+      const plan = await prepareDiscoveryContinuation(toolOutputs, candidates, owner, body, requestCompatibility);
+      toolOutputs = plan.outputs;
+      record.sessionReason = plan.reason;
       // Reject overlap before sending HTTP 200/SSE; preserve the original stream.
       if (!toolOutputs.length) await ownership.retireSuperseded(owner);
       if (response.destroyed) return;
       const continuation = toolOutputs.length ? exchangesByCallId.get(toolOutputs[0].call_id) : null;
       sink = new ResponseSink(response, body, record, continuation?.model ?? requestCompatibility.model,
         continuation?.reasoningEffort ?? requestCompatibility.reasoningEffort);
+      record.costCheckpoint = recorder.costCheckpoint(record.taskId, efficiencyPolicy);
       if (toolOutputs.length) {
         await continueExchange(body, sink, toolOutputs);
       } else {

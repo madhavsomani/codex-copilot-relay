@@ -32,7 +32,7 @@ export function buildBoundedInstructions(bridgeInstructions, instructions, roles
     `\n--- Outer developer instruction ${index + 1} ---\n${text}`)].join('\n');
   const original = format(instructions);
   let systemContent = original, deduplicatedSkillCatalogs = 0;
-  if (original.length > MAX_INSTRUCTIONS_CHARS) {
+  if (instructions.length > 1) {
     const latest = new Map();
     const key = (text, index) => `${roles[index] ?? 'developer'}\0${text}`;
     instructions.forEach((text, index) => {

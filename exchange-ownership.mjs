@@ -9,7 +9,7 @@ const metadataObject = value => {
 
 // Codex supplies thread-id/client_metadata.thread_id independently for each
 // child agent. Never identify a task using a shared prompt-cache or workspace.
-export function requestOwner(body, headers = {}) {
+export function requestTaskId(body, headers = {}) {
   const metadata = body?.client_metadata ?? {};
   const fromBody = uuid(metadata.thread_id), fromHeader = uuid(headers["thread-id"]);
   if (fromBody && fromHeader && fromBody !== fromHeader) {
@@ -18,8 +18,18 @@ export function requestOwner(body, headers = {}) {
     });
   }
   const turn = metadataObject(metadata["x-codex-turn-metadata"] ?? headers["x-codex-turn-metadata"]);
+  if (uuid(turn?.thread_id) && (fromHeader ?? fromBody) && uuid(turn.thread_id) !== (fromHeader ?? fromBody)) {
+    throw Object.assign(new Error('Conflicting Codex thread identity in turn metadata.'), {statusCode:400,code:'invalid_request_error'});
+  }
   const thread = fromHeader ?? fromBody ?? uuid(turn?.thread_id);
+  return thread;
+}
+
+export function requestOwner(body, headers = {}) {
+  const thread = requestTaskId(body, headers);
   if (!thread) return null;
+  const metadata = body?.client_metadata ?? {};
+  const turn = metadataObject(metadata["x-codex-turn-metadata"] ?? headers["x-codex-turn-metadata"]);
   const kind = typeof turn?.request_kind === "string" ? turn.request_kind.slice(0, 80) : "turn";
   return createHash("sha256").update(`${thread}:${kind}`).digest("hex");
 }

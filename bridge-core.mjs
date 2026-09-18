@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import {efficiencyInstructions} from './efficiency-policy.mjs';
 import {buildBoundedInstructions,assertInstructionsWithinLimit} from './instruction-budget.mjs';
+import {STANDARD_CONTEXT_WINDOW_TOKENS, serializeContextTools, isNativeImageTool} from './context-policy.mjs';
 
 const MAX_TOOL_NAME_LENGTH = 64;
 const MAX_HISTORY_TOOL_OUTPUT_CHARS = 64 * 1024;
@@ -107,7 +109,7 @@ function portableToolSchema(value) {
   return result;
 }
 
-function visitTool(tool, namespace, declarations) {
+function visitTool(tool, namespace, declarations, {deferred = false, discovered = false} = {}) {
   if (!tool || typeof tool !== "object") return;
 
   if (tool.type === "namespace") {
@@ -115,7 +117,7 @@ function visitTool(tool, namespace, declarations) {
       ? tool.name
       : namespace;
     for (const child of Array.isArray(tool.tools) ? tool.tools : []) {
-      visitTool(child, nextNamespace, declarations);
+      visitTool(child, nextNamespace, declarations, {deferred: deferred || tool.defer_loading === true, discovered});
     }
     return;
   }
@@ -131,6 +133,7 @@ function visitTool(tool, namespace, declarations) {
     namespace: namespace ?? null,
     name: tool.name,
     format: tool.format ?? null,
+    discovered,
   };
   metadata.internalName = makeInternalToolName(
     metadata.namespace,
@@ -139,6 +142,7 @@ function visitTool(tool, namespace, declarations) {
   );
 
   declarations.push({
+    originalTool: tool,
     metadata,
     sdkTool: {
       name: metadata.internalName,
@@ -150,7 +154,7 @@ function visitTool(tool, namespace, declarations) {
       // These declarations never execute inside Copilot. Codex remains the
       // approval and execution boundary, so a duplicate Copilot prompt is not useful.
       skipPermission: true,
-      defer: tool.defer_loading === true ? "auto" : "never",
+      defer: !discovered && (deferred || tool.defer_loading === true) ? "auto" : "never",
       metadata: portableToolMetadata(tool),
     },
   });
@@ -166,7 +170,7 @@ export function extractToolDeclarations(body) {
   for (const item of Array.isArray(body?.input) ? body.input : []) {
     if (!["additional_tools", "tool_search_output"].includes(item?.type)) continue;
     for (const tool of Array.isArray(item.tools) ? item.tools : []) {
-      visitTool(tool, null, declarations);
+      visitTool(tool, null, declarations, {discovered: true});
     }
   }
 
@@ -183,6 +187,7 @@ export function extractToolDeclarations(body) {
   const values = [...unique.values()];
   return {
     sdkTools: values.map((value) => value.sdkTool),
+    originalTools: new Map(values.map(value => [value.metadata.internalName, value.originalTool])),
     byInternalName: new Map(values.map((value) => [
       value.metadata.internalName,
       value.metadata,
@@ -299,6 +304,22 @@ function compactHistoryToolOutput(text, contextStats) {
   contextStats.truncatedToolOutputs += 1;
   contextStats.omittedToolOutputChars += omitted;
   return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`;
+}
+
+function referenceRegisteredTools(tools, declarations, registeredNames, contextStats, namespace = null) {
+  return tools.map(tool => {
+    if (tool?.type === 'namespace') return {...tool, tools:referenceRegisteredTools(tool.tools ?? [], declarations, registeredNames, contextStats, tool.name || namespace)};
+    if (!tool || !['function','custom'].includes(tool.type)) return tool;
+    const internalName = makeInternalToolName(namespace, tool.name, tool.type);
+    if (!registeredNames.has(internalName) || JSON.stringify(declarations.originalTools.get(internalName)) !== JSON.stringify(tool)) return tool;
+    const reference = {...tool, registered_tool:internalName, definition:'Already loaded: use the full registered declaration, including its constraints and parameter schema. Do not repeat tool search.'};
+    for (const field of ['description','parameters','format','output_schema']) delete reference[field];
+    const saved = JSON.stringify(tool).length - JSON.stringify(reference).length;
+    if (saved <= 0) return tool;
+    contextStats.deduplicatedSearchTools++;
+    contextStats.deduplicatedSearchChars += saved;
+    return reference;
+  });
 }
 
 function historyEntry(item, attachments, contextStats, sourceIndex = -1) {
@@ -798,7 +819,11 @@ export function buildSessionInput(
     compactionLedgerChars: 0,
     promptChars: 0,
     systemChars: 0,
+    deduplicatedSearchTools: 0,
+    deduplicatedSearchChars: 0,
   };
+  const declarations = extractToolDeclarations(body);
+  const registeredNames = new Set(contextBudget.registeredToolNames ?? []);
   const developerInstructions = [];
   const instructionRoles = [];
   const transcript = [];
@@ -826,7 +851,9 @@ export function buildSessionInput(
     if (item?.type === "reasoning" && contextBudget.reasoningContext === "current_turn") {
       continue;
     }
-    const entry = historyEntry(item, attachments, contextStats, sourceIndex);
+    const historyItem = item?.type === 'tool_search_output' && Array.isArray(item.tools) && registeredNames.size
+      ? {...item, tools:referenceRegisteredTools(item.tools, declarations, registeredNames, contextStats)} : item;
+    const entry = historyEntry(historyItem, attachments, contextStats, sourceIndex);
     if (!entry) continue;
     if (["developer", "system"].includes(entry.role)) {
       developerInstructions.push(entry.content);
@@ -856,7 +883,7 @@ export function buildSessionInput(
   const latestUserEcho = latestUserText.length <= MAX_LATEST_USER_ECHO_CHARS
     ? latestUserText
     : `${latestUserText.slice(0, MAX_LATEST_USER_ECHO_CHARS)}\n...[latest user request clipped by bridge]`;
-  const toolCount = extractToolDeclarations(body).sdkTools.length;
+  const toolCount = declarations.sdkTools.length;
   const requiresAction = toolCount > 0 && ACTION_REQUEST.test(latestUserText);
 
   const bridgeInstructions = [
@@ -864,6 +891,10 @@ export function buildSessionInput(
     "The outer Codex harness owns all tool execution, permission checks, filesystem access, and user approvals.",
     "Only request tools through the custom declarations supplied to this session. Never claim a tool ran before its result is returned.",
     "Tools listed in tool_search_output history are already loaded in this session. Call the discovered tool next; do not repeat a completed search unless another capability is needed.",
+    ...efficiencyInstructions,
+    ...(declarations.metadata.some(metadata => isNativeImageTool(metadata) && (contextBudget.registeredToolNames == null || registeredNames.has(metadata.internalName)))
+      ? ["Native image_gen.imagegen is available through Codex. Prefer it for image generation and editing; do not discover or launch another image service unless the user explicitly requests that provider or fallback. It uses separate Codex/OpenAI usage, not Copilot credits. Preserve reference images and all approval requirements. A quota failure does not authorize an API, CLI, browser, or paid-provider fallback."] : []),
+    ...(contextBudget.deferredToolCount > 0 ? ["Use tool_search_tool to discover deferred outer tools when needed. Discovery does not execute them; all actions still return to Codex for execution and approval."] : []),
     "Tool names beginning with codex__ are bridge aliases. Their descriptions identify the exact outer namespace and tool name.",
     "For an outer free-form/custom tool, pass an object with one string field named input; put the complete raw tool input in that string.",
     "Follow the outer developer instructions below, subject to GitHub Copilot service policies and the SDK safety rules that remain enabled.",
@@ -946,7 +977,7 @@ export function assertSerializedContextWithinLimit(
   // Keep this independent of token budgeting, including any image-reference
   // annotations added after the initial system message was built.
   assertInstructionsWithinLimit(sessionInput?.systemContent);
-  const serializedToolDefinitions = JSON.stringify(Array.isArray(sdkTools) ? sdkTools : []);
+  const serializedToolDefinitions = serializeContextTools(Array.isArray(sdkTools) ? sdkTools : []);
   const measurement = serializedContextMeasurement({
     systemContent: sessionInput?.systemContent,
     prompt: sessionInput?.prompt,
@@ -1176,17 +1207,19 @@ export function resolveModelCompatibility(model) {
   const vision = limits.vision ?? {};
   const tokenPrices = model?.billing?.tokenPrices ?? {};
   const longContext = tokenPrices.longContext;
-  const basePromptTokens = Number(tokenPrices.maxPromptTokens);
-  const longPromptTokens = Number(longContext?.maxPromptTokens);
-  const hasLongContext = Number.isFinite(longPromptTokens)
-    && longPromptTokens > 0
-    && (!Number.isFinite(basePromptTokens) || longPromptTokens > basePromptTokens);
-  const capabilityPromptTokens = Number(limits.max_prompt_tokens);
-  const maxPromptTokens = hasLongContext
-    ? longPromptTokens
-    : (Number.isFinite(capabilityPromptTokens)
-        ? capabilityPromptTokens
-        : (Number.isFinite(basePromptTokens) ? basePromptTokens : null));
+  const basePromptTokens = normalizedPositiveNumber(tokenPrices.maxPromptTokens ?? tokenPrices.contextMax);
+  const capabilityPromptTokens = normalizedPositiveNumber(limits.max_prompt_tokens);
+  const capabilityWindowTokens = normalizedPositiveNumber(limits.max_context_window_tokens);
+  const maxOutputTokens = normalizedPositiveNumber(limits.max_output_tokens)
+    ?? (capabilityWindowTokens && capabilityPromptTokens
+      ? normalizedPositiveNumber(capabilityWindowTokens - capabilityPromptTokens) : null);
+  const promptLimits = [basePromptTokens, capabilityPromptTokens].filter(value => value != null);
+  const maxPromptTokens = promptLimits.length ? Math.min(...promptLimits,
+    STANDARD_CONTEXT_WINDOW_TOKENS - (maxOutputTokens ?? 0)) : null;
+  const standardWindowTokens = longContext && maxPromptTokens && maxOutputTokens
+    ? maxPromptTokens + maxOutputTokens : capabilityWindowTokens;
+  const maxContextWindowTokens = standardWindowTokens
+    ? Math.min(STANDARD_CONTEXT_WINDOW_TOKENS, standardWindowTokens, capabilityWindowTokens ?? Infinity) : null;
   const supportsVision = model?.capabilities?.supports?.vision !== false;
   const advertisedImageCount = Number(vision.max_prompt_images);
   const maxImageAttachments = supportsVision
@@ -1205,14 +1238,10 @@ export function resolveModelCompatibility(model) {
   );
 
   return {
-    contextTier: hasLongContext ? "long_context" : "default",
+    contextTier: "default",
     maxPromptTokens,
-    maxOutputTokens: Number.isFinite(Number(limits.max_output_tokens))
-      ? Number(limits.max_output_tokens)
-      : null,
-    maxContextWindowTokens: Number.isFinite(Number(limits.max_context_window_tokens))
-      ? Number(limits.max_context_window_tokens)
-      : null,
+    maxOutputTokens,
+    maxContextWindowTokens,
     maxImageAttachments,
     maxAttachmentBase64Chars,
     maxSingleAttachmentBase64Chars,
@@ -1229,7 +1258,7 @@ function collectToolOutputs(value, results) {
   }
   if (!value || typeof value !== "object") return;
 
-  if (["function_call_output", "custom_tool_call_output"].includes(value.type)
+  if (["function_call_output", "custom_tool_call_output", "tool_search_output"].includes(value.type)
     && typeof value.call_id === "string") {
     results.push(value);
     return;
@@ -1278,10 +1307,13 @@ export function normalizeToolOutput(item, compatibility = {}) {
   const contextStats = {};
   let text = contentOutputToText(item?.output, attachments, contextStats, { role: "tool" });
   const bytes = Buffer.from(text, "utf8");
-  if (bytes.length > 65536) {
-    text = bytes.subarray(0, 32000).toString("utf8")
-      + "\n[Relay omitted the middle of an oversized tool result; request a narrower range from the outer tool.]\n"
-      + bytes.subarray(-32000).toString("utf8");
+  const maxTextBytes = compatibility.maxTextBytes ?? 65536;
+  if (bytes.length > maxTextBytes) {
+    const marker = "\n[Relay omitted the middle of an oversized tool result; request a narrower range from the outer tool.]\n";
+    const half = Math.max(0, Math.floor((maxTextBytes - Buffer.byteLength(marker)) / 2));
+    let tailStart = bytes.length - half;
+    while (tailStart < bytes.length && (bytes[tailStart] & 0xc0) === 0x80) tailStart += 1;
+    text = new TextDecoder().decode(bytes.subarray(0, half), {stream:true}) + marker + bytes.subarray(tailStart).toString("utf8");
   }
   if (attachments.length) {
     ({ prompt: text } = finalizeImageAttachments({

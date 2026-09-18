@@ -2,8 +2,7 @@ import {normalizeReasoningEffort, RequestCompatibilityError} from './bridge-core
 const order=['none','low','medium','high','xhigh','max'];
 export function defaultEffort(model) {
   const supported=model?.supportedReasoningEfforts ?? [];
-  const preferred=model?.id === 'gpt-6-astra' ? 'xhigh' : model?.defaultReasoningEffort;
-  return supported.includes(preferred) ? preferred : (order.filter(x=>supported.includes(x)).at(-1) ?? 'high');
+  return ['low','none','medium','high','xhigh','max'].find(level=>supported.includes(level)) ?? 'low';
 }
 export function routeEffort(requested, model) {
   const supported=model?.supportedReasoningEfforts ?? [];

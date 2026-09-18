@@ -247,11 +247,11 @@ try {
     $catalogPath = New-CodexCopilotModelCatalog -Health $astraHealth -Model 'gpt-6-astra' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
     $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
     $entry = $catalog.models[0]
-    if ($entry.max_context_window -ne 1000000 -or $entry.effective_context_window_percent -ne 87 -or $entry.model_messages.instructions_template -ne 'CODEX_ORIGINAL_INSTRUCTIONS') { throw 'The generated catalog did not preserve instructions and real model limits.' }
+    if ($entry.max_context_window -ne 400000 -or $entry.effective_context_window_percent -ne 68 -or $entry.auto_compact_token_limit -ne 240000 -or $entry.model_messages.instructions_template -ne 'CODEX_ORIGINAL_INSTRUCTIONS') { throw 'The generated catalog did not preserve instructions and standard-tier limits.' }
     $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $astraHealth -ModelCatalogPath $catalogPath
     $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -RestoreState $contextState
     $contextText = [IO.File]::ReadAllText($contextPath)
-    if ($contextText -notmatch '(?m)^model_context_window = 1000000' -or $contextText -notmatch '(?m)^model_auto_compact_token_limit = 780000' -or $contextText -notmatch '(?m)^model_catalog_json = ' -or $contextText -notmatch '(?m)^web_search = "disabled"') { throw 'Live context/catalog/search settings were not installed or did not survive repair.' }
+    if ($contextText -notmatch '(?m)^model_context_window = 400000' -or $contextText -notmatch '(?m)^model_auto_compact_token_limit = 240000' -or $contextText -notmatch '(?m)^model_catalog_json = ' -or $contextText -notmatch '(?m)^web_search = "disabled"') { throw 'Standard context/catalog/search settings were not installed or did not survive repair.' }
     $contextState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-5.6-sol' -RestoreState $contextState
     $contextText = [IO.File]::ReadAllText($contextPath)
     if ($contextText -notmatch '(?m)^model_context_window = 272000' -or $contextText -notmatch '(?m)^model_auto_compact_token_limit = 250000') { throw 'A model transition leaked Astra context settings.' }
@@ -273,7 +273,7 @@ try {
     $multiCatalog=Get-Content -LiteralPath $multiCatalogPath -Raw | ConvertFrom-Json
     $solEntry=$multiCatalog.models | Where-Object slug -eq 'gpt-5.6-sol'
     $terraEntry=$multiCatalog.models | Where-Object slug -eq 'gpt-5.6-terra'
-    if ($solEntry.max_context_window -ne 1050000 -or $solEntry.default_reasoning_level -ne 'max' -or $terraEntry.max_context_window -ne 272000) { throw 'Per-model metadata was replaced with Astra limits.' }
+    if ($solEntry.max_context_window -ne 400000 -or $solEntry.auto_compact_token_limit -ne 240000 -or $solEntry.default_reasoning_level -ne 'low' -or $terraEntry.max_context_window -ne 272000 -or $terraEntry.default_reasoning_level -ne 'low') { throw 'Per-model metadata did not respect standard-tier limits and inexpensive defaults.' }
     if (-not $solEntry.supports_parallel_tool_calls -or $solEntry.truncation_policy.limit -ne 65536) { throw 'Parallel tools or 64 KiB result budget missing.' }
     [IO.File]::WriteAllLines($contextPath,@('model = "gpt-5.6-sol"','model_context_window = 272000','model_auto_compact_token_limit = 250000'))
     $multiState=Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $multiHealth -ModelCatalogPath $multiCatalogPath
@@ -287,7 +287,7 @@ try {
     [IO.File]::WriteAllLines($contextPath,@('model = "gpt-6-astra"','web_search = "cached"'))
     $nativeCatalogPath=New-CodexCopilotModelCatalog -Health $nativeHealth -Model 'gpt-6-astra' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
     $nativeCatalog=Get-Content -LiteralPath $nativeCatalogPath -Raw | ConvertFrom-Json
-    if ($nativeCatalog.models[0].supports_search_tool) { throw 'Legacy native opt-in advertised removed search.' }
+    if (-not $nativeCatalog.models[0].supports_search_tool) { throw 'The catalog disabled Codex tool discovery; this is not the hosted web-search flag.' }
     $nativeState=Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6-astra' -ModelHealth $nativeHealth
     if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^web_search = "disabled"') { throw 'Legacy native opt-in re-enabled removed search.' }
     Restore-CodexCopilotConfig -ConfigPath $contextPath -State $nativeState | Out-Null

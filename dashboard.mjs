@@ -1,5 +1,8 @@
-import { callRoute, sdkCredits, nativeImageStatus } from "./dashboard-data.mjs";
+import { callRoute, sdkCredits, nativeImageStatus, callTokenUsage } from "./dashboard-data.mjs";
+import {callReasoning} from './call-reasoning.mjs';
 import {CONNECTION_HTML,CONNECTION_STYLE,CONNECTION_SCRIPT} from './setup-ui.mjs';
+import {TRENDS_HTML,TRENDS_STYLE,TRENDS_SCRIPT} from './dashboard-trends.mjs';
+import {TASKS_HTML,TASKS_STYLE,TASKS_SCRIPT} from './dashboard-tasks.mjs';
 
 export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -9,6 +12,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23172b4c'/%3E%3Cpath d='M7 17V7h5.2c2.4 0 3.8 1.25 3.8 3.2 0 1.45-.8 2.5-2.15 2.95L17 17h-3l-2.6-3.35H9.6V17H7Zm2.6-5.55h2.25c1 0 1.55-.42 1.55-1.18 0-.78-.55-1.17-1.55-1.17H9.6v2.35Z' fill='%2354e0d1'/%3E%3C/svg%3E">
   <title>Codex Copilot Relay</title>
   <style>
+    ${TRENDS_STYLE}
+    ${TASKS_STYLE}
     :root { color-scheme: dark; --bg: #060a13; --panel: #111a2d; --panel2: #17243d; --line: #263958; --text: #eef5ff; --muted: #91a5c4; --accent: #69b7ff; --cyan: #54e0d1; --violet: #a98cff; --good: #6ddd9a; --bad: #ff8398; --warn: #ffd27a; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 82% -12%, rgba(38,91,164,.54) 0, transparent 34rem), radial-gradient(circle at -8% 30%, rgba(67,46,140,.32) 0, transparent 29rem), linear-gradient(180deg, #080d19 0, var(--bg) 55%); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
@@ -70,7 +75,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .bar-track { height: 8px; background: #0b1325; border-radius: 99px; overflow: hidden; }
     .bar-fill { height: 100%; min-width: 2px; background: linear-gradient(90deg, var(--accent), var(--cyan)); border-radius: inherit; }
     progress { width: 100%; height: 12px; margin: 14px 0 9px; accent-color: var(--cyan); }
-    .workspace { display: grid; grid-template-columns: minmax(610px, 1.25fr) minmax(380px, .75fr); gap: 16px; align-items: start; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
     .workspace > *, .command-grid > *, .telemetry-rail > *, .relay-stack > *, .inspection-stack > * { min-width: 0; }
     .table-wrap { overflow: auto; max-height: 650px; }
     table { width: 100%; border-collapse: collapse; min-width: 735px; }
@@ -83,8 +88,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .tier { display: inline-flex; align-items: center; border: 1px solid #345276; border-radius: 99px; padding: 1px 6px; color: var(--accent); font-size: 10px; }
     .tier.lightweight { color: var(--muted); border-color: var(--line); }
     .more { display: flex; justify-content: center; padding: 12px; border-top: 1px solid var(--line); }
-    .detail { min-height: 650px; }
-    .detail-body { padding: 15px; }
+    .detail { min-height: 0; }
+    .detail-body { padding: 15px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .detail-body > * { min-width: 0; }
+    .detail-body > .route-summary, .detail-body > .empty { grid-column: 1 / -1; }
+    .detail-body .detail-section { margin-bottom: 0; }
+    .detail .panel-head { flex-wrap: wrap; }
+    #selected-id { overflow-wrap: anywhere; }
+    .detail-back { color: var(--accent); font-size: 11px; }
+    .detail:focus { outline: none; }
+    .detail:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    @media (max-width: 750px) { .detail-body { grid-template-columns: minmax(0, 1fr); } }
     .detail-section { margin-bottom: 16px; } .detail-section:last-child { margin-bottom: 0; }
     .detail-section h3 { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px; }
     pre { margin: 0; padding: 11px; max-height: 205px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #080e1c; color: #d8e6fb; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -168,6 +182,28 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .quota-chip.unlimited { color: var(--good); border-color: rgba(109,221,154,.35); }
     .button-small { padding: 5px 8px; font-size: 10px; }
     .token-cell { color: var(--cyan); }
+    .history-table .token-cell, .history-table .payload-cell { white-space: pre-line; font-variant-numeric: tabular-nums; }
+    .history-table { table-layout: fixed; min-width: 1320px; font-size: 11px; }
+    .history-table th, .history-table td { padding: 9px 7px; white-space: normal; overflow-wrap: anywhere; }
+    .history-table th { font-size: 9px; letter-spacing: .03em; }
+    .history-table td.wrap { min-width: 0; max-width: none; }
+    .history-table th:nth-child(1), .history-table th:nth-child(2) { width: 9%; }
+    .history-table th:nth-child(3), .history-table th:nth-child(6) { width: 8%; }
+    .history-table th:nth-child(4) { width: 12%; }
+    .history-table th:nth-child(5), .history-table th:nth-child(10) { width: 6%; }
+    .history-table th:nth-child(7) { width: 13%; }
+    .history-table th:nth-child(8), .history-table th:nth-child(12), .history-table th:nth-child(13) { width: 5%; }
+    .history-table th:nth-child(9) { width: 10%; }
+    .history-table th:nth-child(11) { width: 4%; }
+    .history-table .total-token-cell { color: var(--text); font-weight: 650; }
+    .history-table .effort-cell { white-space: pre-line; color: var(--accent); }
+    .history-explainer { margin: 0; padding: 12px 16px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
+    .history-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .history-scroll { max-height: min(560px, 65vh); }
+    #history { scroll-margin-top: 170px; }
+    @media (max-width: 650px) { #history { scroll-margin-top: 325px; } }
+    #selected-call { scroll-margin-top: 170px; }
+    @media (max-width: 650px) { #selected-call { scroll-margin-top: 325px; } }
     .live-inspector { min-height: 0; overflow: hidden; align-self: stretch; display: flex; flex-direction: column; }
     .inspector-body { padding: 13px 14px 14px; display: grid; gap: 12px; flex: 1; grid-template-rows: auto auto minmax(0,1fr); }
     .inspector-grid { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 10px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: rgba(5,10,20,.55); font-size: 10px; }
@@ -294,14 +330,24 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       .stack-chart .chart-body { display: flex; flex: 1; min-height: 0; }
       .stack-chart svg { flex: 1 1 auto; height: 100%; min-height: 116px; }
     }
-    @media (max-width: 1350px) { .command-grid { grid-template-columns: minmax(270px,.72fr) minmax(600px,1.6fr); } .inspection-stack { grid-column: 1 / -1; grid-row: auto; grid-template-columns: repeat(2,minmax(0,1fr)); } }
+    @media (max-width: 1350px) { .command-grid { grid-template-columns: minmax(270px,.72fr) minmax(0,1.6fr); } .inspection-stack { grid-column: 1 / -1; grid-row: auto; grid-template-columns: repeat(2,minmax(0,1fr)); } }
     @media (min-width: 901px) and (max-width: 1350px) { .inspection-stack { align-items: stretch; } .inspection-stack .live-inspector, .inspection-stack .stack-chart { height: 400px; min-height: 400px; } .inspection-stack .event-log { max-height: 120px; } .inspection-stack .stack-chart .chart-body { min-height: 344px; } .inspection-stack .stack-chart svg { height: 330px; } }
     @media (max-width: 1150px) { .kpis { grid-template-columns: repeat(2,minmax(0,1fr)); } .kpis .kpi:last-child { grid-column: 1 / -1; } }
     @media (max-width: 900px) { .command-grid { grid-template-columns: 1fr; } .relay-stack { order: 1; grid-column: auto; grid-row: auto; } .inspection-stack { order: 2; grid-column: auto; grid-row: auto; grid-template-columns: 1fr; } .telemetry-rail { order: 3; grid-column: auto; grid-row: auto; grid-template-columns: repeat(2,minmax(0,1fr)); } .live-inspector { min-height: auto; } }
     @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .detail { min-height: auto; } }
     @media (max-width: 650px) { header, main { padding-left: 14px; padding-right: 14px; } .topline { align-items: flex-start; flex-direction: column; } .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; } .section-nav { order: 3; width: 100%; overflow-x: auto; } .telemetry-rail { grid-template-columns: 1fr; } .chart { min-height: 208px; } .compact-chart { min-height: 0; } .architecture-body { padding: 12px; } .brand-avatar { width: 38px; height: 38px; } }
     @media (max-width: 430px) { .kpis { grid-template-columns: 1fr; } .kpis .kpi:last-child { grid-column: auto; } }
-    .provider-panel { margin: 16px 0; }
+    .provider-panel { margin: 0 0 14px; border-radius: 12px; }
+    .provider-summary { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; list-style: none; }
+    .provider-summary::-webkit-details-marker { display: none; }
+    .provider-summary::before { content: '+'; color: var(--accent); font-size: 16px; }
+    .provider-panel[open] > .provider-summary::before { content: '−'; }
+    .provider-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
+    .provider-summary strong { font-size: 12px; }
+    .provider-summary .provider-overview { color: var(--muted); font-size: 11px; flex: 1; }
+    .provider-summary .pill { font-size: 11px; }
+    .provider-content { border-top: 1px solid var(--line); }
+    @media (max-width: 650px) { .provider-summary { flex-wrap: wrap; gap: 5px 10px; } .provider-summary .provider-overview { flex-basis: 100%; order: 3; } .provider-summary .pill { margin-left: auto; } }
     .provider-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--border); }
     .provider-card { padding:16px 18px; min-width:0; background:var(--panel,#111925); border-top:2px solid transparent; }
     .provider-card[data-active="true"] { border-top-color:var(--cyan); }
@@ -340,15 +386,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <p class="byline">Created by <a href="https://www.linkedin.com/in/madhavsomani" target="_blank" rel="noopener noreferrer" aria-label="Madhav Somani on LinkedIn">Madhav Somani</a><span aria-hidden="true">↗</span></p>
         </div>
       </div>
-      <div class="header-actions"><nav class="section-nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#relay-architecture">Relay</a><a href="#analytics">Analytics</a><a href="#history">Requests</a></nav><span class="version-badge">Relay <strong id="relay-version">—</strong></span><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
+      <div class="header-actions"><nav class="section-nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#relay-architecture">Relay</a><a href="#usage-trends">Analytics</a><a href="#history">Requests</a></nav><span class="version-badge">Relay <strong id="relay-version">—</strong></span><span class="live-badge" id="live-badge"><span class="dot"></span><span id="live-status">connecting live feed</span></span><button id="clear">Clear detailed history</button></div>
     </div>
   </header>
   <main>
     ${CONNECTION_HTML}
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
     <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
-    <section class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
-      <div class="panel-head"><div><h2>Where calls actually go</h2><span class="tiny">Model name ≠ provider · separate accounts, separate counters</span></div><span class="pill" id="no-fallback">Loading policy…</span></div>
+    <details class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
+      <summary class="provider-summary"><strong>Where calls actually go</strong><span class="provider-overview">Model calls → Copilot · Native images → Codex / OpenAI · API → explicit only</span><span class="pill" id="no-fallback">Loading policy…</span></summary>
+      <div class="provider-content">
       <div class="provider-grid">
         <article class="provider-card" id="provider-copilot"><h3>GitHub Copilot</h3><div class="provider-route">Codex → Relay → Copilot SDK → selected model</div><div class="provider-values"><div><strong id="provider-copilot-calls">—</strong><small>SDK model calls</small></div><div><strong id="provider-copilot-in">—</strong><small>input tokens</small></div><div><strong id="provider-copilot-out">—</strong><small>output tokens</small></div></div><div class="provider-note" id="provider-copilot-state">Default inference route</div></article>
         <article class="provider-card" id="provider-native"><h3>Native Codex / OpenAI</h3><div class="provider-route">Feature tool → native Codex helper → OpenAI</div><div class="provider-values"><div><strong id="provider-native-calls">—</strong><small>helper calls submitted</small></div><div><strong id="provider-native-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-native-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-native-state">Image generation · native search removed · Codex sign-in allowance</div></article>
@@ -360,7 +407,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <div class="table-wrap"><table><thead><tr><th>Time / call ID</th><th>Destination / feature</th><th>Model</th><th>Outcome</th><th>Input / output tokens</th><th>Evidence</th></tr></thead><tbody id="provider-call-rows"></tbody></table></div>
         <pre id="provider-call-detail">Select a call. This view contains metadata only—never prompts, images, audio or credentials.</pre>
       </details>
-    </section>
+      </div>
+    </details>
+    ${TRENDS_HTML}
+    ${TASKS_HTML}
     <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
       <article class="kpi"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">↗</span><span>Calls handled</span></div><div class="kpi-main"><strong class="kpi-value" id="received">0</strong><svg class="kpi-sparkline" id="kpi-requests-chart" role="img" aria-label="Recent received request trend"></svg></div><div class="kpi-foot"><strong id="replayed">0</strong> Copilot replays · <span id="traffic">0 B</span></div></article>
       <article class="kpi good"><div class="kpi-top"><span class="kpi-icon" aria-hidden="true">✓</span><span>Success rate</span></div><div class="kpi-main"><strong class="kpi-value" id="success-rate">—</strong><svg class="kpi-sparkline" id="kpi-success-chart" role="img" aria-label="Recent completion-rate trend"></svg></div><div class="kpi-foot"><strong id="completed">0</strong> completed · <span id="failed">0</span> failed</div></article>
@@ -438,7 +488,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             <dt>Selection</dt><dd class="route-value" id="inspector-selection">—</dd>
             <dt>Status</dt><dd id="inspector-status">idle</dd>
             <dt>Measured tokens</dt><dd id="inspector-tokens">—</dd>
-            <dt>SDK model calls</dt><dd id="inspector-sdk-calls">—</dd>
+            <dt>Model steps (SDK inference)</dt><dd id="inspector-sdk-calls">—</dd>
             <dt>AI credits</dt><dd class="sdk-credit-value" id="inspector-credits">not reported</dd>
             <dt>Latency</dt><dd id="inspector-latency">—</dd>
             <dt>Route</dt><dd id="inspector-route">—</dd>
@@ -458,7 +508,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             <div class="usage-stat credits-stat" style="--usage-color:var(--cyan)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">◎</span><span>AI credits · SDK</span></div><strong id="ai-credits">—</strong><small>Lifetime reported through this relay · finalized calls</small><small>SDK nano-AIU ÷ 1,000,000,000. Not dollars or your account balance.</small></div>
             <div class="usage-stat" style="--usage-color:var(--accent)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">↘</span><span>Input tokens</span></div><strong id="input-tokens">0</strong></div>
             <div class="usage-stat" style="--usage-color:var(--cyan)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">↗</span><span>Output tokens</span></div><strong id="output-tokens">0</strong></div>
-            <div class="usage-stat" style="--usage-color:var(--violet)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">✦</span><span>SDK calls</span></div><strong id="sdk-calls">0</strong></div>
+            <div class="usage-stat" style="--usage-color:var(--violet)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">✦</span><span>Model steps</span></div><strong id="sdk-calls">0</strong></div>
             <div class="usage-stat benchmark-stat" style="--usage-color:var(--cyan)"><div class="usage-stat-top"><span class="usage-stat-icon" aria-hidden="true">$</span><span>Public API benchmark</span></div><strong id="api-cost">$0.00</strong><small>Reference only · not billed</small></div>
           </div>
           <div class="metering-line"><div><div class="metering-copy" id="cost-coverage">Waiting for usage coverage…</div><div class="metrics-freshness" id="metrics-freshness">Waiting for durable metrics…</div><div class="coverage-track" title="Share of finalized relay responses with exact SDK token telemetry"><div class="coverage-fill" id="coverage-fill"></div></div></div><span class="coverage-value" id="metering-percent">0%</span></div>
@@ -481,14 +531,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </aside>
     </section>
     <div class="workspace" id="history">
-      <section class="panel"><div class="panel-head"><h2>Recent call history</h2><span class="tiny" id="count">0 records</span></div><div class="table-wrap"><table><thead><tr><th>Received</th><th>Route / model</th><th>Status</th><th>Tier</th><th>Replay</th><th>Tools</th><th>Latency</th><th>Bytes</th><th>Measured usage</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No Responses calls have crossed the bridge yet.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
-      <aside class="panel detail"><div class="panel-head"><h2>Selected call</h2><span class="tiny" id="selected-id">none</span></div><div class="detail-body" id="detail"><div class="empty">Select a row. Detailed bodies load only when requested; older entries keep lightweight metadata.</div></div></aside>
+      <section class="panel"><div class="panel-head"><h2 id="history-heading">Recent call history</h2><span class="tiny" id="count">0 records</span></div>
+        <p class="history-explainer" id="history-units">Exact SDK tokens per relay response, summed across its SDK calls. Total = input + output; cached input is included once. Non-cached = input minus cache reads, not necessarily unique text. In-progress usage is partial. All 13 fields are retained; smaller screens scroll sideways. Select a row to view its details directly below.</p>
+        <div class="table-wrap history-scroll" role="region" tabindex="0" aria-labelledby="history-heading"><table class="history-table" aria-describedby="history-units"><thead><tr><th>Received</th><th title="Applied SDK session reasoning effort, not an intelligence score">Intelligence · effort</th><th>Total tokens</th><th>Input tokens</th><th>Output tokens</th><th>AI credits · SDK</th><th>Route / model</th><th>Status</th><th>Payload bytes</th><th>Latency</th><th>Tools</th><th>Replay</th><th>Tier</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No Responses calls have crossed the bridge yet.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
+      <section class="panel detail" id="selected-call" tabindex="-1" aria-labelledby="selected-call-heading"><div class="panel-head"><h2 id="selected-call-heading">Selected call</h2><span class="tiny" id="selected-id">none</span><a class="detail-back" href="#history">Back to call history</a></div><div class="detail-body" id="detail"><div class="empty">Select a row above. Detailed bodies load only when requested; older entries keep lightweight metadata.</div></div></section>
     </div>
   </main>
   <script>
     const callRoute = ${callRoute.toString()};
     const sdkCredits = ${sdkCredits.toString()};
     const nativeImageStatus = ${nativeImageStatus.toString()};
+    const callTokenUsage = ${callTokenUsage.toString()};
+    const callReasoning = ${callReasoning.toString()};
     const state = { records: [], selected: null, visible: 200, details: new Map(), liveCalls: new Map(), liveEvents: [], activeSamples: [], latestInspectorRecord: null, flowTimer: null, refreshTimer: null };
     const svgNs = "http://www.w3.org/2000/svg";
     const MAX_LIVE_CALLS = 64;
@@ -847,11 +901,27 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function renderRows() {
       const rows = $("rows"); rows.replaceChildren(); const records = state.records.slice(0, state.visible); $("empty").style.display = records.length ? "none" : "block";
       for (const record of records) {
-        const row = document.createElement("tr"); if (record.id === state.selected) row.className = "selected"; row.tabIndex = 0; row.setAttribute("role", "button"); row.onclick = () => selectRecord(record.id); row.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRecord(record.id); } };
-        const measured = record.usage?.metered ? compact((record.usage.inputTokens || 0) + (record.usage.outputTokens || 0)) + " tokens\n" + number(record.usage.sdkApiCalls || 0) + " SDK calls" : "unmetered";
-        const creditUsage = creditsText(record.usage) + " AI credits";
-        const values = [time(record.receivedAt), (record.requestPath || "—") + "\n" + routeLines(record), record.status, record.detailTier, record.replayCount || 0, record.toolCalls || 0, duration(record.latencyMs), bytes((record.inputBytes || 0) + (record.outputBytes || 0)), measured + "\n" + creditUsage];
-        values.forEach((value, index) => { const cell = document.createElement("td"); if (index === 1) { cell.className = "wrap model"; cell.style.whiteSpace = "pre-line"; } else if (index === 2) cell.className = "status " + record.status; else if (index === 8) { cell.className = "token-cell"; cell.style.whiteSpace = "pre-line"; } if (index === 3) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : "detail"; cell.appendChild(badge); } else cell.textContent = value; row.appendChild(cell); });
+        const row = document.createElement("tr"); row.dataset.recordId = record.id; if (record.id === state.selected) row.className = "selected"; row.tabIndex = 0; row.setAttribute("role", "button"); row.onclick = () => selectRecord(record.id); row.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRecord(record.id); } };
+        row.setAttribute('aria-controls', 'selected-call'); row.setAttribute('aria-pressed', String(record.id === state.selected));
+        const usage = callTokenUsage(record.usage);
+        const reasoning = callReasoning(record);
+        const effort = (reasoning.selected || 'not recorded') + '\nRequested: ' + (reasoning.requested || 'default / unrecorded');
+        const tokenText = value => value === null ? "not reported" : number(value);
+        const total = tokenText(usage.totalTokens) + "\n" + (usage.sdkApiCalls === null ? "SDK calls not reported" : number(usage.sdkApiCalls) + " SDK call" + (usage.sdkApiCalls === 1 ? "" : "s")) + (record.completedAt ? "" : " · partial");
+        const input = tokenText(usage.inputTokens) + "\nCached: " + tokenText(usage.cachedInputTokens) + "\nNon-cached: " + tokenText(usage.nonCachedInputTokens);
+        const payload = "Request: " + bytes(record.inputBytes) + "\nResponse: " + bytes(record.outputBytes);
+        const values = [time(record.receivedAt), effort, total, input, tokenText(usage.outputTokens), creditsText(record.usage), (record.requestPath || "—") + "\n" + routeLines(record), record.status, payload, duration(record.latencyMs), record.toolCalls || 0, record.replayCount || 0, record.detailTier];
+        values.forEach((value, index) => {
+          const cell = document.createElement("td");
+          if (index === 1) { cell.className = 'effort-cell'; cell.title = reasoning.note; }
+          if (index >= 2 && index <= 5) cell.className = "token-cell" + (index === 2 ? " total-token-cell" : index === 3 ? " input-token-cell" : "");
+          if (index === 6) { cell.className = "wrap model"; cell.style.whiteSpace = "pre-line"; }
+          if (index === 7) cell.className = "status " + record.status;
+          if (index === 8) { cell.className = "payload-cell"; cell.title = "Codex-to-relay JSON request and recorded response bytes, not model tokens. Requests may include history, instructions, tool schemas/results and encoded images. SDK context can persist across continuations. Exact request: " + tokenText(Number.isFinite(record.inputBytes) ? record.inputBytes : null) + " bytes; response: " + tokenText(Number.isFinite(record.outputBytes) ? record.outputBytes : null) + " bytes."; }
+          if (index === 12) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : "detail"; cell.appendChild(badge); }
+          else cell.textContent = value;
+          row.appendChild(cell);
+        });
         rows.appendChild(row);
       }
       $("show-more").hidden = state.visible >= state.records.length;
@@ -873,7 +943,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         const enabled=data.providers?.platform?.configured&&data.providers?.platform?.enabled;
         const limit=data.providers?.observedLimits?.[key];
         let note=(id==='native'?nativeImageStatus(data.providers?.native):(enabled?'Enabled':'Not enabled'))+' · '+number(active)+' active · '+number(total.failed||0)+' failed/rejected · '+number(total.usageReports||0)+' usage reports.';
-        if(id==='native')note+=' Counts include historical search calls. Image entries may report helper tokens only; generation tokens unavailable.';
+        if(id==='native')note+=' Relay helper calls only, including historical search. Direct Codex image_gen runs outside this ledger and uses Codex/OpenAI limits, not Copilot credits. Helper tokens may exclude generation tokens.';
         else note+=' Explicit API and voice only. No subscription or Copilot credit conversion.';
         if(limit)note+=' Last limit signal: '+limit.state+' at '+time(limit.at)+' ('+(limit.kind||'feature')+'). Not an account balance.';
         setText('provider-'+id+'-state',note);
@@ -921,6 +991,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if (!record) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "Select a call to inspect it."; detail.appendChild(empty); return; }
       detail.appendChild(section("Call metadata", { id: record.id, tier: record.detailTier, status: record.status, receivedAt: record.receivedAt, completedAt: record.completedAt, route: record.requestPath, requestedModel: record.requestedModel, selectedModel: record.selectedModel, streaming: record.streaming, inputBytes: record.inputBytes, outputBytes: record.outputBytes, latencyMs: record.latencyMs, replayCount: record.replayCount, toolCalls: record.toolCalls, previousResponseId: record.previousResponseId, continuedFrom: record.continuedFrom }));
       detail.prepend(routeSummary(record));
+      detail.appendChild(section('Intelligence / reasoning effort', callReasoning(record)));
+      detail.appendChild(section('Context efficiency (local estimates)', record.contextStats || {note:'Not recorded for this call. Character savings are not billed-token or credit savings.'}));
+      detail.appendChild(section('Task and session efficiency', {taskId:record.taskId ?? 'Not recorded',sessionReason:record.sessionReason ?? 'Not recorded',costCheckpoint:record.costCheckpoint ?? 'No checkpoint on this response'}));
+      detail.appendChild(section("Token and byte breakdown", {...callTokenUsage(record.usage), requestBytes:record.inputBytes, recordedResponseBytes:record.outputBytes, requestImagesRetained:record.ingress?.retainedImages ?? null, usagePartial:!record.completedAt,
+        note:"Bytes measure the structured Codex-to-relay payload, not new words. Requests may carry prior messages, instructions, tool declarations/results, and base64 images. SDK token counts cover model context, including context retained from earlier continuations. Cached input is already part of input; reasoning is already part of output."}));
       detail.appendChild(section("Measured SDK usage and public API benchmark", record.usage ? {...record.usage, aiCredits:sdkCredits(record.usage)} : { metered: false, note: "No SDK usage was reported for this call." }));
       if (loading) { const note = document.createElement("div"); note.className = "empty"; note.textContent = "Loading sanitized detail on demand…"; detail.appendChild(note); return; }
       if (record.detailTier === "lightweight" || !record.detailAvailable) { detail.appendChild(section("Lightweight retention", { note: "The full body aged out of the 200-call detailed tier. Mileage and metadata remain durable.", errorSummary: record.errorSummary || null })); return; }
@@ -930,9 +1005,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       state.selected = id; renderRows();
       const index = state.records.find((record) => record.id === id);
       if (!index) return renderDetail(null);
-      if (!index.detailAvailable) return renderDetail(index);
-      if (state.details.has(id)) return renderDetail(state.details.get(id));
-      renderDetail(index, true);
+      const cached = state.details.get(id);
+      renderDetail(cached || index, index.detailAvailable && !cached);
+      $('selected-call').focus({preventScroll:true});
+      $('selected-call').scrollIntoView({block:'start',behavior:'instant'});
+      if (!index.detailAvailable || cached) return;
       try {
         const response = await fetch("/dashboard/api/records/" + encodeURIComponent(id), { cache: "no-store" });
         if (!response.ok) throw new Error("detail returned " + response.status);
@@ -953,7 +1030,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           if (cached && (!index.detailAvailable || cached.status !== index.status || cached.replayCount !== index.replayCount || cached.toolCalls !== index.toolCalls)) state.details.delete(index.id);
         }
         if (!state.records.some((record) => record.id === state.selected)) state.selected = null;
-        renderStats(data); renderRows();
+        renderStats(data); renderRows(); renderUsageTrends(data.analytics || {}); renderTaskCosts(data);
         if (!state.liveEvents.length && state.records[0]) renderLiveInspector(state.records[0]);
         if (state.selected) { const cached = state.details.get(state.selected); renderDetail(cached || state.records.find((record) => record.id === state.selected)); }
       } catch (error) { $("updated").textContent = error.message; $("updated").className = "error"; }
@@ -962,6 +1039,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     $('provider-filter').onchange=renderProviderRows;
     $("clear").onclick = async () => { if (!confirm("Clear the 1,000-entry detailed history? Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
+    ${TRENDS_SCRIPT}
+    ${TASKS_SCRIPT}
     setText("relay-address", location.host); connectLiveEvents(); refresh(); setInterval(refresh, 5000);
   </script>
 <script>${CONNECTION_SCRIPT}</script>

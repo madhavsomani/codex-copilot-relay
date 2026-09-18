@@ -48,11 +48,18 @@ test('differing snapshots and intervening policies retain their exact text and o
   assert.ok(result.systemContent.indexOf(b)<result.systemContent.indexOf(entries[4]));
   assert.ok(result.systemContent.indexOf(entries[4])<result.systemContent.indexOf(a));
 });
-test('small requests keep their original system field byte-for-byte',()=>{
-  const c=catalog('small',500),entries=[c,c,'Keep all rules.'];
+test('requests without duplicate catalogs keep their system field byte-for-byte',()=>{
+  const c=catalog('small',500),entries=[c,'Keep all rules.'];
   const expected=['bridge',...entries.map((text,index)=>`\n--- Outer developer instruction ${index+1} ---\n${text}`)].join('\n');
   const result=buildBoundedInstructions('bridge',entries);
   assert.equal(result.systemContent,expected);assert.equal(result.stats.deduplicatedSkillCatalogs,0);
+});
+test('duplicate catalogs are reduced before the hard provider field cap',()=>{
+  const duplicateCatalog=catalog('small',2000), result=buildBoundedInstructions('bridge',[duplicateCatalog,duplicateCatalog,'Require approval.']);
+  assert.ok(result.stats.originalSystemChars<LIMIT);
+  assert.equal(result.stats.deduplicatedSkillCatalogs,1);
+  assert.equal(result.systemContent.split(duplicateCatalog).length-1,1);
+  assert.ok(result.systemContent.includes('Require approval.'));
 });
 test('quoted, nested, partial, sibling-bearing and arbitrary repeated instructions are untouched',()=>{
   const c=catalog('intact',1000);
