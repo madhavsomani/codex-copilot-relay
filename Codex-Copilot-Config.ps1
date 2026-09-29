@@ -329,6 +329,24 @@ function Get-CodexCopilotContextSettings {
     return @{ model_context_window = $window; model_auto_compact_token_limit = $compact }
 }
 
+function Select-CodexCopilotModelHealth {
+    param([psobject]$Health, [string]$Model)
+
+    if (-not $Health -or -not $Health.ok) { return $null }
+    if ([string]$Health.model -eq $Model) { return $Health }
+    if (-not $Health.modelCapabilities) { return $null }
+    $capabilities = $Health.modelCapabilities.PSObject.Properties[$Model]
+    if (-not $capabilities) { return $null }
+    return [pscustomobject]@{
+        ok = $true
+        model = $Model
+        compatibility = $capabilities.Value
+        models = $Health.models
+        modelCapabilities = $Health.modelCapabilities
+        routing = $Health.routing
+    }
+}
+
 function New-CodexCopilotModelCatalog {
     param([psobject]$Health, [string]$Model, [string]$Directory, [string]$BaseInstructions)
 
@@ -378,7 +396,12 @@ function New-CodexCopilotModelCatalog {
         if ($entrySettings.Count -eq 0) { continue }
         $efforts = @($cap.supportedReasoningEfforts | Where-Object { $_ })
         if ($efforts.Count -eq 0) { $efforts = $reasoningEfforts }
-        $preferred = @('low','none','medium','high','xhigh','max' | Where-Object { $efforts -contains $_ }) | Select-Object -First 1
+        $preferred = if ($slug -eq $Model -and $slug -eq 'gpt-6-sol' -and $efforts -contains 'xhigh') {
+            'xhigh'
+        }
+        else {
+            @('low','none','medium','high','xhigh','max' | Where-Object { $efforts -contains $_ }) | Select-Object -First 1
+        }
         $reasoningLevels = @($efforts | ForEach-Object { @{ effort = $_; description = "Copilot reasoning effort: $_" } })
         $standardContext = Get-CodexCopilotStandardContext -Capabilities $cap
         $percent = [Math]::Min(95, [Math]::Floor(100 * [double]$standardContext.Prompt / [double]$standardContext.Window))

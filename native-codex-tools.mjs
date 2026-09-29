@@ -1,11 +1,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn, execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {StringDecoder} from 'node:string_decoder';
 
 const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
 const MAX_IMAGE = 32 * 1024 * 1024;
+const executeFile = promisify(execFile);
+const nativeVersionChecks = new Map();
 export const nativeJobs = new Set();
 
 export class NativeToolError extends Error {
@@ -14,18 +17,89 @@ export class NativeToolError extends Error {
   }
 }
 
-export async function loadNativeToolsConfig(root) {
+async function readNativeVersion(executable) {
+  const stat = await fs.stat(executable);
+  const signature = `${executable}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  if (!nativeVersionChecks.has(signature)) {
+    if (nativeVersionChecks.size >= 16) nativeVersionChecks.clear();
+    const pending = executeFile(executable, ['--version'], {
+      windowsHide:true, timeout:5000, maxBuffer:16384, env:nativeEnvironment(),
+    }).then(result => result.stdout).catch(() => {
+      nativeVersionChecks.delete(signature);
+      throw new Error('The installed Codex executable could not report its version.');
+    });
+    nativeVersionChecks.set(signature, pending);
+  }
+  return await nativeVersionChecks.get(signature);
+}
+
+async function inspectNativeExecutable(executable, inspectVersion) {
+  const stat = await fs.stat(executable);
+  if (!stat.isFile()) throw new Error('The configured Codex executable is not a file.');
+  const reported = await inspectVersion(executable);
+  const version = /^codex-cli\s+(\d+)\.(\d+)\.(\d+)([^\s]*)\s*$/m.exec(reported);
+  if (!version || !(Number(version[1]) > 0 || Number(version[2]) > 153 ||
+    (Number(version[2]) === 153 && Number(version[3]) >= 4))) {
+    throw new Error('Native images require stock Codex 0.153.4 or newer.');
+  }
+  return {codexPath:executable, codexVersion:`${version[1]}.${version[2]}.${version[3]}${version[4]}`};
+}
+
+async function resolveNativeExecutable(configuredPath, {localAppData = process.env.LOCALAPPDATA, inspectVersion = readNativeVersion} = {}) {
+  if (typeof configuredPath !== 'string' || !path.isAbsolute(configuredPath)) {
+    throw new Error('An absolute installed Codex executable is required.');
+  }
   try {
-    const config = JSON.parse(await fs.readFile(path.join(root, 'runtime', 'native-tools.json'), 'utf8'));
-    const searchEnabled = false; // OpenAI search helper has been removed.
-    const imageEnabled = config.imageEnabled ?? (config.enabled === true);
-    if (!searchEnabled && !imageEnabled) return {enabled: false, searchEnabled: false, imageEnabled: false};
-    if (!path.isAbsolute(config.codexPath ?? '')) throw new Error('An absolute installed Codex executable is required.');
-    await fs.access(config.codexPath);
-    return {enabled: searchEnabled === true, searchEnabled: searchEnabled === true, imageEnabled: imageEnabled === true, codexPath: config.codexPath, model: config.model || 'gpt-6-astra'};
+    return {...await inspectNativeExecutable(configuredPath, inspectVersion), executableSource:'configured'};
   } catch (error) {
-    if (error.code === 'ENOENT') return {enabled: false};
-    return {enabled: false, error: 'Invalid native-tools.json: ' + error.message};
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const desktopBin = localAppData && path.isAbsolute(localAppData) ? path.join(localAppData, 'OpenAI', 'Codex', 'bin') : null;
+  const relative = desktopBin && path.relative(desktopBin, configuredPath).split(path.sep);
+  if (!relative || relative.length !== 2 || !/^[a-f0-9]{8,64}$/i.test(relative[0]) || relative[1].toLowerCase() !== 'codex.exe') {
+    throw new Error('The configured Codex executable is missing. Update its explicit path using Enable-Codex-NativeTools.ps1 -CodexPath.');
+  }
+  const entries = await fs.readdir(desktopBin, {withFileTypes:true}).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-f0-9]{8,64}$/i.test(entry.name)) continue;
+    const executable = path.join(desktopBin, entry.name, 'codex.exe');
+    try {
+      const stat = await fs.lstat(executable);
+      if (stat.isFile() && !stat.isSymbolicLink() && (await fs.realpath(executable)).toLowerCase() === executable.toLowerCase()) {
+        candidates.push({executable, modified:stat.mtimeMs});
+      }
+    } catch {}
+  }
+  candidates.sort((left, right) => right.modified - left.modified || left.executable.localeCompare(right.executable));
+  for (const candidate of candidates) {
+    try {
+      return {...await inspectNativeExecutable(candidate.executable, inspectVersion), executableSource:'desktop-update'};
+    } catch {}
+  }
+  throw new Error('No compatible installed Codex desktop installation was found after the configured executable disappeared. Finish updating or reinstall stock Codex 0.153.4 or newer.');
+}
+
+export async function loadNativeToolsConfig(root, options) {
+  const disabled = {enabled:false, searchEnabled:false, imageEnabled:false};
+  let config;
+  try {
+    config = JSON.parse(await fs.readFile(path.join(root, 'runtime', 'native-tools.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return disabled;
+    return {...disabled, error:'Invalid native-tools.json: ' + error.message};
+  }
+  try {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Expected an object.');
+    const imageEnabled = config.imageEnabled ?? (config.enabled === true);
+    if (imageEnabled !== true) return disabled;
+    const executable = await resolveNativeExecutable(config.codexPath, options);
+    return {...disabled, imageEnabled:true, ...executable, model:config.model || 'gpt-6-astra'};
+  } catch (error) {
+    return {...disabled, error:'Native image configuration unavailable: ' + error.message};
   }
 }
 
@@ -48,6 +122,7 @@ export function nativeArguments(kind, model, cwd, imagePaths = []) {
 
 export async function runNativeCodex(config, kind, prompt, {signal, imagePaths = [], onSearch, onUsage, onSubmitted, cwd = os.tmpdir(), timeoutMs = 600000, spawnProcess = spawn} = {}) {
   if (kind !== 'image') throw new NativeToolError('Native search helper was removed.', 'native_tools_disabled', 501);
+  if (config.error) throw new NativeToolError(config.error, 'native_tools_unavailable', 503);
   if (!(kind === 'image' ? (config.imageEnabled ?? config.enabled) : (config.searchEnabled ?? config.enabled))) throw new NativeToolError('Native Codex tools are disabled. Enable them explicitly with Enable-Codex-NativeTools.ps1; they use OpenAI/ChatGPT usage, not Copilot credits.', 'native_tools_disabled', 501);
   if (signal?.aborted) throw new NativeToolError('Native tool cancelled.', 'native_tool_cancelled', 499);
   if (nativeJobs.size >= 2) throw new NativeToolError('Both native-tool slots are busy. Retry after a current tool finishes.', 'native_tools_busy', 429);
@@ -105,8 +180,10 @@ export function validateImageRequest(body, edit = false) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new NativeToolError('Image request must be an object.', 'invalid_image_request', 400);
   const allowed = new Set(['model','prompt','n','quality','size','background', ...(edit ? ['images'] : [])]);
   for (const key of Object.keys(body)) if (!allowed.has(key)) throw new NativeToolError('Unsupported image parameter: ' + key, 'unsupported_parameter', 400);
-  if (body.model !== 'gpt-image-2' || (body.n != null && body.n !== 1) || ['quality','size','background'].some(key => body[key] != null && body[key] !== 'auto'))
-    throw new NativeToolError('The native image adapter supports gpt-image-2, one image, and automatic quality/size/background only.', 'unsupported_parameter', 400);
+  const backgroundSupported = body.background == null || ['auto','opaque'].includes(body.background);
+  if (body.model !== 'gpt-image-2' || (body.n != null && body.n !== 1) ||
+    ['quality','size'].some(key => body[key] != null && body[key] !== 'auto') || !backgroundSupported)
+    throw new NativeToolError('The native image adapter supports gpt-image-2, one image, automatic quality/size, and automatic or opaque background only.', 'unsupported_parameter', 400);
   if (typeof body.prompt !== 'string' || !body.prompt.trim() || body.prompt.length > 32000) throw new NativeToolError('Image prompt must contain 1-32000 characters.', 'invalid_image_prompt', 400);
   if (edit && (!Array.isArray(body.images) || body.images.length < 1 || body.images.length > 5)) throw new NativeToolError('Image edits require 1-5 embedded reference images.', 'invalid_image_reference', 400);
   return (edit ? body.images : []).map(image => {
@@ -120,6 +197,7 @@ export function validateImageRequest(body, edit = false) {
 
 export async function imageWithNativeCodex(config, body, {edit = false, signal,onUsage,onSubmitted} = {}) {
   const references = validateImageRequest(body, edit);
+  if (config.error) throw new NativeToolError(config.error, 'native_tools_unavailable', 503);
   if (!(config.imageEnabled ?? config.enabled)) throw new NativeToolError('Native image tools are disabled. Run Enable-Codex-NativeTools.ps1 to opt into OpenAI/ChatGPT image usage.', 'native_tools_disabled', 501);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-native-image-'));
   try {

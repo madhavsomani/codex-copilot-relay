@@ -20,6 +20,28 @@ an entitlement. Settings are local in ignored `runtime/native-tools.json`.
 `imageEnabled` is independent of the removed `searchEnabled` flag. Repair
 preserves the protected original-config backup and defers updates while busy.
 
+## Surviving desktop updates
+
+The adapter rechecks its settings and executable on each request. If an enabled
+configuration points to a retired hashed build under
+`%LOCALAPPDATA%\OpenAI\Codex\bin`, it discovers a replacement in that same
+desktop installation directory. It selects the newest installed file that reports
+stock Codex 0.153.4 or newer, skipping incomplete or incompatible builds and
+redirected files. Successful version probes are cached by file metadata; no model
+or image request is made during discovery.
+
+An existing configured executable stays selected. Missing custom paths outside
+that desktop build layout must be repaired explicitly; the adapter does not
+search PATH, use the bundled npm engine, or silently switch providers. Missing
+settings and `imageEnabled: false` remain disabled. Recovery does not rewrite
+settings, change the selected model, read credentials, or alter billing consent.
+
+`/health` reports `nativeTools.executableSource` (`configured` or
+`desktop-update`) and `codexVersion`. Installation/configuration failures appear
+in `nativeTools.error` and image requests receive `native_tools_unavailable`
+(503), not the misleading opt-in error. If an update is still in progress, the
+next request checks again; image jobs are never automatically resubmitted.
+
 ## Where usage goes
 
 A request to `/v1/images/generations` or `/v1/images/edits` launches an isolated
@@ -38,7 +60,7 @@ provider fallback or image retry is performed.
 
 - Model: `gpt-image-2`; one image per request (`n=1`).
 - Non-empty prompt up to 32,000 characters.
-- Quality, size and background: `auto` only (or omit them).
+- Quality and size: `auto` only (or omit them). Background may be `auto`, `opaque`, or omitted; transparent output is not supported by this adapter.
 - Edits: one to five embedded PNG/JPEG/WebP data-URL references, up to 32 MiB each.
 - No remote/local URL fetching, masks, image batches or arbitrary output paths.
 - The helper reads only its newly generated PNG, not a model-supplied path.

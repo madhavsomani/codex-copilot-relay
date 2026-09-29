@@ -17,3 +17,10 @@ test('default effort uses a supported inexpensive level without assuming low is 
  assert.equal(defaultEffort({supportedReasoningEfforts:['high','xhigh']}),'high');
  assert.equal(defaultEffort({}),'low');
 });
+test('preferred default applies only when omitted and supported; explicit effort wins',()=>{
+ const sixSol={id:'gpt-6-sol',supportedReasoningEfforts:['none','low','medium','high','xhigh']};
+ assert.equal(defaultEffort(sixSol,'xhigh'),'xhigh');
+ assert.deepEqual(routeEffort(null,sixSol,'xhigh'),{effort:'xhigh',capped:false});
+ assert.deepEqual(routeEffort('low',sixSol,'xhigh'),{effort:'low',capped:false});
+ assert.equal(defaultEffort({supportedReasoningEfforts:['low','high']},'xhigh'),'low');
+});

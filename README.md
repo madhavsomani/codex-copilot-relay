@@ -78,10 +78,10 @@ SDK.
   begins with this release; older costs are not guessed or backfilled. The table
   distinguishes relay responses, SDK **model steps**, tokens, and SDK AI credits.
 
-The relay and generated catalog default omitted effort to low where supported.
-A user's top-level `model_reasoning_effort` in Codex overrides that default: set it
-to `"low"` for future routine tasks. Explicit task efforts and existing sessions
-remain unchanged. The standard 400k context / 272k effective input budget,
+The relay defaults to GPT-6 Sol at `xhigh` (Extra High) when effort is omitted.
+Explicit task model and effort choices remain unchanged, including child agents.
+Set top-level `model = "gpt-6-sol"` and `model_reasoning_effort = "xhigh"`
+in Codex for the same default. The standard 400k context / 272k effective input budget,
 compaction, native Codex images, authentication and Remote boundaries are preserved.
 
 ### Compact dashboard layout (1.3.35)
@@ -174,7 +174,7 @@ node node_modules/@github/copilot/npm-loader.js login
 node probe-setup-auth.mjs
 
 Set-ExecutionPolicy -Scope Process Bypass
-.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-6-astra
+.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-6-sol
 ```
 
 Reopen the Codex task after the provider switch, then visit
@@ -587,7 +587,7 @@ when you do not want the Windows watchdog, use this manual flow.
 3. Start the relay and keep that terminal open:
 
    ```bash
-   BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-5.6-sol node server.mjs
+    BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-6-sol node server.mjs
    ```
 
    To make Astra the compatibility target even when an existing Codex thread
@@ -606,7 +606,8 @@ when you do not want the Windows watchdog, use this manual flow.
    `~/.codex/config.toml`, then add the provider block once:
 
    ```toml
-   model = "gpt-5.6-sol"
+    model = "gpt-6-sol"
+    model_reasoning_effort = "xhigh"
    model_provider = "github_copilot_bridge"
 
    [model_providers.github_copilot_bridge]

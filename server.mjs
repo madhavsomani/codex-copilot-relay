@@ -80,7 +80,7 @@ const relayVersion = (() => {
 })();
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
 const efficiencyPolicy = checkpointPolicy(process.env);
-const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-6-astra";
+const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-6-sol";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
 const modelRoutingPolicy = createModelRoutingPolicy({
   mode: process.env.BRIDGE_MODEL_ROUTING_MODE ?? MODEL_ROUTING_PER_REQUEST,
@@ -1159,6 +1159,7 @@ if (!availableModelIds.has(requestedDefaultModel)) {
   throw new Error(`The authenticated GitHub Copilot account does not expose ${requestedDefaultModel}.`);
 }
 const defaultModel = requestedDefaultModel;
+const preferredDefaultEffort = defaultModel === "gpt-6-sol" ? "xhigh" : null;
 const defaultModelCompatibility = resolveModelCompatibility(modelsById.get(defaultModel));
 const availableOpenAiModels = [...availableModelIds]
   .filter((model) => model.startsWith("gpt-"))
@@ -1265,8 +1266,10 @@ function resolveRelayRequest(body) {
   const modelRouting = resolveRouting(body?.model, requestCompatibility.reasoningEffort);
   const model = modelRouting.selectedModel;
   const modelCompatibility = resolveModelCompatibility(modelsById.get(model));
-  const effort = routeEffort(modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT
-    ? modelRouting.reasoningEffort : body.reasoning?.effort, modelsById.get(model));
+  const requestedEffort = modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT
+    ? modelRouting.reasoningEffort : body.reasoning?.effort;
+  const effort = routeEffort(requestedEffort, modelsById.get(model),
+    model === defaultModel ? preferredDefaultEffort : null);
   modelRouting.requestedReasoningEffort = body.reasoning?.effort ?? null;
   modelRouting.reasoningEffort = effort.effort;
   modelRouting.reasoningCapped = effort.capped;
@@ -1540,13 +1543,13 @@ const server = http.createServer(async (request, response) => {
       lastCodexRequestAt,
       model: defaultModel,
       models: availableOpenAiModels,
-      nativeTools: {enabled:false, searchEnabled:false, imageEnabled:nativeToolsConfig.imageEnabled === true, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null},
+      nativeTools: {enabled:false, searchEnabled:false, imageEnabled:nativeToolsConfig.imageEnabled === true, backend:'openai-codex', billing:'Separate OpenAI/ChatGPT usage; excluded from Copilot credits', activeJobs:nativeJobs.size, error:nativeToolsConfig.error ?? null, executableSource:nativeToolsConfig.executableSource ?? null, codexVersion:nativeToolsConfig.codexVersion ?? null},
       openaiFallback: openaiFallback.health(),
       providerPolicy:{automaticFallback:false,defaultProvider:'github-copilot-sdk',openAiQuotaBlocksCopilot:false},
       modelCapabilities: Object.fromEntries(availableOpenAiModels.map(id => [id, {
         ...resolveModelCompatibility(modelsById.get(id)),
         supportedReasoningEfforts: modelsById.get(id)?.supportedReasoningEfforts ?? [],
-        defaultReasoningEffort: defaultEffort(modelsById.get(id)),
+         defaultReasoningEffort: defaultEffort(modelsById.get(id), id === defaultModel ? preferredDefaultEffort : null),
       }])),
       activeExchanges: exchanges.size + nativeJobs.size + openaiFallback.jobs.size,
       exchangeStates: ownership.snapshot(),
@@ -1561,7 +1564,7 @@ const server = http.createServer(async (request, response) => {
       compatibility: {
         contextTier: defaultModelCompatibility.contextTier,
         supportedReasoningEfforts: modelsById.get(defaultModel)?.supportedReasoningEfforts ?? [],
-        defaultReasoningEffort: defaultEffort(modelsById.get(defaultModel)),
+         defaultReasoningEffort: defaultEffort(modelsById.get(defaultModel), preferredDefaultEffort),
         maxPromptTokens: defaultModelCompatibility.maxPromptTokens,
         maxOutputTokens: defaultModelCompatibility.maxOutputTokens,
         maxContextWindowTokens: defaultModelCompatibility.maxContextWindowTokens,

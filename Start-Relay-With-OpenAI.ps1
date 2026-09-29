@@ -5,7 +5,7 @@ param(
     [string]$OpenAIModel,
     [ValidateRange(1024,65535)][int]$Port = 4144,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')]
-    [string]$CopilotModel = 'gpt-6-astra'
+    [string]$CopilotModel = 'gpt-6-sol'
 )
 $ErrorActionPreference = 'Stop'
 $running = $null

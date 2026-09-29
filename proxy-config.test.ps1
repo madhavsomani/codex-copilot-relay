@@ -282,6 +282,26 @@ try {
     Restore-CodexCopilotConfig -ConfigPath $contextPath -State $multiState | Out-Null
     if ([IO.File]::ReadAllText($contextPath) -notmatch 'model_context_window = 272000') { throw 'Rollback lost original context override.' }
 
+    $sixSolCapabilities = [pscustomobject]@{maxContextWindowTokens=400000;maxPromptTokens=272000;supportedReasoningEfforts=@('none','low','medium','high','xhigh');defaultReasoningEffort='xhigh';maxImageAttachments=1}
+    $sixSolHealth = [pscustomobject]@{ok=$true;model='gpt-6-sol';models=@('gpt-6-sol','gpt-5.6-sol');routing=[pscustomobject]@{mode='per-request'};compatibility=$sixSolCapabilities;modelCapabilities=[pscustomobject]@{
+        'gpt-6-sol'=$sixSolCapabilities
+        'gpt-5.6-sol'=$multiHealth.modelCapabilities.'gpt-5.6-sol'
+    }}
+    $deferredHealth = [pscustomobject]@{ok=$true;model='gpt-6-astra';compatibility=$astraHealth.compatibility;models=$sixSolHealth.models;routing=$sixSolHealth.routing;modelCapabilities=$sixSolHealth.modelCapabilities}
+    $targetHealth = Select-CodexCopilotModelHealth -Health $deferredHealth -Model 'gpt-6-sol'
+    if ($null -ne (Select-CodexCopilotModelHealth -Health ([pscustomobject]@{ok=$true;model='gpt-6-astra'}) -Model 'gpt-6-sol')) {
+        throw 'Unknown target capability should not be selected.'
+    }
+    if ($targetHealth.model -ne 'gpt-6-sol' -or (Get-CodexCopilotContextSettings -Health $targetHealth -Model 'gpt-6-sol').Count -eq 0) {
+        throw 'Deferred model change lost the target model context metadata.'
+    }
+    $sixSolCatalogPath = New-CodexCopilotModelCatalog -Health $targetHealth -Model 'gpt-6-sol' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
+    $sixSolCatalog = Get-Content -LiteralPath $sixSolCatalogPath -Raw | ConvertFrom-Json
+    if (($sixSolCatalog.models | Where-Object slug -eq 'gpt-6-sol').default_reasoning_level -ne 'xhigh' -or
+        ($sixSolCatalog.models | Where-Object slug -eq 'gpt-5.6-sol').default_reasoning_level -ne 'low') {
+        throw 'GPT-6 Sol should default to Extra High without changing another model default.'
+    }
+
     # Legacy native-tool opt-in cannot re-enable removed search; rollback preserves the prior value.
     $nativeHealth = [pscustomobject]@{ok=$true;model='gpt-6-astra';compatibility=$astraHealth.compatibility;nativeTools=[pscustomobject]@{enabled=$true}}
     [IO.File]::WriteAllLines($contextPath,@('model = "gpt-6-astra"','web_search = "cached"'))
