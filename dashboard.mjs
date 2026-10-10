@@ -412,6 +412,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </div>
     </details>
     ${CLAUDE_HTML}
+    <p class="tiny">Codex analytics below · Claude Code has separate outcomes, usage and request history above. The live fabric shows both clients.</p>
     ${TRENDS_HTML}
     ${TASKS_HTML}
     <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
@@ -428,30 +429,33 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <div class="architecture-body">
           <div class="network-viewport">
             <div class="network-stage">
-              <svg class="traffic-map idle" id="traffic-map" viewBox="0 0 840 310" role="img" aria-labelledby="traffic-map-title traffic-map-description">
+              <svg class="traffic-map idle" id="traffic-map" viewBox="0 0 840 340" role="img" aria-labelledby="traffic-map-title traffic-map-description">
                 <title id="traffic-map-title">Live concurrent Codex and Claude Code relay signals</title>
-                <desc id="traffic-map-description">Codex and Claude Code requests share one local relay and GitHub Copilot SDK. Separate paths show each client. Model names reflect the latest event, not all concurrent calls. Codex tool handoffs are separate.</desc>
+                <desc id="traffic-map-description">Codex and Claude Code requests share one local relay and GitHub Copilot SDK. Separate paths show each client and its tool handoffs. Tools execute in the requesting app, never in the relay. Model names reflect the latest event, not all concurrent calls.</desc>
                 <defs>
                   <linearGradient id="main-route-gradient" gradientUnits="userSpaceOnUse" x1="132" y1="148" x2="717" y2="148"><stop offset="0" stop-color="#2d94ff"></stop><stop offset=".52" stop-color="#54e0d1"></stop><stop offset="1" stop-color="#a98cff"></stop></linearGradient>
                   <linearGradient id="tool-route-gradient" gradientUnits="userSpaceOnUse" x1="132" y1="148" x2="717" y2="156"><stop offset="0" stop-color="#69b7ff"></stop><stop offset=".55" stop-color="#ffd27a"></stop><stop offset="1" stop-color="#a98cff"></stop></linearGradient>
-                  <path id="route-main-journey" d="M132 148 C178 148 211 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
-                  <path id="route-tool-journey" d="M132 148 C205 148 270 148 350 160 C405 178 460 252 570 232 C620 222 650 185 717 157"></path>
-                  <path id="route-claude-journey" d="M132 258 C198 258 210 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
+                  <path id="route-main-journey" d="M132 100 C190 100 210 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
+                  <path id="route-tool-journey" d="M132 100 C190 100 210 148 250 148 C360 148 420 258 470 258 C590 258 650 185 717 157"></path>
+                  <path id="route-claude-journey" d="M132 244 C198 244 210 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
+                  <path id="route-claude-tool-journey" d="M132 244 C198 244 210 148 250 148 C360 148 420 258 470 258 C590 258 650 185 717 157"></path>
                 </defs>
                 <g aria-hidden="true">
                   <use href="#route-main-journey" class="route-line main"></use>
                   <use href="#route-tool-journey" class="route-line tool"></use>
                   <use href="#route-claude-journey" class="route-line main"></use>
+                  <use href="#route-claude-tool-journey" class="route-line tool"></use>
                 </g>
                 <g id="traffic-signals" aria-hidden="true"></g>
-                <g class="network-node" data-node="codex" transform="translate(82 148)">
+                <g class="network-node" data-node="codex" transform="translate(82 100)">
                   <rect class="node-shell" x="-48" y="-42" width="96" height="84" rx="18"></rect>
                   <g class="node-glyph"><rect x="-22" y="-19" width="35" height="30" rx="4"></rect><path d="M-13 19 H22 M22 19 V-11 H14"></path><circle cx="-31" cy="-19" r="3"></circle><circle cx="-31" cy="-7" r="3"></circle><circle cx="-31" cy="5" r="3"></circle></g>
                   <text class="network-label" y="61">Codex App</text><text class="network-meta" y="77">TASKS + CHILD AGENTS</text>
                 </g>
-                <g class="network-node" data-node="claude" transform="translate(82 258)">
-                  <rect class="node-shell" x="-48" y="-22" width="96" height="44" rx="12"></rect>
-                  <text class="network-label" y="4">Claude Code</text><text class="network-meta" y="40">/CLAUDE/V1/MESSAGES</text>
+                <g class="network-node" data-node="claude" transform="translate(82 244)">
+                  <rect class="node-shell" x="-48" y="-42" width="96" height="84" rx="18"></rect>
+                  <g class="node-glyph"><rect x="-25" y="-20" width="50" height="38" rx="5"></rect><path d="M-14 -8 L-5 0 L-14 8 M3 8 H15"></path></g>
+                  <text class="network-label" y="61">Claude Code App</text><text class="network-meta" y="77">/CLAUDE/V1/MESSAGES</text>
                 </g>
                 <g class="network-node" data-node="relay" transform="translate(300 148)">
                   <rect class="node-shell" x="-50" y="-44" width="100" height="88" rx="18"></rect>
@@ -468,10 +472,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
                   <text class="network-label" y="4">MODEL</text>
                   <text class="network-label model-live" id="network-model-name" y="62">GPT / Claude</text><text class="network-meta" y="78">LATEST EVENT · VIA COPILOT</text>
                 </g>
-                <g class="network-node" data-node="tools" transform="translate(520 232)">
+                <g class="network-node" data-node="tools" transform="translate(520 258)">
                   <rect class="node-shell" x="-48" y="-34" width="96" height="68" rx="17"></rect>
                   <g class="node-glyph"><path d="M-21 -8 H-6 L0 -17 L7 -8 H21 V14 H-21 Z"></path><path d="M-12 2 H12 M-12 10 H5"></path></g>
-                  <text class="network-label" y="53">Codex tools</text><text class="network-meta" y="69">OUTER APP EXECUTES</text>
+                  <text class="network-label" y="53">Tools</text><text class="network-meta" y="69">REQUESTING APP EXECUTES</text>
                 </g>
                 <g transform="translate(17 18)"><rect class="traffic-counter" width="165" height="25" rx="12.5"></rect><rect x="10" y="8" width="8" height="9" rx="2" fill="#69b7ff"></rect><text class="traffic-legend" id="traffic-count" x="24" y="16">idle · no calls in transit</text></g>
                 <g transform="translate(615 14)" aria-hidden="true"><rect class="stage-chip" width="205" height="25" rx="12.5"></rect><circle cx="13" cy="12.5" r="3" fill="#54e0d1"></circle><text class="stage-chip-text" x="23" y="16">REAL EVENTS · NO SIMULATED TRAFFIC</text></g>
@@ -808,7 +812,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("inspector-sdk-calls", Number.isFinite(Number(usage.sdkApiCalls)) ? number(Number(usage.sdkApiCalls)) : "pending");
       setText("inspector-latency", duration(record.latencyMs));
       setText("inspector-route", (record.requestPath || "/v1/responses") + " · " + client + " → Relay → Copilot → Model");
-      setText("inspector-tools", isClaude ? "Executed by Claude Code · not metered here" : number(record.toolCalls || 0));
+      setText("inspector-tools", isClaude ? (Number.isInteger(record.toolRequests) ? number(record.toolRequests) + " requested / " + number(record.toolResults) + " results · Claude Code executes" : "Executed by Claude Code · handoffs not recorded") : number(record.toolCalls || 0) + " · Codex executes");
       $("inspector-status").className = status === "failed" ? "live-bad" : status === "completed" ? "live-good" : "";
     }
     function launchTransitGlyph(pathId, call, options = {}) {
@@ -848,9 +852,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     function launchTrafficForEvent(event, call) {
       const modelPath = call.client === "claude-code" ? "route-claude-journey" : "route-main-journey";
+      const toolPath = call.client === "claude-code" ? "route-claude-tool-journey" : "route-tool-journey";
       if (event.type === "relay.forwarded") launchTransitGlyph(modelPath, call, { kind: "request" });
-      if (event.type === "relay.tool_requested") launchTransitGlyph("route-tool-journey", call, { kind: "tool", reverse: true, color: "#ffd27a" });
-      if (event.type === "relay.tool_resolved") launchTransitGlyph("route-tool-journey", call, { kind: "tool", color: "#ffd27a" });
+      if (event.type === "relay.tool_requested") launchTransitGlyph(toolPath, call, { kind: "tool", reverse: true, color: "#ffd27a" });
+      if (event.type === "relay.tool_resolved") launchTransitGlyph(toolPath, call, { kind: "tool", color: "#ffd27a" });
       if (event.type === "relay.completed") launchTransitGlyph(modelPath, call, { kind: "response", reverse: true, color: "#54e0d1" });
       if (event.type === "relay.failed") launchTransitGlyph(modelPath, call, { kind: "error", reverse: true, color: "#ff8398" });
     }
@@ -872,8 +877,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if (event.type === "relay.selected") { phase = "selected"; title = client + " model selected"; detail = model + " · awaiting SDK transport."; }
       if (event.type === "relay.forwarded") { phase = "forwarded"; animation = "forward"; title = "Relay forwarded context to Copilot"; detail = model + " · " + (event.phase || "request") + "."; }
       if (event.type === "relay.usage") { phase = "model response"; animation = "process"; title = "Copilot model usage received"; detail = model + " · " + number((event.usage || record.usage)?.inputTokens || 0) + " input / " + number((event.usage || record.usage)?.outputTokens || 0) + " output tokens."; }
-      if (event.type === "relay.tool_requested") { phase = "tool call"; animation = "tool-return"; title = "Tool call returned to Codex"; detail = "Codex will execute " + (event.tool || "the requested tool") + " outside the relay."; }
-      if (event.type === "relay.tool_resolved") { phase = "tool result"; animation = "tool-forward"; title = "Tool result sent back through relay"; detail = event.failed ? "The outer tool reported a failure." : "Copilot can continue the same SDK session."; }
+      if (event.type === "relay.tool_requested") { phase = "tool call"; animation = "tool-return"; title = "Tool call returned to " + client; detail = client + " will execute " + (event.tool || "the requested tool") + " outside the relay."; }
+      if (event.type === "relay.tool_resolved") { phase = "tool result"; animation = "tool-forward"; title = "Tool result received by relay"; detail = event.failed ? "The outer tool reported a failure." : "Client result handed off for Copilot continuation; not an execution-success attestation."; }
       if (event.type === "relay.completed") { phase = "completed"; animation = "response"; title = "Response completed back in " + client; detail = model + " · " + duration(record.latencyMs) + " end-to-end."; }
       if (event.type === "relay.failed") { phase = "failed"; animation = "failed"; title = "Relay call failed"; detail = model + " · inspect the sanitized call record for details."; }
       const call = ensureLiveCall(id, model, phase, record.client || "codex");

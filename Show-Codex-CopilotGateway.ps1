@@ -17,7 +17,19 @@ $mutex = [Threading.Mutex]::new($false, "Local\CodexCopilotGatewayConsole_$Port"
 $ownsMutex = $false
 . (Join-Path $bridgeRoot 'Codex-Copilot-Config.ps1')
 . (Join-Path $bridgeRoot 'Relay-Control.ps1')
+. (Join-Path $bridgeRoot 'Relay-Setup.ps1')
 $commandBuffer = ''
+
+function Write-GatewaySetup {
+    $health=$null; $configured=$false
+    try { $health=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 3 } catch {}
+    try {
+        $text=[IO.File]::ReadAllText((Get-CodexCopilotConfigPath))
+        $configured=$text -match '(?m)^model_provider\s*=\s*"github_copilot_bridge"\s*$' -and
+            $text.Contains('base_url = "http://127.0.0.1:'+$Port+'/v1"')
+    } catch {} finally { $text=$null }
+    Write-Host (Get-RelaySetupInstructions -Port $Port -Health $health -CodexConfigured $configured)
+}
 
 function Read-GatewayCommand {
     try {
@@ -26,12 +38,21 @@ function Read-GatewayCommand {
             if ($key.Key -eq [ConsoleKey]::Enter) {
                 $command=$script:commandBuffer.Trim().ToLowerInvariant();$script:commandBuffer=''
                 switch ($command) {
-                    'key' { Write-Host 'Local Claude Gateway key (not an account credential):' -ForegroundColor Yellow; Write-Host (Get-RelayLocalKey -Root $bridgeRoot) }
+                    'key' {
+                        if ([Console]::IsOutputRedirected -or [Console]::IsInputRedirected) { Write-Host 'Key reveal requires the interactive local relay terminal.' }
+                        else { Write-Host 'Local Claude Gateway key (private; not an account credential):' -ForegroundColor Yellow; Write-Host (Get-RelayLocalKey -Root $bridgeRoot) }
+                    }
+                    'setup' { Write-GatewaySetup }
+                    'models' {
+                        $health=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 3
+                        Write-Host ('Claude models from live SDK: '+(@($health.claude.models | Where-Object { $_ -match '^claude-[\w.-]{1,90}$' }) -join ', '))
+                        Write-Host 'Choose one in Claude Code. This command does not change either client.'
+                    }
                     'status' {
                         $health=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 3
                         Write-Host "v$($health.version) | Codex=$($health.ok) | Claude=$($health.claude.sdkState) | active=$($health.activeExchanges)"
                     }
-                    default { Write-Host 'Commands: key, status. To stop both adapters use Stop & Restore on the desktop.' }
+                    default { Write-Host 'Commands: setup, models, key, status. To stop both adapters use Stop & Restore on the desktop.' }
                 }
             }
             elseif ($key.Key -eq [ConsoleKey]::Backspace) { if ($script:commandBuffer.Length) { $script:commandBuffer=$script:commandBuffer.Substring(0,$script:commandBuffer.Length-1) } }
@@ -48,11 +69,12 @@ function Write-GatewayEvent {
     }
     try {
         $event = $Line | ConvertFrom-Json
-        if ([string]$event.type -match '^claude\.(received|selected|usage|completed|failed|rejected)$') {
+        if ([string]$event.type -match '^claude\.(received|selected|forwarded|tool_requested|tool_resolved|usage|completed|failed|rejected)$') {
             $safeModel={param($value) if ([string]$value -match '^[\w.-]{1,100}$') { [string]$value } else { 'unreported' }}
             $requested=& $safeModel $event.requestedModel; $selected=& $safeModel $event.selectedModel
             $usage=if ($event.type -eq 'claude.usage') { " input=$($event.inputTokens) output=$($event.outputTokens) AI-credits=$($event.aiCredits)" } else { '' }
-            Write-Host "[Claude Code] $($event.type.Substring(7)) $requested -> $selected$usage" -ForegroundColor Cyan
+            $requestId=if ([string]$event.requestId -match '^req_[a-f0-9-]{36}$') { ' id='+$event.requestId } else { '' }
+            Write-Host "[Claude Code] $($event.type.Substring(7)) $requested -> $selected$usage$requestId" -ForegroundColor Cyan
             return
         }
         $time = try {
@@ -72,18 +94,18 @@ function Write-GatewayEvent {
                 Write-Host "$time  [Codex] CALL START  model=$($event.model) tools=$($event.toolCount) id=$($event.responseId)" -ForegroundColor Cyan
             }
             'request.continued' {
-                Write-Host "$time  CALL RESUME toolOutputs=$($event.toolOutputs) id=$($event.responseId)" -ForegroundColor Cyan
+                Write-Host "$time  [Codex] CALL RESUME toolOutputs=$($event.toolOutputs) id=$($event.responseId)" -ForegroundColor Cyan
             }
             'response.completed' {
                 $detail = if ($event.kind -eq 'tool_calls') { "toolCalls=$($event.count)" } else { "model=$($event.model)" }
-                Write-Host "$time  COMPLETE    kind=$($event.kind) $detail id=$($event.responseId)" -ForegroundColor Green
+                Write-Host "$time  [Codex] COMPLETE    kind=$($event.kind) $detail id=$($event.responseId)" -ForegroundColor Green
             }
             'tool.requested' {
                 $toolName = if ($event.namespace) { "$($event.namespace).$($event.name)" } else { [string]$event.name }
-                Write-Host "$time  TOOL ASK    $toolName id=$($event.callId)" -ForegroundColor Magenta
+                Write-Host "$time  [Codex] TOOL ASK    $toolName id=$($event.callId)" -ForegroundColor Magenta
             }
             'tool.resolved' {
-                Write-Host "$time  TOOL DONE   failed=$($event.failed) id=$($event.callId)" -ForegroundColor Magenta
+                Write-Host "$time  [Codex] TOOL DONE   failed=$($event.failed) id=$($event.callId)" -ForegroundColor Magenta
             }
             'blank_completion.detected' {
                 Write-Host "$time  BLANK SEEN  model=$($event.model) id=$($event.responseId)" -ForegroundColor Yellow
@@ -145,23 +167,13 @@ try {
     } | ConvertTo-Json | Set-Content -LiteralPath $consoleStatePath -Encoding utf8
     try { $Host.UI.RawUI.WindowTitle = "Copilot Relay - Codex + Claude - Port $Port" } catch {}
     Clear-Host
-    Write-Host 'CODEX + CLAUDE CODE -> GITHUB COPILOT' -ForegroundColor Cyan
-    Write-Host "Healthy endpoint : http://127.0.0.1:$Port/health"
-    Write-Host "Dashboard        : http://127.0.0.1:$Port/dashboard"
-    Write-Host "Model            : $Model"
-    Write-Host "Claude base URL  : http://127.0.0.1:$Port/claude"
-    Write-Host "Connection setup : http://127.0.0.1:$Port/dashboard/setup"
-    Write-Host ''
-    Write-Host 'This window shows live bridge, model, and tool-call events.'
-    Write-Host 'Closing this window is temporary: the watchdog will reopen it.' -ForegroundColor Yellow
-    Write-Host 'To stop and restore normal Codex, use Stop & Restore on the desktop.' -ForegroundColor Yellow
-    Write-Host 'A per-user recovery watchdog keeps this window and the relay alive; it is not a Windows service.'
-    Write-Host 'Type key then Enter for the persistent local Claude key, or status then Enter. Typed commands are not echoed.'
+    Write-GatewaySetup
     Write-Host ''
 
     $snapshot = Get-GatewaySnapshot
     if ($snapshot) {
-        Write-Host "Current totals   : received=$($snapshot.summary.received) completed=$($snapshot.summary.completed) failed=$($snapshot.summary.failed) active=$($snapshot.summary.active) tools=$($snapshot.summary.toolCalls)"
+        Write-Host "[Codex] received=$($snapshot.summary.received) completed=$($snapshot.summary.completed) failed=$($snapshot.summary.failed)"
+        if ($snapshot.claude) { Write-Host "[Claude Code] received=$($snapshot.claude.received) completed=$($snapshot.claude.completed) failed=$($snapshot.claude.failed)" }
     }
     else {
         Write-Host 'Bridge is still recovering; live events will appear when it is ready.' -ForegroundColor Yellow
@@ -171,9 +183,7 @@ try {
 
     [long]$offset = 0
     if (Test-Path -LiteralPath $stdoutLog -PathType Leaf) {
-        foreach ($line in @(Get-Content -LiteralPath $stdoutLog -Tail 15 -ErrorAction SilentlyContinue)) {
-            Write-GatewayEvent -Line ([string]$line)
-        }
+        # Do not bury first-run instructions under old replayed events.
         $offset = (Get-Item -LiteralPath $stdoutLog).Length
     }
 

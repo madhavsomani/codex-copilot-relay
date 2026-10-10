@@ -25,7 +25,9 @@ dependencies remain in the checkout; the EXE alone is not a portable install.
 
 1. Double-click **Start Relay**. It repairs/stages the local service and opens
    the original dashboard at <http://127.0.0.1:4144/dashboard>. A single live
-   terminal labels Codex and Claude requests. `status` shows actual readiness.
+   terminal opens with setup instructions and labels Codex and Claude requests.
+   `setup` repeats the guide, `models` lists the live Claude choices, `status`
+   shows actual readiness, and `key` explicitly reveals the persistent local key.
    Repeated Start does not create another server or event terminal. If work is
    active, promotion waits for its continuations to finish.
 2. Codex uses `http://127.0.0.1:4144/v1`, default `gpt-6.1-sol` / `xhigh`.
@@ -55,7 +57,9 @@ not kill unrelated Node/PowerShell processes, erase history, or disable accounts
 
 All source stays in the checkout. `Install-RelayDesktopControls.ps1` creates only
 the two controls, archiving narrowly recognized legacy relay controls under
-Desktop/Copilot Relay Backups. Other shortcuts and screenshots are untouched.
+`runtime/desktop-backups/` inside this same folder. Other shortcuts and
+screenshots are untouched. Archived historical backups are not active launchers;
+old rollback scripts can contain obsolete paths and need review before use.
 The isolated `node launch.mjs gateway` mode remains for developers; it is not
 the desktop Start path and is not silently adopted. Historical preview ledgers
 remain labelled separately rather than merged into lifetime mileage.
@@ -63,3 +67,24 @@ remain labelled separately rather than merged into lifetime mileage.
 Native OpenAI images/account services retain their existing paths and billing.
 This does not add voice support, bypass approvals, promise provider endorsement,
 or certify hours-long/phone/GUI operation from local regression tests.
+
+## What is on your desktop
+
+```text
+Desktop/
+  Codex Copilot Bridge/        one installation: EXE, source, docs, runtime, backups
+  Start Relay.lnk              Copilot-Relay.exe start
+  Stop & Restore.lnk           Copilot-Relay.exe stop
+```
+
+Codex's real `config.toml` stays in `CODEX_HOME`, or the current user's `.codex`
+folder when that variable is unset. Only its protected backup lives here.
+Claude's app and saved third-party profile stay in Claude's own storage.
+The executable needs the rest of the folder; it is not a self-contained bundle.
+
+The dashboard's fabric shows both client branches and a shared **Tools** node.
+Tool requests/results are handed back to their originating app. Claude's new
+handoff counts are metadata, not execution-success or billing measurements;
+older rows without counters stay unknown. Claude's measured tokens/credits and
+request history are separate from the labelled Codex analytics. No fabricated
+combined lifetime history, fallback, or paid test traffic is added.

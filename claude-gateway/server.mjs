@@ -152,6 +152,7 @@ class Turn {
     else for(const id of this.expectedCalls)this.sink.tool(this.pending.get(toolId(id)).item);
     this.expectedHistory=[...this.body.messages,{role:'assistant',content:this.sink.blocks}];
     this.upstreamHistory=[...this.nativeMessages,{role:'assistant',content:structuredClone(this.sink.blocks)}];
+    for(const _ of this.expectedCalls)this.gateway.ledger.toolSignal(this.row,'tool_requested');
     this.complete('tool_use');this.arm(this.gateway.toolTimeoutMs);
   }
   complete(reason) {
@@ -178,6 +179,7 @@ class Turn {
         if(this.done)return;
         if(packed.note)text+='\n'+packed.note;
         this.pending.delete(result.tool_use_id);this.gateway.byTool.delete(toolKey(this.owner,result.tool_use_id));
+        this.gateway.ledger.toolSignal(this.row,'tool_resolved');
         await this.session.rpc.tools.handlePendingToolCall({requestId:call.requestId,result:{
           textResultForLlm:text,resultType:result.is_error?'failure':'success',
           ...(packed.attachments.length?{binaryResultsForLlm:packed.attachments.map(image=>({type:'image',
@@ -311,6 +313,7 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
       if(rebuilding){await rebuilding.dispose();rebuilding=null;assertOpen();}
       detachAdmission();
       turn.attach(body,response,row,nativeMessages);
+      if(row.continuationMode==='rebuilt')for(const _ of results)ledger.toolSignal(row,'tool_resolved');
       void session.send({prompt:input.prompt,attachments:packed.attachments}).catch(error=>turn.fail(error));
     }catch(error){
       if(rebuilding)rebuilding.rebuilding=false;

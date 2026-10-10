@@ -1,14 +1,16 @@
 export const CONNECTION_STYLE = `
-.connection-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 18px}
+.connection-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 18px}
 .connection-card{display:block;border:1px solid #263958;border-radius:12px;padding:15px 17px;color:#eef5ff;background:#111a2d;text-decoration:none;min-width:0}
 .connection-card:hover{border-color:#69b7ff}.connection-card strong{display:block;font-size:17px;margin:6px 0;overflow-wrap:anywhere}.connection-card small{color:#91a5c4;display:block;line-height:1.6}
 .connection-card[data-state=good]{border-left:3px solid #6ddd9a}.connection-card[data-state=warn]{border-left:3px solid #ffd27a}.connection-card[data-state=error]{border-left:3px solid #ff8398}
 @media(max-width:760px){.connection-grid{grid-template-columns:1fr}}
+@media(min-width:761px) and (max-width:1100px){.connection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `;
 export const CONNECTION_HTML = `
 <section class="connection-grid" aria-label="Connections">
 <a class="connection-card" id="connection-copilot" href="/dashboard/setup#copilot"><small>GITHUB COPILOT</small><strong id="copilot-connection-label">Checking sign-in…</strong><small id="copilot-connection-detail">SDK authentication and model access · details →</small></a>
 <a class="connection-card" id="connection-codex" href="/dashboard/setup#codex"><small>CODEX</small><strong id="codex-connection-label">Checking configuration…</strong><small id="codex-connection-detail">Configuration and observed traffic · details →</small></a>
+<a class="connection-card" id="connection-claude" href="/dashboard/setup#claude"><small>CLAUDE CODE</small><strong id="claude-card-label">Checking gateway…</strong><small id="claude-card-detail">Gateway readiness and observed requests · details →</small></a>
 <a class="connection-card" id="connection-restore" href="/dashboard/setup#restore"><small>RESTORE & SETUP</small><strong id="restore-connection-label">Checking backup…</strong><small id="connection-checked">Unmodified Codex · reversible provider configuration</small></a>
 </section>`;
 export const CONNECTION_SCRIPT = `
@@ -20,17 +22,19 @@ async function check(){if(inFlight)return;inFlight=true;try{
 const response=await fetch('/dashboard/setup/status',{cache:'no-store'});if(!response.ok)throw new Error();const data=await response.json();
 text('copilot-connection-label',labels[data.states.copilot]||'Unknown');
 text('codex-connection-label',labels[data.states.codex]||'Unknown');
+text('claude-card-label',({'traffic-observed':'Recent Claude requests',listening:'Gateway ready · awaiting traffic','worker-unavailable':'SDK unavailable','not-attached':'Gateway not attached','not-found':'App not found'})[data.states.claude]||'Status unavailable');
+text('claude-card-detail',data.claude?.gateway?.listening?'One-time Gateway setup in Claude · verify an app reply →':'Start Relay, then follow Claude setup →');
 text('copilot-connection-detail',data.dependencies?(data.copilot.models||[]).length+' available GPT models · inspect setup →':'Install dependencies using the setup guide →');
 text('codex-connection-detail',data.states.lastSeenAt?'Last request '+new Date(data.states.lastSeenAt).toLocaleTimeString()+' · observed, not a persistent connection':'Reopen a Codex task and send a prompt to verify routing →');
 text('restore-connection-label',({verified:'Original config protected',invalid:'Backup needs attention','not-created':'Ready for first setup'})[data.installation.backup]||'Backup not verified');
 text('connection-checked','Checked '+new Date(data.sampledAt).toLocaleTimeString()+' · status cache up to 30 seconds');
-for(const name of ['copilot','codex']){const node=document.getElementById('connection-'+name);if(node)node.dataset.state=['ready','traffic-observed'].includes(data.states[name])?'good':'warn';}
+for(const name of ['copilot','codex','claude']){const node=document.getElementById('connection-'+name);if(node)node.dataset.state=['ready','traffic-observed','listening'].includes(data.states[name])?'good':'warn';}
 const restore=document.getElementById('connection-restore');if(restore)restore.dataset.state=data.installation.backup==='verified'?'good':data.installation.backup==='invalid'?'error':'warn';
 text('setup-relay-state',data.relay?.ok?'Relay running · v'+data.relay.version+' · '+data.relay.model:'Relay is not ready yet. Follow the steps below.');
 text('setup-models',(data.copilot.models||[]).join(', ')||'Models appear after sign-in.');
 text('setup-config-state',data.installation.customHome?'Using your CODEX_HOME override.':'Using the current user’s .codex directory.');
 document.dispatchEvent(new CustomEvent('relay-setup-status',{detail:data}));
-}catch{text('copilot-connection-label','Status unavailable');text('codex-connection-label','Status unavailable');text('connection-checked','Run npm run setup to open diagnostics.');document.dispatchEvent(new CustomEvent('relay-setup-status',{detail:null}));}finally{inFlight=false;}}
+}catch{text('copilot-connection-label','Status unavailable');text('codex-connection-label','Status unavailable');text('claude-card-label','Status unavailable');text('connection-checked','Run npm run setup to open diagnostics.');document.dispatchEvent(new CustomEvent('relay-setup-status',{detail:null}));}finally{inFlight=false;}}
 check();setInterval(()=>{if(!document.hidden)check();},5000);
 })();`;
 

@@ -13,6 +13,8 @@ export function gatewayRequestVisibility(row){return {
   id:typeof row.id==='string'&&/^req_[a-f0-9-]{36}$/.test(row.id)?row.id:null,at:stamp(row.at),
   durationMs:Number.isFinite(row.durationMs)&&row.durationMs>=0?row.durationMs:null,
   status:['active','completed','failed','rejected','interrupted'].includes(row.status)?row.status:'unknown',
+  toolRequests:Number.isInteger(row.toolRequests)&&row.toolRequests>=0?row.toolRequests:null,
+  toolResults:Number.isInteger(row.toolResults)&&row.toolResults>=0?row.toolResults:null,
   requestedModel:model(row.requestedModel),selectedModel:model(row.selectedModel),
   actualModels:(row.actualModels??[]).slice(0,16).map(model).filter(Boolean),
   continuationMode:row.continuationMode==='rebuilt'?'rebuilt':null,
@@ -21,13 +23,14 @@ export function gatewayRequestVisibility(row){return {
   ...credits(usage(row))};}
 
 export function gatewayDashboardEvent(type,row){
-  const phases={received:'received',selected:'selected',forwarded:'forwarded',usage:'usage',completed:'completed',failed:'failed',rejected:'failed',interrupted:'failed'};
+  const phases={received:'received',selected:'selected',forwarded:'forwarded',tool_requested:'tool_requested',tool_resolved:'tool_resolved',usage:'usage',completed:'completed',failed:'failed',rejected:'failed',interrupted:'failed'};
   if(!phases[type])return null;
   const view=gatewayRequestVisibility(row);if(!view.id)return null;
   return {type:'relay.'+phases[type],at:new Date().toISOString(),record:{
     id:view.id,client:'claude-code',provider:'github-copilot-sdk',requestPath:'/claude/v1/messages',
     receivedAt:view.at,status:view.status,requestedModel:view.requestedModel,selectedModel:view.selectedModel,
     latencyMs:view.durationMs,httpStatus:view.httpStatus,continuationMode:view.continuationMode,
+    toolRequests:view.toolRequests,toolResults:view.toolResults,
     usage:{metered:view.sdkApiCalls>0,sdkApiCalls:view.sdkApiCalls,
       inputTokens:view.sdkApiCalls?view.inputTokens:null,outputTokens:view.sdkApiCalls?view.outputTokens:null,
       totalNanoAiu:view.creditReportedCalls?view.totalNanoAiu:null,creditMeteredApiCalls:view.creditReportedCalls,

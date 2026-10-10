@@ -61,6 +61,8 @@ test('setup status works before npm install, then detects installation without f
 
 test('connection UI has valid script, no remote dependencies or claimed automatic installation',()=>{
   new vm.Script(CONNECTION_SCRIPT);
+  assert.match(SETUP_HTML,/id="connection-claude"/);
+  assert.match(CONNECTION_SCRIPT,/Gateway ready · awaiting traffic/);
   assert.ok(SETUP_HTML.includes('-File .\\Repair-Codex-CopilotProxy.ps1'));
   assert.ok(!SETUP_HTML.includes('-File .Repair-Codex-CopilotProxy.ps1'));
   assert.match(SETUP_HTML,/not a one-click installer/);

@@ -371,6 +371,7 @@ test('Claude legitimate setting changes rebuild complete owned continuations wit
     assert.equal(f.sessions[0].aborted,true);assert.deepEqual(f.sessions[0].results,[]);
     assert.deepEqual(bound.at(-1).messages,next.messages);assert.equal(f.gateway.byTool.size,0);
     assert.equal(f.gateway.ledger.state.recent.at(-1).continuationMode,'rebuilt');
+    assert.equal(f.gateway.ledger.state.recent.at(-1).toolResults,1);
     assert.ok(!JSON.stringify(f.gateway.ledger.state).includes('ALREADY_EXECUTED'));
   }
 });
@@ -446,6 +447,7 @@ test('Claude two parallel client tools resume one SDK session, ownership mismatc
   assert.equal(f.gateway.ledger.state.completed,2);assert.ok(f.sessions[0].released);
   assert.equal(f.gateway.ledger.state.received,3);assert.equal(f.gateway.ledger.state.failed,1);
   assert.deepEqual(f.gateway.ledger.state.recent.map(row=>row.status),['completed','rejected','completed']);
+  assert.deepEqual(f.gateway.ledger.state.recent.map(row=>[row.toolRequests,row.toolResults]),[[2,0],[0,0],[0,2]]);
 });
 test('Claude SDK silent timeout terminates with a streamed error and releases the session',async t=>{
   const f=await fixture(t,()=>{},{modelTimeoutMs:25,heartbeatMs:5});const response=await f.call(request({stream:true}));

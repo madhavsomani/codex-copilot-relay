@@ -49,4 +49,27 @@ test('Control Room preserves Codex history and adds a bounded Claude branch, cli
   assert.match(DASHBOARD_HTML,/Codex metrics below/);
   assert.match(DASHBOARD_HTML,/slice\(0, 20\)/);
   assert.doesNotMatch(DASHBOARD_HTML,/<script\s+src=/i);
+  assert.match(DASHBOARD_HTML,/Claude Code App/);
+  assert.match(DASHBOARD_HTML,/id="route-claude-tool-journey"/);
+  assert.match(DASHBOARD_HTML,/>Tools<\/text>/);
+  assert.doesNotMatch(DASHBOARD_HTML,/>Codex tools<\/text>/);
+  assert.match(DASHBOARD_HTML,/launchTransitGlyph\(toolPath/);
+  assert.match(DASHBOARD_HTML,/title = "Tool call returned to " \+ client/);
+});
+
+test('Claude tool handoffs are client-scoped metadata and do not invent historical counts',async()=>{
+  const gateway=fixture(),events=[];
+  const mount=await mountClaudeGateway({start:async()=>gateway});mount.subscribe(e=>events.push(e));
+  const row=gateway.ledger.start({model:'claude-opus-5-5'},{},selected);
+  row.privateToolArguments='PRIVATE_TOOL_DATA';
+  gateway.ledger.toolSignal(row,'tool_requested');gateway.ledger.toolSignal(row,'tool_resolved');
+  gateway.ledger.finish(row,'completed');gateway.ledger.toolSignal(row,'tool_requested');
+  assert.deepEqual(events.map(e=>e.type),['relay.received','relay.tool_requested','relay.tool_resolved','relay.completed']);
+  assert.equal(events.at(-1).record.toolRequests,1);assert.equal(events.at(-1).record.toolResults,1);
+  assert.doesNotMatch(JSON.stringify(events),/PRIVATE_TOOL_DATA/);
+  delete row.toolRequests;delete row.toolResults;
+  assert.equal(gatewayVisibility(gateway).recent[0].toolRequests,null);
+  const pending=gateway.ledger.start({}, {},null);
+  gateway.ledger.onChange=()=>{throw new Error('observer down');};
+  assert.doesNotThrow(()=>gateway.ledger.toolSignal(pending,'tool_requested'));
 });

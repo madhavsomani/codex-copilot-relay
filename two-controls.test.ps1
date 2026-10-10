@@ -51,10 +51,12 @@ try {
     $link.Arguments='-NoProfile -File "'+(Join-Path $PSScriptRoot 'Repair-Codex-CopilotProxy.ps1')+'"';$link.Save()
     [IO.File]::WriteAllText((Join-Path $desktop 'unrelated-screenshot.txt'),'untouched')
     $hash=(Get-FileHash -LiteralPath $old).Hash
-    & (Join-Path $PSScriptRoot 'Install-RelayDesktopControls.ps1') -Desktop $desktop | Out-Null
-    & (Join-Path $PSScriptRoot 'Install-RelayDesktopControls.ps1') -Desktop $desktop | Out-Null
+    $archiveRoot=Join-Path $testRoot 'relay\runtime\desktop-backups'
+    & (Join-Path $PSScriptRoot 'Install-RelayDesktopControls.ps1') -Desktop $desktop -ArchiveDirectory $archiveRoot | Out-Null
+    & (Join-Path $PSScriptRoot 'Install-RelayDesktopControls.ps1') -Desktop $desktop -ArchiveDirectory $archiveRoot | Out-Null
     Assert (@(Get-ChildItem -LiteralPath $desktop -File -Filter '*.lnk').Count -eq 2) 'Expected exactly two controls after repeated installation.'
-    $archived=@(Get-ChildItem -LiteralPath (Join-Path $desktop 'Copilot Relay Backups') -File -Recurse -Filter '*.lnk')
+    $archived=@(Get-ChildItem -LiteralPath $archiveRoot -File -Recurse -Filter '*.lnk')
+    Assert (-not (Test-Path -LiteralPath (Join-Path $desktop 'Copilot Relay Backups'))) 'Archive clutter reappeared on the desktop.'
     Assert ($archived.Count -eq 1 -and (Get-FileHash -LiteralPath $archived[0].FullName).Hash -eq $hash) 'Old control was not archived byte-for-byte.'
     Assert ([IO.File]::ReadAllText((Join-Path $desktop 'unrelated-screenshot.txt')) -ceq 'untouched') 'Unrelated desktop file changed.'
     # Real Enable entrypoint with fixture-only process hooks: a startup failure

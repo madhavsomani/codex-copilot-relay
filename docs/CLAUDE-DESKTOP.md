@@ -1,4 +1,40 @@
-# Claude desktop Code UI through Copilot (attachment preview)
+# Claude desktop Code UI through Copilot
+
+## Current customer workflow: one relay, port 4144
+
+Use **Start Relay** and **Stop & Restore** from the desktop. All code, runtime
+history and private backups live in the one `Codex Copilot Bridge` folder.
+The same terminal and Control Room show both clients. Codex's TOML routing is
+automatic; Claude's supported third-party form remains a one-time manual step.
+
+1. Run **Start Relay**. The first terminal screen shows readiness and setup.
+2. In Claude: **Developer > Configure Third-Party Inference** (not MCP settings).
+   If necessary, use **Help > Troubleshooting > Enable Developer Mode**. Do not
+   override an organization policy that disables this form.
+3. Gateway URL: `http://127.0.0.1:4144/claude`; credential: **Static API key**;
+   authentication scheme: **Bearer**. In the relay terminal type `key` and paste
+   that local key into the app yourself. It is encrypted for this Windows user,
+   persists across relay restarts, and is not published or shown on the dashboard.
+4. Keep **Allow Code** on and experimental **MCP tool search** off. Save active
+   work, apply the settings and restart as requested by Claude. Choose third-party
+   inference and open **Code**. Type `models` in the relay terminal for current
+   entitled Claude model IDs; select one in the app. Explicit choices are honored.
+5. Match a real app reply to a completed **Claude Code** request in the terminal
+   or dashboard. SDK readiness does not establish that a GUI call completed.
+
+`setup` repeats the guide; `status` reports current readiness. **Stop & Restore**
+stops both adapters after work drains and restores Codex's protected TOML.
+Claude retains its saved Gateway profile: return to normal sign-in manually.
+Closing the event terminal triggers recovery, not restoration. This does not
+patch either app or promise native voice/Remote Control support or free inference.
+
+See [the full workflow](TWO-CONTROLS.md) and
+[Anthropic's supported desktop form](https://code.claude.com/docs/en/llm-gateway-connect#desktop-app).
+
+## Historical isolated developer preview (not the desktop shortcut workflow)
+
+The instructions below describe the older optional 4261 developer mode only.
+Its session-key and quit behavior do **not** describe Start Relay on port 4144.
 
 Source **1.3.62**, Messages adapter **0.1.14**. This adds a gateway-only mode for
 the **unmodified Claude desktop application's Code tab**, not another terminal

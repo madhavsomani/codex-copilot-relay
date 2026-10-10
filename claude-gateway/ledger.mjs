@@ -25,7 +25,7 @@ export class Ledger {
       requestClass:['main','subagent','workflow','compaction','auxiliary'].includes(headers['x-claude-code-request-class'])?headers['x-claude-code-request-class']:null,
       session:headers['x-claude-code-session-id'] ? digest(headers['x-claude-code-session-id']).slice(0,16) : null,
       agent:headers['x-claude-code-agent-id'] ? digest(headers['x-claude-code-agent-id']).slice(0,16) : null,
-      status:'active',sdkApiCalls:0,inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,
+      status:'active',toolRequests:0,toolResults:0,sdkApiCalls:0,inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,
       totalNanoAiu:null,creditReportedCalls:0,actualModels:[],sdkTransportAttempts:0,sdkTransportResponses:0,sdkTransportErrors:0};
     this.state.received++; this.state.recent.push(row); this.state.recent = this.state.recent.slice(-1000); this.save();
     this.onChange?.('received',row);
@@ -59,6 +59,15 @@ export class Ledger {
     if(event.type==='relay_transport_error'){row.sdkTransportErrors++;this.state.transport.networkErrors++;}
     this.save();
     if(event.type==='relay_transport_attempt')this.onChange?.('forwarded',row);
+  }
+  toolSignal(row, type) {
+    // Counts only; never include a tool name, argument, result or private path.
+    // Observability must not interrupt an otherwise valid client handoff.
+    if(!row||row.status!=='active'||!['tool_requested','tool_resolved'].includes(type))return;
+    const key=type==='tool_requested'?'toolRequests':'toolResults';
+    row[key]=(row[key]??0)+1;
+    try{this.onChange?.(type,row);}catch{}
+    // Persist with the next normal usage/final receipt, not another write per tool.
   }
   usage(row, value) {
     const number = key => Number.isFinite(value[key]) ? Math.max(0,value[key]) : 0;

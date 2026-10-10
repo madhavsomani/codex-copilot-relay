@@ -13,5 +13,5 @@ try {
     [IO.File]::WriteAllText($marker,'{"version":1,"mode":"codex-and-claude","credential":"windows-user-dpapi"}')
     & (Join-Path $PSScriptRoot 'Repair-Codex-CopilotProxy.ps1') -Port $Port -Model $Model -NoDashboard:$NoDashboard
     Write-Output "Claude Gateway base URL: http://127.0.0.1:$Port/claude (once both adapters are ready)."
-    Write-Output 'Type key in the live relay terminal for the persistent local key. See docs\TWO-CONTROLS.md.'
+    Write-Output 'The live terminal shows both setup paths. Type setup to repeat, models for Claude choices, or key for your persistent local key.'
 } finally { $mutex.ReleaseMutex(); $mutex.Dispose() }

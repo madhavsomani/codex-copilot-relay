@@ -2,7 +2,7 @@
 param([string]$Desktop=[Environment]::GetFolderPath('Desktop'),
     [ValidateRange(1024,65535)][int]$Port=4144,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')][string]$Model='gpt-6.1-sol',
-    [switch]$UsePowerShell)
+    [switch]$UsePowerShell,[string]$ArchiveDirectory)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Codex-Copilot-Config.ps1')
 . (Join-Path $PSScriptRoot 'Relay-Control.ps1')
@@ -75,12 +75,17 @@ foreach($plan in $plans) {
     $link.Save()
 }
 if ($archiveFiles.Count) {
-    $archive=Join-Path $desktopPath ('Copilot Relay Backups\old-desktop-controls-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
-    Assert-RelayLocalPath -Root $desktopPath -Path $archive
+    if (-not $ArchiveDirectory) {
+        $ArchiveDirectory=Join-Path $PSScriptRoot 'runtime\desktop-backups'
+        Assert-RelayLocalPath -Root $PSScriptRoot -Path $ArchiveDirectory
+    }
+    $archiveRoot=[IO.Path]::GetFullPath($ArchiveDirectory)
+    $archive=Join-Path $archiveRoot ('old-desktop-controls-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
+    Assert-RelayLocalPath -Root $archiveRoot -Path $archive
     New-Item -ItemType Directory -Path $archive -ErrorAction Stop | Out-Null
     foreach($file in $archiveFiles) {
         $target=Join-Path $archive ([IO.Path]::GetFileName($file))
-        Assert-RelayLocalPath -Root $desktopPath -Path $target
+        Assert-RelayLocalPath -Root $archiveRoot -Path $target
         Move-Item -LiteralPath $file -Destination $target -ErrorAction Stop
     }
     Write-Output "Old relay controls archived (recoverable): $archive"

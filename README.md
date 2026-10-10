@@ -29,6 +29,13 @@ controls use that EXE (`start` / `stop`). This is a lightweight launcher for the
 installed checkout, **not a self-contained SDK bundle**.
 See [build, use, and rollback](docs/WINDOWS-LAUNCHER.md).
 
+The desktop workflow is **one installation folder + two shortcuts**. The first
+terminal screen explains automatic Codex routing and Claude's one-time Gateway
+setup; type `setup`, `models`, `status`, or `key`. Both clients appear in the live
+fabric and event stream, with separate usage/history and client-owned tool
+handoffs. Older controls are archived inside `runtime/desktop-backups/`, never
+published. [Customer workflow and folder map](docs/TWO-CONTROLS.md).
+
 **Windows desktop controls:** run `powershell -NoProfile -ExecutionPolicy Bypass
 -File .\Start-Relay.ps1` once to install **Start Relay** and **Stop & Restore**.
 Both adapters share port 4144 and the existing dashboard/history. The live
