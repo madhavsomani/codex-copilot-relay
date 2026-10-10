@@ -24,3 +24,8 @@ test('preferred default applies only when omitted and supported; explicit effort
  assert.deepEqual(routeEffort('low',sixSol,'xhigh'),{effort:'low',capped:false});
  assert.equal(defaultEffort({supportedReasoningEfforts:['low','high']},'xhigh'),'low');
 });
+test('GPT-6.1 Sol defaults xhigh without overriding explicit task effort',()=>{
+ const sol={id:'gpt-6.1-sol',supportedReasoningEfforts:['none','low','medium','high','xhigh']};
+ assert.deepEqual(routeEffort(null,sol,'xhigh'),{effort:'xhigh',capped:false});
+ assert.deepEqual(routeEffort('high',sol,'xhigh'),{effort:'high',capped:false});
+});

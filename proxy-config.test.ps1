@@ -94,6 +94,11 @@ try {
     if ($persistentStartText -notmatch 'DeferUpdateWhenBusy' -or $persistentStartText -notmatch 'Update deferred') {
         throw 'Persistent startup cannot keep a healthy older relay available while an update waits for active exchanges.'
     }
+    $enableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Enable-Codex-CopilotProxy.ps1') -Raw
+    if ($enableText -notmatch '\$transitionDeferred' -or $enableText -notmatch 'probe-sdk\.mjs' -or
+        $enableText -notmatch 'if \(\$modelHealth\)' -or $enableText -notmatch '\$state\.Model = \$Model') {
+        throw 'A busy old relay must be preflighted and staged without pointing Codex at an unavailable new model.'
+    }
     if (
         $persistentStartText -match '\$existingHealth -and \$existingHealth\.ok -and \$existingHealth\.model -eq \$Model' -or
         $persistentStartText -match '\$current -and \$current\.ok -and \$current\.model -eq \$Model'
@@ -300,6 +305,33 @@ try {
     if (($sixSolCatalog.models | Where-Object slug -eq 'gpt-6-sol').default_reasoning_level -ne 'xhigh' -or
         ($sixSolCatalog.models | Where-Object slug -eq 'gpt-5.6-sol').default_reasoning_level -ne 'low') {
         throw 'GPT-6 Sol should default to Extra High without changing another model default.'
+    }
+
+    $sixOneCapabilities = [pscustomobject]@{maxContextWindowTokens=1050000;maxPromptTokens=922000;maxOutputTokens=128000;supportedReasoningEfforts=@('none','low','medium','high','xhigh');maxImageAttachments=1}
+    $sixOneHealth = [pscustomobject]@{ok=$true;model='gpt-6.1-sol';models=@('gpt-6.1-sol','gpt-6-sol');routing=[pscustomobject]@{mode='per-request'};compatibility=$sixOneCapabilities;modelCapabilities=[pscustomobject]@{
+        'gpt-6.1-sol'=$sixOneCapabilities
+        'gpt-6-sol'=$sixSolCapabilities
+    }}
+    $oldSolHealth = [pscustomobject]@{ok=$true;model='gpt-6-sol';models=$sixOneHealth.models;routing=$sixOneHealth.routing;compatibility=$sixSolCapabilities;modelCapabilities=$sixOneHealth.modelCapabilities}
+    $selectedSixOneHealth = Select-CodexCopilotModelHealth -Health $oldSolHealth -Model 'gpt-6.1-sol'
+    if ($selectedSixOneHealth.model -ne 'gpt-6.1-sol' -or $selectedSixOneHealth.compatibility.maxPromptTokens -ne 922000) {
+        throw 'A staged GPT-6.1 Sol switch lost the target model capabilities.'
+    }
+    $sixOneCatalogPath = New-CodexCopilotModelCatalog -Health $sixOneHealth -Model 'gpt-6.1-sol' -Directory $tempDirectory -BaseInstructions 'CODEX_ORIGINAL_INSTRUCTIONS'
+    $sixOneCatalog = Get-Content -LiteralPath $sixOneCatalogPath -Raw | ConvertFrom-Json
+    if (($sixOneCatalog.models | Where-Object slug -eq 'gpt-6.1-sol').default_reasoning_level -ne 'xhigh' -or
+        ($sixOneCatalog.models | Where-Object slug -eq 'gpt-6-sol').default_reasoning_level -ne 'low') {
+        throw 'GPT-6.1 Sol should default Extra High without changing an explicitly selected model default.'
+    }
+    [IO.File]::WriteAllLines($contextPath, @('model = "gpt-6-sol"', 'model_reasoning_effort = "medium"'))
+    $sixOneState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6.1-sol' -ModelHealth $sixOneHealth -ModelCatalogPath $sixOneCatalogPath
+    $sixOneState = Set-CodexCopilotConfig -ConfigPath $contextPath -Port 4144 -Model 'gpt-6.1-sol' -RestoreState $sixOneState -ModelHealth $sixOneHealth -ModelCatalogPath $sixOneCatalogPath
+    if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^model_reasoning_effort = "xhigh"\r?$') {
+        throw 'Managed GPT-6.1 Sol route did not set Codex reasoning to Extra High.'
+    }
+    Restore-CodexCopilotConfig -ConfigPath $contextPath -State $sixOneState | Out-Null
+    if ([IO.File]::ReadAllText($contextPath) -notmatch '(?m)^model_reasoning_effort = "medium"\r?$') {
+        throw 'GPT-6.1 Sol rollback lost the previous Codex reasoning effort.'
     }
 
     # Legacy native-tool opt-in cannot re-enable removed search; rollback preserves the prior value.

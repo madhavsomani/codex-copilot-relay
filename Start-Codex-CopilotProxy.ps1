@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-6-sol',
+    [string]$Model = 'gpt-6.1-sol',
 
     [switch]$DeferUpdateWhenBusy,
 
@@ -22,6 +22,9 @@ $stdoutLog = Join-Path $runtimeDirectory 'proxy.stdout.log'
 $processStdoutLog = Join-Path $runtimeDirectory 'proxy.process.stdout.log'
 $stderrLog = Join-Path $runtimeDirectory 'proxy.stderr.log'
 . (Join-Path $bridgeRoot 'sdk-process-health.ps1')
+. (Join-Path $bridgeRoot 'Codex-Copilot-Config.ps1')
+. (Join-Path $bridgeRoot 'Relay-Control.ps1')
+$managedDesktop = Test-Path -LiteralPath (Join-Path $runtimeDirectory 'desktop-relay.json') -PathType Leaf
 # The generated catalog now resolves Astra directly; explicit model choices are honored.
 $expectedRoutingMode = 'per-request'
 $expectedLockedReasoningEffort = $null
@@ -147,19 +150,9 @@ function Stop-OutdatedManagedProxy {
         if ($sample -lt 2) { Start-Sleep -Milliseconds 500 }
     }
 
-    if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
-        throw "The outdated relay is healthy, but its managed PID file is missing: $pidPath"
+    if (-not (Stop-RelayOwnedListener -Root $bridgeRoot -Port $Port)) {
+        return [pscustomobject]@{Stopped=$false;Message='Update deferred: new work arrived; the current relay stays available.'}
     }
-    $pidText = ([string](Get-Content -LiteralPath $pidPath -Raw)).Trim()
-    $proxyPid = 0
-    if (-not [int]::TryParse($pidText, [ref]$proxyPid)) {
-        throw "The outdated relay PID file is invalid: $pidPath"
-    }
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$proxyPid" -ErrorAction SilentlyContinue
-    if (-not ($process -and $process.Name -eq 'node.exe' -and ([string]$process.CommandLine) -like "*$serverPath*")) {
-        throw 'The outdated relay PID does not point to this bridge. Refusing to stop another process.'
-    }
-    Stop-Process -Id $proxyPid -Force
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         if (-not (Test-LocalPortInUse -LocalPort $Port)) { break }
@@ -174,6 +167,9 @@ function Stop-OutdatedManagedProxy {
     }
 }
 
+$startMutex = Enter-RelayControlLock -Root $bridgeRoot -Kind 'server'
+try {
+if (Test-Path -LiteralPath (Join-Path $runtimeDirectory 'relay-disabled.flag')) { throw 'Relay is intentionally stopped. Use Start Relay to enable it.' }
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 $expectedVersion = if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
     [string]((Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json).version)
@@ -196,8 +192,11 @@ if ($existingHealth -and $existingHealth.ok) {
     if (
         $existingVersion -eq $expectedVersion -and
         $existingHealth.model -eq $Model -and
+        (-not $managedDesktop -or ($existingHealth.unified -and $existingHealth.lifecycle.managedDesktop)) -and
         (Test-ExpectedRouting -Health $existingHealth)
     ) {
+        $owned = Get-RelayListenerEvidence -Root $bridgeRoot -Port $Port
+        Set-Content -LiteralPath $pidPath -Value ([string]$owned.Pid) -Encoding ascii
         Write-Output "Codex Copilot proxy version $expectedVersion is already healthy on http://127.0.0.1:$Port using $Model."
         exit 0
     }
@@ -226,6 +225,8 @@ if ($telemetryBackup.Created) {
 }
 
 $environmentNames = @(
+    'BRIDGE_CLAUDE_TOKEN',
+    'BRIDGE_MANAGED_DESKTOP',
     'BRIDGE_AUTH_TOKEN',
     'BRIDGE_DEFAULT_MODEL',
     'BRIDGE_MODEL_ROUTING_MODE',
@@ -253,6 +254,13 @@ try {
     # to 127.0.0.1, and no Copilot credential or API key is copied to disk.
     Remove-Item -LiteralPath 'Env:BRIDGE_AUTH_TOKEN' -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath 'Env:CODEX_COPILOT_BRIDGE_KEY' -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath 'Env:BRIDGE_CLAUDE_TOKEN' -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath 'Env:BRIDGE_MANAGED_DESKTOP' -ErrorAction SilentlyContinue
+    if ($managedDesktop) {
+        Repair-RelayClaudeLease -Root $bridgeRoot -Port $Port
+        $env:BRIDGE_CLAUDE_TOKEN = Get-RelayLocalKey -Root $bridgeRoot
+        $env:BRIDGE_MANAGED_DESKTOP = '1'
+    }
     $env:BRIDGE_PORT = [string]$Port
     $env:BRIDGE_DEFAULT_MODEL = $Model
     $env:BRIDGE_MODEL_ROUTING_MODE = $expectedRoutingMode
@@ -289,6 +297,7 @@ try {
         $health = Get-ProxyHealth
         if (
             $health -and $health.ok -and $health.model -eq $Model -and
+            (-not $managedDesktop -or ($health.unified -and $health.claude.sdkState -eq 'ready')) -and
             (Test-ExpectedRouting -Health $health)
         ) {
             $ready = $true
@@ -320,3 +329,4 @@ finally {
         }
     }
 }
+} finally { $startMutex.ReleaseMutex(); $startMutex.Dispose() }

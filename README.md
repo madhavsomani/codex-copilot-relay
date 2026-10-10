@@ -23,6 +23,14 @@ Codex and the official GitHub Copilot SDK.
 
 ## Keep Codex. Change the inference path.
 
+**Windows desktop controls:** run `powershell -NoProfile -ExecutionPolicy Bypass
+-File .\Start-Relay.ps1` once to install **Start Relay** and **Stop & Restore**.
+Both adapters share port 4144 and the existing dashboard/history. The live
+terminal labels Codex and Claude requests. Read [two-control setup and restore](docs/TWO-CONTROLS.md)
+for Claude's one-time supported gateway form and the restoration boundaries.
+The isolated `node launch.mjs gateway --open` mode remains a developer preview;
+it is not the desktop Start path. API tests are not desktop GUI certification.
+
 Codex Copilot Relay makes GitHub Copilot look like a custom OpenAI
 Responses-compatible provider to Codex. The desktop app and CLI keep their
 normal tools, approvals, memory, child agents, streaming, and continuation
@@ -78,10 +86,14 @@ SDK.
   begins with this release; older costs are not guessed or backfilled. The table
   distinguishes relay responses, SDK **model steps**, tokens, and SDK AI credits.
 
-The relay defaults to GPT-6 Sol at `xhigh` (Extra High) when effort is omitted.
+The relay defaults to GPT-6.1 Sol at `xhigh` when effort is omitted.
 Explicit task model and effort choices remain unchanged, including child agents.
-Set top-level `model = "gpt-6-sol"` and `model_reasoning_effort = "xhigh"`
-in Codex for the same default. The standard 400k context / 272k effective input budget,
+The Windows installer sets top-level `model = "gpt-6.1-sol"` and
+`model_reasoning_effort = "xhigh"` in Codex for the same default, preserving
+the original values in its protected revert backup. During an active
+exchange it stages the update and keeps the working route until the watchdog
+can safely promote it. Check `/health` for the effective model and version.
+The standard context budget,
 compaction, native Codex images, authentication and Remote boundaries are preserved.
 
 ### Compact dashboard layout (1.3.35)
@@ -174,12 +186,13 @@ node node_modules/@github/copilot/npm-loader.js login
 node probe-setup-auth.mjs
 
 Set-ExecutionPolicy -Scope Process Bypass
-.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-6-sol
+.\Repair-Codex-CopilotProxy.ps1 -Port 4144 -Model gpt-6.1-sol
 ```
 
 Reopen the Codex task after the provider switch, then visit
 <http://127.0.0.1:4144/dashboard>. If the probe lists a different available GPT
-model, use that model ID consistently. The [complete Windows setup](#windows-complete-setup)
+model, use that model ID consistently; the relay does not silently substitute
+another provider or model. The [complete Windows setup](#windows-complete-setup)
 explains authentication, verification, shortcuts, updating, and rollback.
 
 ## Dashboard preview
@@ -587,7 +600,7 @@ when you do not want the Windows watchdog, use this manual flow.
 3. Start the relay and keep that terminal open:
 
    ```bash
-    BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-6-sol node server.mjs
+    BRIDGE_PORT=4144 BRIDGE_DEFAULT_MODEL=gpt-6.1-sol node server.mjs
    ```
 
    To make Astra the compatibility target even when an existing Codex thread
@@ -606,7 +619,7 @@ when you do not want the Windows watchdog, use this manual flow.
    `~/.codex/config.toml`, then add the provider block once:
 
    ```toml
-    model = "gpt-6-sol"
+    model = "gpt-6.1-sol"
     model_reasoning_effort = "xhigh"
    model_provider = "github_copilot_bridge"
 
@@ -1131,6 +1144,34 @@ and [acceptable-use policies](https://docs.github.com/en/site-policy/acceptable-
 This project is not affiliated with, endorsed by, or supported by GitHub,
 Microsoft, or OpenAI. GitHub, GitHub Copilot, OpenAI, and Codex are trademarks
 of their respective owners.
+
+## Isolated Claude Code preview
+
+An opt-in Messages gateway for stock Claude Code is being tested alongside the
+existing Codex relay. Real file tools, MCP, image reading, project skills/hooks,
+session resume and parallel Copilot Claude-model agents passed. It is **not full
+native parity or a published release**: hosted tools, several beta features and
+long-duration/cross-platform certification remain release gates. Signed-thinking
+tool continuations, the interactive model picker, real `/compact`, SDK-worker
+recovery and gateway restart now have scoped live proof.
+Auto-mode classification for parallel fixture agents also passed; permissions
+remain enforced by stock Claude Code.
+
+See the [preview setup, architecture, compatibility and rollback guide](docs/CLAUDE-GATEWAY-PREVIEW.md).
+
+Failed HTTP requests now retain validated upstream retry decisions, whole-second
+delays and correlation IDs. Finite stock Windows/Linux retry and file-tool proofs
+use local fixtures; they are not paid-provider or long-duration certification.
+Exact token counting remains an explicit optional 501 rather than a guessed
+Anthropic count. See the [retry contract and reproduction commands](docs/CLAUDE-GATEWAY-RETRY-SIGNALS.md).
+The existing dashboard is preserved; the preview has a separate usage ledger.
+
+The connection center also has a read-only **Saved local usage** panel for this
+checkout's canonical desktop Codex, portable Codex and Claude ledgers. It shows
+separate Copilot/OpenAI subtotals, reported credit coverage and stored model
+attribution without claiming another gateway is live. Copied histories can
+overlap; these are not account-wide totals. See
+[Local usage scope and limits](docs/LOCAL-USAGE-VISIBILITY.md).
 
 ## Author
 

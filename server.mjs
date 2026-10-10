@@ -10,6 +10,11 @@ import {sessionSignature, prepareDiscoveryContinuation, checkpointPolicy, toolOu
 import { DASHBOARD_HTML } from "./dashboard.mjs";
 import { SETUP_HTML } from './setup-ui.mjs';
 import { createSetupStatus, sameOriginLocal } from './setup-status.mjs';
+import {mountClaudeGateway} from './unified-gateway.mjs';
+import {createGatewayReporter} from './unified-events.mjs';
+import {renderUnifiedSetupPage} from './unified-setup.mjs';
+import {createRelayStopControl} from './relay-stop-control.mjs';
+import {createLocalUsageReader} from './local-usage-history.mjs';
 import {
   BlankCompletionGuard,
   PrematureCompletionGuard,
@@ -80,7 +85,7 @@ const relayVersion = (() => {
 })();
 const expectedToken = process.env.BRIDGE_AUTH_TOKEN ?? "";
 const efficiencyPolicy = checkpointPolicy(process.env);
-const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-6-sol";
+const requestedDefaultModel = process.env.BRIDGE_DEFAULT_MODEL ?? "gpt-6.1-sol";
 const fallbackWorkingDirectory = process.env.BRIDGE_WORKING_DIRECTORY ?? process.cwd();
 const modelRoutingPolicy = createModelRoutingPolicy({
   mode: process.env.BRIDGE_MODEL_ROUTING_MODE ?? MODEL_ROUTING_PER_REQUEST,
@@ -269,6 +274,7 @@ function dashboardSnapshot() {
   snapshot.sdk = sdkRuntime.snapshot();
   snapshot.storage = telemetryStorage();
   snapshot.activeExchanges = exchanges.size;
+  snapshot.claude = claudeMount?.visibility() ?? null;
   snapshot.copilot = {
     quota: copilotQuota,
     modelBilling: copilotModelBilling,
@@ -283,7 +289,10 @@ function dashboardSnapshot() {
   return snapshot;
 }
 
+const reportGatewayEvent=process.env.BRIDGE_CLAUDE_TOKEN&&process.send?
+  createGatewayReporter((message,done)=>{if(process.connected)process.send(message,done);else done();}):null;
 function log(type, fields = {}) {
+  reportGatewayEvent?.({type,...fields});
   const line = `${JSON.stringify({
     timestamp: new Date().toISOString(),
     type,
@@ -339,14 +348,16 @@ function openDashboardEventStream(request, response) {
     at: new Date().toISOString(),
     summary: recorder.summary(),
   })}\n\n`);
-  const unsubscribe = recorder.subscribe((event) => {
+  const sendEvent = (event) => {
     if (!response.writableEnded && !response.destroyed) {
+      // A stalled dashboard must never build an unbounded queue or delay inference.
+      if(response.writableLength>256*1024){response.destroy();return;}
       response.write(`event: relay\ndata: ${JSON.stringify(event)}\n\n`);
     }
-  });
-  const unsubscribeProvider = providerTelemetry.subscribe(event=>{
-    if(!response.writableEnded&&!response.destroyed)response.write(`event: relay\ndata: ${JSON.stringify(event)}\n\n`);
-  });
+  };
+  const unsubscribe = recorder.subscribe(sendEvent);
+  const unsubscribeProvider = providerTelemetry.subscribe(sendEvent);
+  const unsubscribeClaude = claudeMount?.subscribe(sendEvent);
   const heartbeat = setInterval(() => {
     if (!response.writableEnded && !response.destroyed) response.write(": heartbeat\n\n");
   }, sseHeartbeatIntervalMs);
@@ -355,6 +366,7 @@ function openDashboardEventStream(request, response) {
     clearInterval(heartbeat);
     unsubscribe();
     unsubscribeProvider();
+    unsubscribeClaude?.();
   };
   request.once("close", cleanup);
   response.once("close", cleanup);
@@ -1159,7 +1171,8 @@ if (!availableModelIds.has(requestedDefaultModel)) {
   throw new Error(`The authenticated GitHub Copilot account does not expose ${requestedDefaultModel}.`);
 }
 const defaultModel = requestedDefaultModel;
-const preferredDefaultEffort = defaultModel === "gpt-6-sol" ? "xhigh" : null;
+const preferredDefaultEffort = defaultModel === "gpt-6.1-sol" ? "xhigh"
+  : defaultModel === "gpt-6-sol" ? "xhigh" : null;
 const defaultModelCompatibility = resolveModelCompatibility(modelsById.get(defaultModel));
 const availableOpenAiModels = [...availableModelIds]
   .filter((model) => model.startsWith("gpt-"))
@@ -1525,11 +1538,32 @@ async function continueExchange(body, sink, toolOutputs) {
   }
 }
 
+let claudeMount=null;
+if(process.env.BRIDGE_CLAUDE_TOKEN){
+  try{claudeMount=await mountClaudeGateway({port,token:process.env.BRIDGE_CLAUDE_TOKEN,
+    runtimeDirectory:path.join(runtimeDirectory,'claude'),workingDirectory:fallbackWorkingDirectory,log});}
+  catch(error){await sdkRuntime.stop();throw error;}
+}
+const managedDesktop=process.env.BRIDGE_MANAGED_DESKTOP==='1';
+const readUnifiedUsage=claudeMount?createLocalUsageReader({root:nativeToolsRoot,...(managedDesktop?{}:{runtimeDirectory})}):null;
 const readSetupStatus = createSetupStatus({root:nativeToolsRoot,port,
+  ...(claudeMount?{claude:async()=>({installation:{checkFailed:true},gateway:claudeMount.visibility()})}:{}),
   relay:async()=>({ok:(await sdkRuntime.checkHealth()).ok,version:relayVersion,model:defaultModel,activeExchanges:exchanges.size,lastCodexRequestAt}),
   auth:async()=>{const client=await sdkRuntime.ready();const auth=await bounded(()=>client.getAuthStatus(),4000,'Copilot sign-in check');return {authenticated:auth.isAuthenticated===true,models:auth.isAuthenticated?availableOpenAiModels:[]};}});
 
+let admittedRequests=0;
+const activeWork=()=>exchanges.size+nativeJobs.size+openaiFallback.jobs.size+(claudeMount?.gateway.turns.size??0);
+const stopControl=createRelayStopControl({directory:runtimeDirectory,active:()=>activeWork()+admittedRequests,
+  stop:()=>void shutdown('local-stop-after-drain')});
+const stopControlTimer=setInterval(()=>stopControl.check(),1000);stopControlTimer.unref();
 const server = http.createServer(async (request, response) => {
+  if(stopControl.stopping)return sendJson(response,503,errorPayload('Relay is stopping. Use Start Relay to resume.','relay_stopping'));
+  if(request.method!=='GET'){
+    admittedRequests++;let done=false;
+    const release=()=>{if(!done){done=true;admittedRequests--;}};
+    response.once('finish',release);response.once('close',release);
+  }
+  if(claudeMount?.route(request,response))return;
   nativeToolsConfig = await loadNativeToolsConfig(nativeToolsRoot);
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${host}:${port}`}`);
 
@@ -1539,6 +1573,7 @@ const server = http.createServer(async (request, response) => {
       ok: sdk.ok,
       sdk,
       version: relayVersion,
+      ...(claudeMount?{claude:claudeMount.visibility(),unified:true}:{}),
       provider: "github-copilot-sdk",
       lastCodexRequestAt,
       model: defaultModel,
@@ -1551,7 +1586,8 @@ const server = http.createServer(async (request, response) => {
         supportedReasoningEfforts: modelsById.get(id)?.supportedReasoningEfforts ?? [],
          defaultReasoningEffort: defaultEffort(modelsById.get(id), id === defaultModel ? preferredDefaultEffort : null),
       }])),
-      activeExchanges: exchanges.size + nativeJobs.size + openaiFallback.jobs.size,
+      activeExchanges: Math.max(activeWork(),admittedRequests),
+      lifecycle:{control:'local-file-v1',instanceId:stopControl.instanceId,stopping:stopControl.stopping,admittedRequests,managedDesktop},
       exchangeStates: ownership.snapshot(),
       routing: {
         mode: modelRoutingPolicy.mode,
@@ -1647,6 +1683,24 @@ const server = http.createServer(async (request, response) => {
 
   if (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/")) {
     if (!sameOriginLocal(request,port)) return sendJson(response,403,errorPayload('Dashboard requires same-origin loopback access.','forbidden'));
+    // Unified mode exposes only the existing credential-free connection center.
+    // Detailed Codex records remain protected in authenticated ephemeral mode.
+    if(claudeMount&&request.method==='GET'){
+      if(url.pathname==='/dashboard/setup'||(!managedDesktop&&url.pathname==='/dashboard')){
+        response.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store',
+          'x-content-type-options':'nosniff','x-frame-options':'DENY'});
+        return response.end(renderUnifiedSetupPage(port,{managedDesktop}));
+      }
+      if(url.pathname==='/dashboard/setup/status'){
+        try{return sendJson(response,200,await readSetupStatus(),{'cache-control':'no-store'});}
+        catch{return sendJson(response,503,errorPayload('Setup checks unavailable.','setup_unavailable'));}
+      }
+      if(url.pathname==='/dashboard/setup/usage'){
+        if(url.search)return sendJson(response,400,errorPayload('No path selectors accepted.','invalid_request'));
+        try{return sendJson(response,200,await readUnifiedUsage(),{'cache-control':'no-store'});}
+        catch{return sendJson(response,503,errorPayload('Usage metadata unavailable.','setup_unavailable'));}
+      }
+    }
     // Ephemeral launcher mode has a bearer token that a browser dashboard must
     // not be asked to carry. Persistent mode is loopback-only and intentionally
     // exposes this portal only to local processes.
@@ -1868,6 +1922,7 @@ server.headersTimeout = 60_000;
 openaiFallback.attachRealtime(server);
 
 server.listen(port, host, () => {
+  if(claudeMount)claudeMount.gateway.mountedListening=true;
   log("bridge.ready", {
     url: `http://${host}:${port}/v1`,
     version: relayVersion,
@@ -1879,12 +1934,14 @@ server.listen(port, host, () => {
 });
 
 async function shutdown(signal) {
+  clearInterval(stopControlTimer);
   log("bridge.shutdown", { signal });
   if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
   openaiFallback.close();
   for (const child of nativeJobs) child.kill();
   await Promise.allSettled([...exchanges].map((exchange) => exchange.disconnect()));
+  if(claudeMount){claudeMount.gateway.mountedListening=false;await claudeMount.close();}
   await sdkRuntime.stop();
   process.exit(0);
 }

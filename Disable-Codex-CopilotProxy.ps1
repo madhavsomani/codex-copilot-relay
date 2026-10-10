@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([int]$WaitSeconds=0)
 
 $ErrorActionPreference = 'Stop'
 $bridgeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -27,11 +27,25 @@ else {
     $state = Get-CodexCopilotEmbeddedState -ConfigPath $configPath
 }
 
+if ($state -and $state.PSObject.Properties.Name -contains 'BackupPath') {
+    # Validate before stopping anything. Keep later TOML edits recoverable too.
+    Assert-CodexCopilotConfigBackup -State $state | Out-Null
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $archiveDirectory=Join-Path $runtimeDirectory 'config-before-restore'
+        New-Item -ItemType Directory -Path $archiveDirectory -Force | Out-Null
+        $saved=Join-Path $archiveDirectory ((Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N')+'.toml')
+        Copy-Item -LiteralPath $configPath -Destination $saved -ErrorAction Stop
+        Protect-CodexCopilotConfigBackup -BackupPath $saved
+        Write-Output "Current config retained before exact restoration: $saved"
+    }
+}
+New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $runtimeDirectory 'relay-disabled.flag'),'Stopped intentionally; Start Relay clears this flag.')
 $removedAutoStart = Remove-CodexCopilotAutoStart -WatchScript $watchScript
 & $stopWatchdogScript | Out-Null
 & $stopConsoleScript | Out-Null
 $port = if ($state) { [int]$state.Port } else { 4144 }
-& $stopScript -Port $port | Out-Null
+& $stopScript -Port $port -WaitSeconds $WaitSeconds | Out-Null
 
 if ($state) {
     $warnings = @()
@@ -55,5 +69,6 @@ else {
 foreach ($item in $removedAutoStart) {
     Write-Output "Automatic recovery removed: $item"
 }
-Write-Output 'The desktop repair shortcut remains available if you want to enable the bridge again.'
+Write-Output 'Use Start Relay on the desktop to enable both adapters again.'
+Write-Output 'Claude: the saved Gateway profile is unchanged. Select normal sign-in in Claude to restore its ordinary provider.'
 Write-Output 'Restart or reopen the Codex desktop task once so its app-server reloads the restored provider.'

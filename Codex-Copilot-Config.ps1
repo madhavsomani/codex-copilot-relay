@@ -396,7 +396,10 @@ function New-CodexCopilotModelCatalog {
         if ($entrySettings.Count -eq 0) { continue }
         $efforts = @($cap.supportedReasoningEfforts | Where-Object { $_ })
         if ($efforts.Count -eq 0) { $efforts = $reasoningEfforts }
-        $preferred = if ($slug -eq $Model -and $slug -eq 'gpt-6-sol' -and $efforts -contains 'xhigh') {
+        $preferred = if ($slug -eq $Model -and $slug -eq 'gpt-6.1-sol' -and $efforts -contains 'xhigh') {
+            'xhigh'
+        }
+        elseif ($slug -eq $Model -and $slug -eq 'gpt-6-sol' -and $efforts -contains 'xhigh') {
             'xhigh'
         }
         else {
@@ -501,6 +504,11 @@ function Set-CodexCopilotConfig {
     }
 
     $contextValues = Get-CodexCopilotContextSettings -Health $ModelHealth -Model $Model
+    # Keep Codex's fresh-task default aligned with the relay. Preserve and
+    # restore the pre-bridge value, including across managed model changes.
+    if ($Model -eq 'gpt-6.1-sol') {
+        $contextValues['model_reasoning_effort'] = '"xhigh"'
+    }
     # Only advertise hosted search when the operator has opted into the native
     # Codex adapter. Browser and connector search tools are independent.
     $contextValues['web_search'] = '"disabled"'
@@ -511,7 +519,7 @@ function Set-CodexCopilotConfig {
         $contextValues['model_auto_compact_token_limit'] = $null
     }
     $managedSettings = @()
-    foreach ($key in @('model_context_window', 'model_auto_compact_token_limit', 'web_search', 'model_catalog_json')) {
+    foreach ($key in @('model_reasoning_effort', 'model_context_window', 'model_auto_compact_token_limit', 'web_search', 'model_catalog_json')) {
         $index = Find-CodexTopLevelKeyIndex -Lines ([string[]]$lines.ToArray()) -Key $key
         $currentLine = if ($index -ge 0) { $lines[$index] } else { $null }
         $savedSetting = @($savedState.ManagedSettings | Where-Object { $_.Key -eq $key }) | Select-Object -First 1
@@ -898,18 +906,5 @@ function Install-CodexCopilotDesktopShortcuts {
         [string]$Model
     )
 
-    $desktop = [Environment]::GetFolderPath('Desktop')
-    $repairPath = Join-Path $desktop 'Start or Repair Codex Copilot Bridge.lnk'
-    $restorePath = Join-Path $desktop 'Restore Normal Codex (Disable Copilot Bridge).lnk'
-    New-CodexCopilotDesktopShortcut `
-        -ShortcutPath $repairPath `
-        -ScriptPath $RepairScript `
-        -ScriptArguments "-Port $Port -Model $Model" `
-        -Description 'Starts or repairs the Codex GitHub Copilot bridge, watchdog, visible event console, and dashboard.' | Out-Null
-    New-CodexCopilotDesktopShortcut `
-        -ShortcutPath $restorePath `
-        -ScriptPath $DisableScript `
-        -KeepOpen `
-        -Description 'Restores the previous Codex provider and stops the Copilot bridge.' | Out-Null
-    return @($repairPath, $restorePath)
+    & (Join-Path (Split-Path -Parent $RepairScript) 'Install-RelayDesktopControls.ps1') -Port $Port -Model $Model
 }

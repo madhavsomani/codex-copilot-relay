@@ -4,7 +4,7 @@ param(
     [int]$Port = 4141,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-6-sol',
+    [string]$Model = 'gpt-6.1-sol',
 
     [string]$CodexPath,
 
@@ -151,10 +151,11 @@ try {
         '}'
     ) -join ''
 
+    $defaultEffort = if ($Model -eq 'gpt-6.1-sol') { 'xhigh' } else { 'max' }
     $launchArguments = @(
         '-c', "model=`"$Model`"",
         '-c', 'model_provider="github_copilot_bridge"',
-        '-c', 'model_reasoning_effort="max"',
+        '-c', "model_reasoning_effort=`"$defaultEffort`"",
         '-c', "model_providers.github_copilot_bridge=$provider"
     ) + $CodexArguments
 

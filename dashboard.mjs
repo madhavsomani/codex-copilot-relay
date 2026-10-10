@@ -3,6 +3,7 @@ import {callReasoning} from './call-reasoning.mjs';
 import {CONNECTION_HTML,CONNECTION_STYLE,CONNECTION_SCRIPT} from './setup-ui.mjs';
 import {TRENDS_HTML,TRENDS_STYLE,TRENDS_SCRIPT} from './dashboard-trends.mjs';
 import {TASKS_HTML,TASKS_STYLE,TASKS_SCRIPT} from './dashboard-tasks.mjs';
+import {CLAUDE_HTML,CLAUDE_STYLE,CLAUDE_SCRIPT} from './dashboard-claude.mjs';
 
 export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -368,6 +369,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     @media (max-width:900px) { .provider-grid {grid-template-columns:1fr;} .provider-card .provider-route {min-height:0;} }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
     ${CONNECTION_STYLE}
+    ${CLAUDE_STYLE}
   </style>
 </head>
 <body>
@@ -409,6 +411,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </details>
       </div>
     </details>
+    ${CLAUDE_HTML}
     ${TRENDS_HTML}
     ${TASKS_HTML}
     <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
@@ -426,23 +429,29 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <div class="network-viewport">
             <div class="network-stage">
               <svg class="traffic-map idle" id="traffic-map" viewBox="0 0 840 310" role="img" aria-labelledby="traffic-map-title traffic-map-description">
-                <title id="traffic-map-title">Live concurrent Codex relay signals</title>
-                <desc id="traffic-map-description">Compact upright glyphs show real outbound requests, inbound responses, and tool handoffs across the local relay, GitHub Copilot SDK, GPT models, and Codex tools.</desc>
+                <title id="traffic-map-title">Live concurrent Codex and Claude Code relay signals</title>
+                <desc id="traffic-map-description">Codex and Claude Code requests share one local relay and GitHub Copilot SDK. Separate paths show each client. Model names reflect the latest event, not all concurrent calls. Codex tool handoffs are separate.</desc>
                 <defs>
                   <linearGradient id="main-route-gradient" gradientUnits="userSpaceOnUse" x1="132" y1="148" x2="717" y2="148"><stop offset="0" stop-color="#2d94ff"></stop><stop offset=".52" stop-color="#54e0d1"></stop><stop offset="1" stop-color="#a98cff"></stop></linearGradient>
                   <linearGradient id="tool-route-gradient" gradientUnits="userSpaceOnUse" x1="132" y1="148" x2="717" y2="156"><stop offset="0" stop-color="#69b7ff"></stop><stop offset=".55" stop-color="#ffd27a"></stop><stop offset="1" stop-color="#a98cff"></stop></linearGradient>
                   <path id="route-main-journey" d="M132 148 C178 148 211 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
                   <path id="route-tool-journey" d="M132 148 C205 148 270 148 350 160 C405 178 460 252 570 232 C620 222 650 185 717 157"></path>
+                  <path id="route-claude-journey" d="M132 258 C198 258 210 148 250 148 C360 148 410 82 470 82 C590 82 660 148 717 148"></path>
                 </defs>
                 <g aria-hidden="true">
                   <use href="#route-main-journey" class="route-line main"></use>
                   <use href="#route-tool-journey" class="route-line tool"></use>
+                  <use href="#route-claude-journey" class="route-line main"></use>
                 </g>
                 <g id="traffic-signals" aria-hidden="true"></g>
                 <g class="network-node" data-node="codex" transform="translate(82 148)">
                   <rect class="node-shell" x="-48" y="-42" width="96" height="84" rx="18"></rect>
                   <g class="node-glyph"><rect x="-22" y="-19" width="35" height="30" rx="4"></rect><path d="M-13 19 H22 M22 19 V-11 H14"></path><circle cx="-31" cy="-19" r="3"></circle><circle cx="-31" cy="-7" r="3"></circle><circle cx="-31" cy="5" r="3"></circle></g>
                   <text class="network-label" y="61">Codex App</text><text class="network-meta" y="77">TASKS + CHILD AGENTS</text>
+                </g>
+                <g class="network-node" data-node="claude" transform="translate(82 258)">
+                  <rect class="node-shell" x="-48" y="-22" width="96" height="44" rx="12"></rect>
+                  <text class="network-label" y="4">Claude Code</text><text class="network-meta" y="40">/CLAUDE/V1/MESSAGES</text>
                 </g>
                 <g class="network-node" data-node="relay" transform="translate(300 148)">
                   <rect class="node-shell" x="-50" y="-44" width="100" height="88" rx="18"></rect>
@@ -456,8 +465,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
                 </g>
                 <g class="network-node" data-node="model" transform="translate(760 148)">
                   <circle class="node-shell" r="43"></circle>
-                  <svg class="node-brand" x="-23" y="-23" width="46" height="46" viewBox="0 0 2406 2406" aria-hidden="true"><use href="#brand-openai"></use></svg>
-                  <text class="network-label model-live" id="network-model-name" y="62">GPT model</text><text class="network-meta" y="78">REMOTE INFERENCE</text>
+                  <text class="network-label" y="4">MODEL</text>
+                  <text class="network-label model-live" id="network-model-name" y="62">GPT / Claude</text><text class="network-meta" y="78">LATEST EVENT · VIA COPILOT</text>
                 </g>
                 <g class="network-node" data-node="tools" transform="translate(520 232)">
                   <rect class="node-shell" x="-48" y="-34" width="96" height="68" rx="17"></rect>
@@ -480,6 +489,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <div class="panel-head"><div><h2 id="inspector-heading">Live request inspector</h2><span class="tiny">Most recent Copilot phase · OpenAI calls appear in the provider ledger</span></div><span class="live-badge connected"><span class="dot"></span>live</span></div>
         <div class="inspector-body">
           <dl class="inspector-grid">
+            <dt>Client</dt><dd id="inspector-client">waiting</dd>
             <dt>Request ID</dt><dd id="inspector-id">waiting</dd>
             <dt>Requested model</dt><dd class="model route-value" id="inspector-requested">—</dd>
             <dt>Selected model</dt><dd class="model route-value" id="inspector-model">—</dd>
@@ -735,14 +745,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         lane: TRAFFIC_LANES[(hash >>> 8) % TRAFFIC_LANES.length],
       };
     }
-    function ensureLiveCall(id, model, phase) {
+    function ensureLiveCall(id, model, phase, client = "codex") {
       const prior = state.liveCalls.get(id);
       const baseVisual = prior || callVisual(id);
       const usedLanes = new Set([...state.liveCalls.values()].filter(call => call.id !== id).map(call => call.lane));
       const preferredLaneIndex = Math.max(0, TRAFFIC_LANES.indexOf(baseVisual.lane));
       const orderedLanes = TRAFFIC_LANES.map((_, offset) => TRAFFIC_LANES[(preferredLaneIndex + offset) % TRAFFIC_LANES.length]);
       const visual = prior || { ...baseVisual, lane: orderedLanes.find(lane => !usedLanes.has(lane)) ?? baseVisual.lane };
-      const call = { id, model, phase, color: visual.color, lane: visual.lane };
+      const call = { id, model, phase, client, color: visual.color, lane: visual.lane };
       state.liveCalls.delete(id);
       state.liveCalls.set(id, call);
       while (state.liveCalls.size > MAX_LIVE_CALLS) state.liveCalls.delete(state.liveCalls.keys().next().value);
@@ -757,7 +767,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         const chip = document.createElement("span"); chip.className = "call-chip";
         const marker = document.createElement("span"); marker.className = "call-color"; marker.style.setProperty("--call-color", call.color);
         const strong = document.createElement("strong"); strong.textContent = (call.id || "call").slice(-8);
-        chip.append(marker, strong, document.createTextNode(" · " + (call.model || "model") + " · " + call.phase)); root.appendChild(chip);
+        chip.append(marker, strong, document.createTextNode(" · " + (call.client === "claude-code" ? "Claude Code" : "Codex") + " · " + (call.model || "model") + " · " + call.phase)); root.appendChild(chip);
       }
     }
     function renderEventLog() {
@@ -781,26 +791,28 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if (!record) return;
       state.latestInspectorRecord = record;
       const usage = record.usage || event?.usage || {};
-      const inputTokens = Number(usage.inputTokens), outputTokens = Number(usage.outputTokens);
+      const inputTokens = usage.inputTokens, outputTokens = usage.outputTokens;
       const hasTokens = Number.isFinite(inputTokens) || Number.isFinite(outputTokens);
+      const isClaude = record.client === "claude-code", client = isClaude ? "Claude Code" : "Codex";
+      setText("inspector-client", client);
       const status = event?.type ? event.type.replace("relay.", "") : (record.status || "retained");
       setText("inspector-id", String(record.id || "unknown").slice(-18));
       const route = callRoute(record, state.current || {});
       setText("inspector-requested", route.requested || "installation default");
       setText("inspector-model", route.selected || "pending");
       setText("inspector-reported", route.reported.join(", ") || event?.usage?.model || "not reported");
-      setText("inspector-selection", route.note);
-      setText("inspector-credits", creditsText(usage));
+      setText("inspector-selection", isClaude ? (route.selected ? "Entitled Claude model alias → SDK ID" : "Awaiting model selection") : route.note);
+      setText("inspector-credits", creditsText(usage) + (usage.creditMeteredApiCalls > 0 && usage.creditMeteredApiCalls < usage.sdkApiCalls ? " · partial" : ""));
       setText("inspector-status", status);
       setText("inspector-tokens", hasTokens ? number((inputTokens || 0) + (outputTokens || 0)) + " tokens" : "unmetered / pending");
       setText("inspector-sdk-calls", Number.isFinite(Number(usage.sdkApiCalls)) ? number(Number(usage.sdkApiCalls)) : "pending");
       setText("inspector-latency", duration(record.latencyMs));
-      setText("inspector-route", (record.requestPath || "/v1/responses") + " · Codex → Relay → Copilot → Model");
-      setText("inspector-tools", number(record.toolCalls || 0));
+      setText("inspector-route", (record.requestPath || "/v1/responses") + " · " + client + " → Relay → Copilot → Model");
+      setText("inspector-tools", isClaude ? "Executed by Claude Code · not metered here" : number(record.toolCalls || 0));
       $("inspector-status").className = status === "failed" ? "live-bad" : status === "completed" ? "live-good" : "";
     }
     function launchTransitGlyph(pathId, call, options = {}) {
-      if (reducedMotion.matches) return;
+      if (reducedMotion.matches || document.hidden) return;
       const layer = $("traffic-signals");
       if (!layer) return;
       while (layer.childElementCount >= MAX_LIVE_SIGNALS) layer.firstElementChild.remove();
@@ -835,11 +847,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setTimeout(() => signal.remove(), seconds * 1000 + 180);
     }
     function launchTrafficForEvent(event, call) {
-      if (event.type === "relay.forwarded") launchTransitGlyph("route-main-journey", call, { kind: "request" });
+      const modelPath = call.client === "claude-code" ? "route-claude-journey" : "route-main-journey";
+      if (event.type === "relay.forwarded") launchTransitGlyph(modelPath, call, { kind: "request" });
       if (event.type === "relay.tool_requested") launchTransitGlyph("route-tool-journey", call, { kind: "tool", reverse: true, color: "#ffd27a" });
       if (event.type === "relay.tool_resolved") launchTransitGlyph("route-tool-journey", call, { kind: "tool", color: "#ffd27a" });
-      if (event.type === "relay.completed") launchTransitGlyph("route-main-journey", call, { kind: "response", reverse: true, color: "#54e0d1" });
-      if (event.type === "relay.failed") launchTransitGlyph("route-main-journey", call, { kind: "error", reverse: true, color: "#ff8398" });
+      if (event.type === "relay.completed") launchTransitGlyph(modelPath, call, { kind: "response", reverse: true, color: "#54e0d1" });
+      if (event.type === "relay.failed") launchTransitGlyph(modelPath, call, { kind: "error", reverse: true, color: "#ff8398" });
     }
     function setFlowPhase(phase, title, detail) {
       const stage = $("traffic-map");
@@ -852,15 +865,19 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if(event.type==='provider.activity') {clearTimeout(state.refreshTimer);state.refreshTimer=setTimeout(refresh,150);return;}
       const record = event.record || {}, id = String(record.id || "unknown"), model = record.selectedModel || "selection pending";
       if (event.type === "dashboard.ready") return;
+      if (!event.type.startsWith("relay.") || !record.id) return;
+      const client = record.client === "claude-code" ? "Claude Code" : "Codex";
       setText("network-model-name", model);
-      let phase = "active", animation = "request", title = "Codex request received", detail = "Call " + id.slice(-8) + " entered the loopback relay.";
+      let phase = "active", animation = "request", title = client + " request received", detail = "Call " + id.slice(-8) + " entered the loopback relay.";
+      if (event.type === "relay.selected") { phase = "selected"; title = client + " model selected"; detail = model + " · awaiting SDK transport."; }
       if (event.type === "relay.forwarded") { phase = "forwarded"; animation = "forward"; title = "Relay forwarded context to Copilot"; detail = model + " · " + (event.phase || "request") + "."; }
-      if (event.type === "relay.usage") { phase = "model response"; animation = "process"; title = "Copilot model usage received"; detail = model + " · " + number(event.usage?.inputTokens || 0) + " input / " + number(event.usage?.outputTokens || 0) + " output tokens."; }
+      if (event.type === "relay.usage") { phase = "model response"; animation = "process"; title = "Copilot model usage received"; detail = model + " · " + number((event.usage || record.usage)?.inputTokens || 0) + " input / " + number((event.usage || record.usage)?.outputTokens || 0) + " output tokens."; }
       if (event.type === "relay.tool_requested") { phase = "tool call"; animation = "tool-return"; title = "Tool call returned to Codex"; detail = "Codex will execute " + (event.tool || "the requested tool") + " outside the relay."; }
       if (event.type === "relay.tool_resolved") { phase = "tool result"; animation = "tool-forward"; title = "Tool result sent back through relay"; detail = event.failed ? "The outer tool reported a failure." : "Copilot can continue the same SDK session."; }
-      if (event.type === "relay.completed") { phase = "completed"; animation = "response"; title = "Response completed back in Codex"; detail = model + " · " + duration(record.latencyMs) + " end-to-end."; }
+      if (event.type === "relay.completed") { phase = "completed"; animation = "response"; title = "Response completed back in " + client; detail = model + " · " + duration(record.latencyMs) + " end-to-end."; }
       if (event.type === "relay.failed") { phase = "failed"; animation = "failed"; title = "Relay call failed"; detail = model + " · inspect the sanitized call record for details."; }
-      const call = ensureLiveCall(id, model, phase);
+      const call = ensureLiveCall(id, model, phase, record.client || "codex");
+      if (!title.includes(client)) title = client + " · " + title;
       renderActiveCalls(); setFlowPhase(animation, title, detail);
       renderLiveInspector(record, event); recordLiveEvent(event, call, title);
       try { launchTrafficForEvent(event, call); } catch (error) { console.warn("Relay traffic animation skipped:", error); }
@@ -875,6 +892,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     function renderStats(data) {
       renderProviders(data);
+      renderClaudeGateway(data.claude);
       const summary = data.summary || {}, storage = data.storage || {};
       state.current = { startedAt: data.startedAt, routing: data.routing };
       setText("routing-policy", data.routing?.mode === "per-request"
@@ -1039,6 +1057,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     $('provider-filter').onchange=renderProviderRows;
     $("clear").onclick = async () => { if (!confirm("Clear the 1,000-entry detailed history? Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
+    ${CLAUDE_SCRIPT}
     ${TRENDS_SCRIPT}
     ${TASKS_SCRIPT}
     setText("relay-address", location.host); connectLiveEvents(); refresh(); setInterval(refresh, 5000);

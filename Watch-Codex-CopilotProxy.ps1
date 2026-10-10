@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-6-sol',
+    [string]$Model = 'gpt-6.1-sol',
 
     [ValidateRange(2, 300)]
     [int]$CheckIntervalSeconds = 10
@@ -165,6 +165,7 @@ try {
     $configSynchronized = $false
 
     while ($true) {
+        if (Test-Path -LiteralPath (Join-Path $runtimeDirectory 'relay-disabled.flag')) { break }
         Limit-AuxiliaryLogs
         $health = Get-WatchedHealth
         if ($health -and $health.model -eq $Model -and $health.sdk -and -not $health.ok) {
@@ -199,7 +200,8 @@ try {
             }
         }
         elseif (
-            ([string]$health.version -ne $expectedVersion -or [string]$health.routing.mode -ne 'per-request') -and
+            ([string]$health.version -ne $expectedVersion -or [string]$health.routing.mode -ne 'per-request' -or
+                ((Test-Path -LiteralPath (Join-Path $runtimeDirectory 'desktop-relay.json')) -and -not $health.unified)) -and
             ($health.PSObject.Properties.Name -contains 'activeExchanges') -and
             [int]$health.activeExchanges -eq 0
         ) {

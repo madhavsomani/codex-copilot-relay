@@ -7,12 +7,10 @@ $consoleScript = [IO.Path]::GetFullPath((Join-Path $bridgeRoot 'Show-Codex-Copil
 $pidPath = Join-Path $bridgeRoot 'runtime\codex-copilot-console.pid'
 $consoleStatePath = Join-Path $bridgeRoot 'runtime\codex-copilot-console.state.json'
 $managedProcesses = [System.Collections.Generic.List[object]]::new()
+. (Join-Path $bridgeRoot 'Relay-Control.ps1')
 
-foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
-    $isPowerShell = $process.Name -in @('powershell.exe', 'pwsh.exe')
-    if ($isPowerShell -and ([string]$process.CommandLine) -like "*$consoleScript*") {
-        $managedProcesses.Add($process)
-    }
+foreach ($process in @(Get-RelayScriptProcesses -Script $consoleScript)) {
+    $managedProcesses.Add($process)
 }
 
 if ($managedProcesses.Count -eq 0) {
@@ -20,7 +18,9 @@ if ($managedProcesses.Count -eq 0) {
 }
 else {
     foreach ($process in $managedProcesses) {
-        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+        $fresh=Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ProcessId)" -ErrorAction Stop
+        if (-not $fresh -or $fresh.CreationDate -ne $process.CreationDate -or $fresh.CommandLine -cne $process.CommandLine) { continue }
+        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
         Write-Output "Stopped managed Codex Copilot gateway console PID $($process.ProcessId)."
     }
 }

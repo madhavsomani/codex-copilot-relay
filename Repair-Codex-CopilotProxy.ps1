@@ -4,7 +4,7 @@ param(
     [int]$Port = 4144,
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
-    [string]$Model = 'gpt-6-sol',
+    [string]$Model = 'gpt-6.1-sol',
 
     [switch]$NoDashboard
 )
@@ -17,6 +17,8 @@ $consolePidPath = Join-Path $bridgeRoot 'runtime\codex-copilot-console.pid'
 
 & $enableScript -Port $Port -Model $Model
 
+$expectedVersion = [string]((Get-Content -LiteralPath (Join-Path $bridgeRoot 'package.json') -Raw | ConvertFrom-Json).version)
+$expectedEffort = if ($Model -eq 'gpt-6.1-sol') { 'xhigh' } else { $null }
 $health = $null
 for ($attempt = 0; $attempt -lt 40; $attempt++) {
     try {
@@ -25,13 +27,22 @@ for ($attempt = 0; $attempt -lt 40; $attempt++) {
     catch {
         $health = $null
     }
-    if ($health -and $health.ok -and $health.model -eq $Model) {
+    if ($health -and $health.ok -and $health.model -eq $Model -and
+        [string]$health.version -eq $expectedVersion -and
+        (-not $expectedEffort -or [string]$health.compatibility.defaultReasoningEffort -eq $expectedEffort)) {
         break
     }
     Start-Sleep -Milliseconds 250
 }
-if (-not ($health -and $health.ok -and $health.model -eq $Model)) {
-    throw "The bridge did not become healthy on 127.0.0.1:$Port. Inspect runtime\proxy.stderr.log and runtime\watchdog.log."
+if (-not ($health -and $health.ok -and $health.model -eq $Model -and
+    [string]$health.version -eq $expectedVersion -and
+    (-not $expectedEffort -or [string]$health.compatibility.defaultReasoningEffort -eq $expectedEffort))) {
+    if ($health -and $health.ok -and [int]$health.activeExchanges -gt 0) {
+        Write-Output "PENDING: $($health.activeExchanges) active exchange(s) remain on $($health.version)/$($health.model) ($($health.compatibility.defaultReasoningEffort)). The watchdog will promote $expectedVersion/$Model ($expectedEffort) when they finish."
+        if (-not $NoDashboard) { Start-Process -FilePath "http://127.0.0.1:$Port/dashboard" }
+        exit 0
+    }
+    throw "The bridge did not reach $expectedVersion/$Model on 127.0.0.1:$Port. Inspect runtime\proxy.stderr.log and runtime\watchdog.log."
 }
 
 $consoleProcess = $null

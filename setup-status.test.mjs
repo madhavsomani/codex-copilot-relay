@@ -73,7 +73,7 @@ test('fresh-install portal starts with no node_modules and refuses write operati
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'relay-setup-http-'));
   const reservation=http.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');
   const port=reservation.address().port;await new Promise(resolve=>reservation.close(resolve));
-  const files=['setup-server.mjs','setup-status.mjs','setup-ui.mjs','Inspect-RelaySetup.ps1','Codex-Copilot-Config.ps1'];
+  const files=['setup-server.mjs','setup-status.mjs','codex-setup-status.mjs','setup-ui.mjs','local-usage-history.mjs','Inspect-RelaySetup.ps1','Codex-Copilot-Config.ps1'];
   for(const file of files)await fs.copyFile(new URL(file,import.meta.url),path.join(root,file));
   const child=spawn(process.execPath,[path.join(root,'setup-server.mjs')],{cwd:root,windowsHide:true,
     env:{...process.env,RELAY_SETUP_PORT:String(port),BRIDGE_PORT:String(port===65535?65534:port+1),CODEX_HOME:path.join(root,'synthetic-codex-home')},stdio:'ignore'});
