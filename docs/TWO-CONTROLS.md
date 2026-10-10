@@ -18,6 +18,11 @@ not edit its internal settings. Stopping cannot switch that saved profile back.
 
 ## Use
 
+Optional [Windows EXE launcher](WINDOWS-LAUNCHER.md): build `Copilot-Relay.exe`
+and reinstall the controls to point both shortcuts at that executable. The
+underlying recovery/restoration behavior below does not change. Source and
+dependencies remain in the checkout; the EXE alone is not a portable install.
+
 1. Double-click **Start Relay**. It repairs/stages the local service and opens
    the original dashboard at <http://127.0.0.1:4144/dashboard>. A single live
    terminal labels Codex and Claude requests. `status` shows actual readiness.

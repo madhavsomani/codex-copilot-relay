@@ -23,6 +23,12 @@ Codex and the official GitHub Copilot SDK.
 
 ## Keep Codex. Change the inference path.
 
+**One Windows EXE entry point:** build `Copilot-Relay.exe` with
+`Build-RelayLauncher.ps1`, then run `Install-RelayDesktopControls.ps1`. Both desktop
+controls use that EXE (`start` / `stop`). This is a lightweight launcher for the
+installed checkout, **not a self-contained SDK bundle**.
+See [build, use, and rollback](docs/WINDOWS-LAUNCHER.md).
+
 **Windows desktop controls:** run `powershell -NoProfile -ExecutionPolicy Bypass
 -File .\Start-Relay.ps1` once to install **Start Relay** and **Stop & Restore**.
 Both adapters share port 4144 and the existing dashboard/history. The live

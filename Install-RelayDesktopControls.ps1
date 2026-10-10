@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([string]$Desktop=[Environment]::GetFolderPath('Desktop'),[int]$Port=4144,[string]$Model='gpt-6.1-sol')
+param([string]$Desktop=[Environment]::GetFolderPath('Desktop'),
+    [ValidateRange(1024,65535)][int]$Port=4144,
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')][string]$Model='gpt-6.1-sol',
+    [switch]$UsePowerShell)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Codex-Copilot-Config.ps1')
 . (Join-Path $PSScriptRoot 'Relay-Control.ps1')
@@ -39,8 +42,38 @@ if (Test-Path -LiteralPath $rollback) {
 $start=Join-Path $desktopPath 'Start Relay.lnk'
 $stop=Join-Path $desktopPath 'Stop & Restore.lnk'
 foreach($file in @($start,$stop)){Assert-RelayLocalPath -Root $desktopPath -Path $file}
-New-CodexCopilotDesktopShortcut -ShortcutPath $start -ScriptPath (Join-Path $PSScriptRoot 'Start-Relay.ps1') -ScriptArguments "-Port $Port -Model $Model" -Description 'Start or repair the shared Codex + Claude relay, visible terminal and dashboard.' | Out-Null
-New-CodexCopilotDesktopShortcut -ShortcutPath $stop -ScriptPath (Join-Path $PSScriptRoot 'Stop-Relay.ps1') -KeepOpen -Description 'Stop owned recovery and both adapters after work drains; restore protected Codex config. Claude profile remains user-controlled.' | Out-Null
+$binary=Join-Path $PSScriptRoot 'Copilot-Relay.exe'
+Assert-RelayLocalPath -Root $PSScriptRoot -Path $binary
+$useBinary=-not $UsePowerShell -and (Test-Path -LiteralPath $binary -PathType Leaf)
+if ($useBinary -and (Get-Item -LiteralPath $binary).VersionInfo.ProductName -ne 'Codex Copilot Relay Launcher') {
+    throw 'The EXE is not a known relay launcher. Rebuild it or use -UsePowerShell; controls were not changed.'
+}
+$powerShell=(Get-Command powershell.exe -ErrorAction Stop).Source
+$plans=@(
+    @{Path=$start;Script='Start-Relay.ps1';Command='start';Extra=" -Port $Port -Model $Model";NoExit='';BinaryArgs="start --port $Port --model $Model";Description='Start or repair the shared Codex + Claude relay, visible terminal and dashboard.'}
+    @{Path=$stop;Script='Stop-Relay.ps1';Command='stop';Extra='';NoExit=' -NoExit';BinaryArgs='stop';Description='Stop owned recovery and both adapters after work drains; restore protected Codex config. Claude profile remains user-controlled.'}
+)
+# Validate BOTH destinations before rewriting either. Permit only migration
+# between this checkout's known script and binary controls, never foreign links.
+foreach($plan in $plans) {
+    $script=Join-Path $PSScriptRoot $plan.Script
+    if (-not (Test-Path -LiteralPath $plan.Path)) { continue }
+    $existing=$shell.CreateShortcut($plan.Path)
+    $scriptPattern='^-NoProfile -ExecutionPolicy Bypass(?: -NoExit)? -File "'+[regex]::Escape($script)+'"(?: -Port \d+ -Model [A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$'
+    $binaryPattern=if($plan.Command -eq 'start'){'^start --port \d+ --model [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'}else{'^stop$'}
+    $ownedScript=$existing.TargetPath -ieq $powerShell -and ([string]$existing.Arguments) -match $scriptPattern
+    $ownedBinary=$existing.TargetPath -ieq $binary -and ([string]$existing.Arguments) -match $binaryPattern
+    if (-not ($ownedScript -or $ownedBinary)) { throw 'A desktop control has an unrecognized target; neither control was changed.' }
+}
+foreach($plan in $plans) {
+    $link=$shell.CreateShortcut($plan.Path)
+    $link.TargetPath=if($useBinary){$binary}else{$powerShell}
+    $link.Arguments=if($useBinary){$plan.BinaryArgs}else{'-NoProfile -ExecutionPolicy Bypass'+$plan.NoExit+' -File "'+(Join-Path $PSScriptRoot $plan.Script)+'"'+$plan.Extra}
+    $link.WorkingDirectory=$PSScriptRoot
+    $link.WindowStyle=1
+    $link.Description=$plan.Description
+    $link.Save()
+}
 if ($archiveFiles.Count) {
     $archive=Join-Path $desktopPath ('Copilot Relay Backups\old-desktop-controls-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
     Assert-RelayLocalPath -Root $desktopPath -Path $archive

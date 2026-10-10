@@ -21,3 +21,7 @@ report.*.json
 # Local, abandoned Codex-engine experiment: never part of a relay release.
 /experimental/
 /probe-native-voice-routing.mjs
+
+# Locally built Windows controller; rebuild from reviewed source.
+/Copilot-Relay.exe
+/.relay-launcher-build-*/
