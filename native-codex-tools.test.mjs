@@ -11,7 +11,9 @@ import {extractToolDeclarations, resolveRequestCompatibility} from './bridge-cor
 import {ResponsesEventStream} from './responses-stream.mjs';
 
 async function nativeConfigFixture(context) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-native-config-'));
+  // Windows runners report TEMP as an 8.3 short path (RUNNER~1); resolve it so
+  // fixture paths match the canonical paths the loader compares against.
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'relay-native-config-')));
   context.after(async () => {
     assert.equal(await fs.realpath(root), root);
     assert.ok(path.basename(root).startsWith('relay-native-config-'));
