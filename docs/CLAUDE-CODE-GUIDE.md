@@ -70,12 +70,15 @@ GitHub Copilot ──► Claude Opus / Sonnet / Haiku
 6. **Restart Claude.** Then check that a reply in the app matches a completed
    request in the relay terminal or dashboard (`http://127.0.0.1:4144/dashboard`).
 
-Optional: put the same switches in `%USERPROFILE%\.claude\settings.json` so the
-CLI behaves the same way:
+Optional: for the CLI, put this in `%USERPROFILE%\.claude\settings.json`:
 
 ```json
-{ "env": { "ENABLE_TOOL_SEARCH": "true", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "0" } }
+{ "env": { "ENABLE_TOOL_SEARCH": "force" } }
 ```
+
+Use `force`, not `true`. `force` turns on tool search even while the desktop
+app keeps other experimental features off. A user-level `true` overrides the
+app's own `force` and silently turns tool search back off in desktop sessions.
 
 ## 4. Token efficiency: what matters
 
@@ -130,7 +133,7 @@ price list, and may change.
 | File tools, Bash, MCP connectors, skills, hooks, subagents, workflows | Supported |
 | Opus / Sonnet / Haiku routing | Supported; list one model per family (§3) |
 | Image input (screenshots, Read on images) | Supported, forwarded natively |
-| PDF and plain-text documents (Read on a PDF) | Supported since 1.3.81 |
+| PDF and plain-text documents (Read on a PDF) | Supported since 1.3.81. Encrypted PDFs are replaced with a note asking for an unlocked copy (1.3.85), instead of breaking the chat. |
 | Tool search, context editing | Supported since 1.3.84 |
 | Adaptive/extended thinking, effort, structured outputs, strict tools | Supported where Copilot advertises them for the model |
 | WebFetch | Supported; runs locally |

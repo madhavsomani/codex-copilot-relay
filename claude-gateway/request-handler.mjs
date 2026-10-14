@@ -3,6 +3,20 @@ import {invalid,sdkToolName} from './protocol.mjs';
 import {observeStream} from './upstream-stream.mjs';
 import {readProviderError} from './errors.mjs';
 
+// Upstream rejects every request that contains an encrypted PDF, and the PDF
+// stays in client history, so one Read would break the whole conversation.
+// Replace it, identically on every turn, with a visible note.
+export function encryptedPdf(block){
+  if(block.source?.type!=='base64'||block.source.media_type!=='application/pdf')return false;
+  return Buffer.from(block.source.data,'base64').toString('latin1').includes('/Encrypt');
+}
+function readableDocument(block){
+  if(!encryptedPdf(block))return block;
+  const name=typeof block.title==='string'?' "'+block.title.slice(0,200)+'"':'';
+  return {type:'text',text:'[Relay: the PDF'+name+' is encrypted or password-protected, which the model cannot read. '
+    +'Ask the user for an unlocked copy, or decrypt it locally (for example: qpdf --decrypt in.pdf out.pdf) and read that file.]'};
+}
+
 // Documented SDK extension. Never changes destination, credentials, model or
 // entitlement headers. Plans are scoped to actual SDK sessions, not global turns.
 export class ClaudeRequestHandler extends CopilotRequestHandler {
@@ -37,9 +51,11 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
     if(plan.onEvent||!plan.sent)wire.messages=(plan.nativeMessages??body.messages).map(message=>({...message,
       content:typeof message.content==='string'?message.content:message.content.map(block=>
         block.type==='tool_use'?{...block,name:names.get(block.name)??block.name}
+        :block.type==='document'?readableDocument(block)
         // Tool search results name deferred client tools; use their SDK names.
         :block.type==='tool_result'&&Array.isArray(block.content)?{...block,content:block.content.map(item=>
-          item.type==='tool_reference'?{...item,tool_name:names.get(item.tool_name)??item.tool_name}:item)}:block)}));
+          item.type==='tool_reference'?{...item,tool_name:names.get(item.tool_name)??item.tool_name}
+          :item.type==='document'?readableDocument(item):item)}:block)}));
     wire.system=body.system??'';
     wire.max_tokens=body.max_tokens;
     for(const key of ['thinking','output_config','temperature','top_p','top_k','stop_sequences','context_management']){
