@@ -28,9 +28,11 @@ test('fetched, malformed or misplaced documents fail before SDK work',()=>{
 test('encrypted PDFs reach upstream as a visible note; normal PDFs stay native',async t=>{
   const {ClaudeRequestHandler,encryptedPdf}=await import('./claude-gateway/request-handler.mjs');
   const http=(await import('node:http')).default;
-  const locked={type:'document',title:'Statement',source:{type:'base64',media_type:'application/pdf',
-    data:Buffer.from('%PDF-1.4\ntrailer<</Root 1 0 R/Encrypt 5 0 R>>').toString('base64')}};
-  assert.equal(encryptedPdf(locked),true);assert.equal(encryptedPdf(pdf),false);
+  const locked={type:'document',title:'Statement',cache_control:{type:'ephemeral'},source:{type:'base64',media_type:'application/pdf',
+    data:Buffer.from('%PDF-1.4\n'+'x'.repeat(100000)+'\ntrailer<</Root 1 0 R/Encrypt 5 0 R>>').toString('base64')}};
+  // Page text that merely mentions /Encrypt is not an encryption dictionary.
+  const mention={...pdf,source:{...pdf.source,data:Buffer.from('%PDF-1.4 (see /Encrypt in the spec)\ntrailer<</Root 1 0 R>>').toString('base64')}};
+  assert.equal(encryptedPdf(locked),true);assert.equal(encryptedPdf(locked),true);assert.equal(encryptedPdf(pdf),false);assert.equal(encryptedPdf(mention),false);
   let wire;const provider=http.createServer((request,response)=>{let text='';request.on('data',chunk=>text+=chunk).on('end',()=>{
     wire=JSON.parse(text);response.writeHead(200,{'content-type':'text/event-stream'});
     response.end(['message_start','message_stop'].map(type=>'data: '+JSON.stringify({type})+'\n\n').join(''));});});
@@ -41,5 +43,6 @@ test('encrypted PDFs reach upstream as a visible note; normal PDFs stay native',
     body:JSON.stringify({model:'claude-opus-5.5',stream:true,messages:[]})}),{sessionId:'pdf',signal:new AbortController().signal})).text();
   const [result,plain]=wire.messages[2].content;
   assert.equal(result.content[0].type,'text');assert.match(result.content[0].text,/"Statement" is encrypted/);
+  assert.deepEqual(result.content[0].cache_control,{type:'ephemeral'});
   assert.deepEqual(plain,pdf);assert.equal(request.messages[2].content[0].content[0],locked);
 });

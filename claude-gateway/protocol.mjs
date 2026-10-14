@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 
-export const adapterVersion = '0.1.29';
+export const adapterVersion = '0.1.30';
 export const digest = value => createHash('sha256').update(stable(value)).digest('hex');
 export function stable(value) {
   if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';

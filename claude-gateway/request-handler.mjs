@@ -6,15 +6,28 @@ import {readProviderError} from './errors.mjs';
 // Upstream rejects every request that contains an encrypted PDF, and the PDF
 // stays in client history, so one Read would break the whole conversation.
 // Replace it, identically on every turn, with a visible note.
+const encryptedCache=new Map();
 export function encryptedPdf(block){
   if(block.source?.type!=='base64'||block.source.media_type!=='application/pdf')return false;
-  return Buffer.from(block.source.data,'base64').toString('latin1').includes('/Encrypt');
+  const data=block.source.data,key=data.length+':'+data.slice(0,64)+data.slice(-512);
+  if(encryptedCache.has(key))return encryptedCache.get(key);
+  // The /Encrypt entry lives in the trailer (or the xref stream dictionary that
+  // replaces it), which is at the end of the file, so only decode the tail.
+  // Match it as a dictionary key, not arbitrary page text.
+  // Base64 decodes in 4-character groups, so start the tail on a group boundary.
+  const start=Math.max(0,data.length-64*1024);
+  const tail=Buffer.from(data.slice(start-start%4),'base64').toString('latin1');
+  const result=/\/Encrypt\s+\d+\s+\d+\s+R/.test(tail);
+  if(encryptedCache.size>256)encryptedCache.delete(encryptedCache.keys().next().value);
+  encryptedCache.set(key,result);
+  return result;
 }
 function readableDocument(block){
   if(!encryptedPdf(block))return block;
   const name=typeof block.title==='string'?' "'+block.title.slice(0,200)+'"':'';
   return {type:'text',text:'[Relay: the PDF'+name+' is encrypted or password-protected, which the model cannot read. '
-    +'Ask the user for an unlocked copy, or decrypt it locally (for example: qpdf --decrypt in.pdf out.pdf) and read that file.]'};
+    +'Ask the user for an unlocked copy, or decrypt it locally (for example: qpdf --decrypt in.pdf out.pdf) and read that file.]',
+    ...(block.cache_control!==undefined?{cache_control:block.cache_control}:{})};
 }
 
 // Documented SDK extension. Never changes destination, credentials, model or
