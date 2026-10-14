@@ -7,9 +7,14 @@
 - After the version bump, run Start or Repair so a fresh watchdog is staged. The
   watchdog reads `expectedVersion` once at startup. Arbitrary file edits and an
   unchanged version do not hot-reload or deploy automatically.
-- Never force-restart while `/health` reports `activeExchanges` above zero. Start
-  or Repair uses deferred promotion so in-memory tool continuations can finish.
-- The sole legacy recovery exception is `Start-Codex-CopilotProxy.ps1
+- Repair, internal Start-Codex-CopilotProxy and automatic recovery must never force-restart healthy active
+  work. They use deferred promotion so in-memory continuations can finish.
+- Explicit desktop **Start Relay** and **Stop & Restore** are intentional cancellation exceptions: disable
+  recovery, cancel both adapters (including pending uploads/continuations), stop
+  only verified owned processes. Stop restores the protected TOML; Start keeps
+  the managed configuration and starts the latest local package. Never reuse
+  `-CancelActive` in internal Start, Repair or automatic upgrades/recovery.
+- The legacy automatic recovery exception is `Start-Codex-CopilotProxy.ps1
   -RecoverDeadBackend`: it must prove, across repeated samples, an owned listener,
   a fatal CLI heap crash after startup, and no remaining Copilot worker. Those
   stale exchanges are already lost. Supervised releases recover the SDK in-process
@@ -37,5 +42,8 @@
 - The connection center is guided/read-only, not an automatic installer.
 
 - Run `npm test` and `git diff --check` for every code change.
+- Before deploying SDK hooks or startup changes, run `npm run probe:startup`.
+  It uses real SDK model discovery and both adapters on an isolated port, with
+  no model inference; mocked unit tests alone did not catch the 1.3.78 outage.
 - For dashboard work, inspect the live page at desktop, tablet, and phone widths
   and confirm there is no page-level horizontal overflow or browser console error.

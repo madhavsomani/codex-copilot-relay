@@ -20,7 +20,8 @@ export async function bounded(operation, timeoutMs, label = "Copilot SDK operati
 }
 
 function unavailable(message, code = "copilot_unavailable") {
-  return Object.assign(new Error(message), { statusCode: 503, code });
+  return Object.assign(new Error(message), { statusCode: 503, code,
+    ...(code==='relay_session_capacity'?{shouldRetry:'false'}:{}) });
 }
 
 export class CopilotRuntime {
@@ -43,6 +44,7 @@ export class CopilotRuntime {
     this.startingClient = null;
     this.generation = 0;
     this.sessions = new Set();
+    this.replacements = new Map();
     this.creating = 0;
     this.created = 0;
     this.recoveries = 0;
@@ -120,6 +122,7 @@ export class CopilotRuntime {
       this.recoveries++;
       this.lastError = "Copilot SDK connection closed; replacing the dead worker.";
       this.sessions.clear();
+      this.replacements.clear();
       try { this.onLost(generation, unavailable(this.lastError, "copilot_connection_lost")); }
       catch (error) { this.log("sdk.cleanup_error", { message: String(error?.message ?? error) }); }
     }
@@ -220,12 +223,18 @@ export class CopilotRuntime {
     return this.probe;
   }
 
-  async createSession(config) {
+  async createSession(config, {replacementFor} = {}) {
     for (let attempt = 0; attempt < 2; attempt++) {
       const client = await this.ready(), generation = this.generation;
-      if (this.sessions.size + this.creating >= this.maxSessions) {
+      // One transactional headroom slot lets a validated tool continuation
+      // rebuild at capacity. Keep its old session until the caller commits the
+      // swap. New work and simultaneous swaps cannot borrow this reservation.
+      const replacing=replacementFor!==undefined;
+      const reserved=replacing&&this.sessions.has(replacementFor)&&this.replacements.size===0;
+      if (replacing&&!reserved || this.sessions.size + this.creating >= this.maxSessions+(reserved?1:0)) {
         throw unavailable(`Relay session capacity (${this.maxSessions}) reached. Existing tool continuations are preserved; finish or cancel an idle task before retrying.`, "relay_session_capacity");
       }
+      if(reserved)this.replacements.set(replacementFor,null);
       this.creating++;
       let session;
       let abandoned = false;
@@ -240,10 +249,12 @@ export class CopilotRuntime {
         session = await bounded(() => allocation, this.startupTimeoutMs, "SDK session creation");
         if (!this.isCurrent(generation)) throw unavailable("Copilot worker changed before the prompt was sent.");
         this.sessions.add(session);
+        if(reserved)this.replacements.set(replacementFor,session);
         this.created++;
         return { session, generation };
       } catch (error) {
         abandoned = true;
+        if(reserved)this.replacements.delete(replacementFor);
         if (attempt === 0 && isClosedConnectionError(error)) {
           await this.reportFailure(error, generation);
         } else {
@@ -258,6 +269,7 @@ export class CopilotRuntime {
 
   release(session) {
     this.sessions.delete(session);
+    for(const [old,next] of this.replacements)if(old===session||next===session)this.replacements.delete(old);
   }
 
   async stop() {
@@ -268,6 +280,7 @@ export class CopilotRuntime {
     const clients = new Set([this.client, this.startingClient].filter(Boolean));
     this.client = null;
     this.sessions.clear();
+    this.replacements.clear();
     await Promise.allSettled([...clients].map(client => bounded(() => client.forceStop(), this.operationTimeoutMs, "SDK shutdown")));
     if (this.flight) await this.flight;
   }

@@ -10,7 +10,7 @@ export const CONNECTION_HTML = `
 <section class="connection-grid" aria-label="Connections">
 <a class="connection-card" id="connection-copilot" href="/dashboard/setup#copilot"><small>GITHUB COPILOT</small><strong id="copilot-connection-label">Checking sign-in…</strong><small id="copilot-connection-detail">SDK authentication and model access · details →</small></a>
 <a class="connection-card" id="connection-codex" href="/dashboard/setup#codex"><small>CODEX</small><strong id="codex-connection-label">Checking configuration…</strong><small id="codex-connection-detail">Configuration and observed traffic · details →</small></a>
-<a class="connection-card" id="connection-claude" href="/dashboard/setup#claude"><small>CLAUDE CODE</small><strong id="claude-card-label">Checking gateway…</strong><small id="claude-card-detail">Gateway readiness and observed requests · details →</small></a>
+<a class="connection-card" id="connection-claude" href="/dashboard/setup#claude"><small>CLAUDE CODE</small><strong id="claude-card-label">Checking gateway…</strong><small id="claude-card-detail">Gateway readiness and setup instructions →</small></a>
 <a class="connection-card" id="connection-restore" href="/dashboard/setup#restore"><small>RESTORE & SETUP</small><strong id="restore-connection-label">Checking backup…</strong><small id="connection-checked">Unmodified Codex · reversible provider configuration</small></a>
 </section>`;
 export const CONNECTION_SCRIPT = `

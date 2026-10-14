@@ -3,10 +3,12 @@ export function callRoute(record = {}, current = {}) {
   const requested = record.requestedModel || null;
   const selected = record.selectedModel || null;
   const reported = [...new Set((record.usage?.models || []).map(row => row.model).filter(Boolean))];
-  const changed = Boolean(requested && selected && requested !== selected);
+  const sameClaude = record.client === 'claude-code' && requested && selected && selected.replace(/(\d)\.(\d)/g,'$1-$2') === requested;
+  const changed = Boolean(requested && selected && requested !== selected && !sameClaude);
   const historical = Number.isFinite(Date.parse(record.receivedAt)) && Number.isFinite(Date.parse(current.startedAt))
     && Date.parse(record.receivedAt) < Date.parse(current.startedAt);
   let note = selected ? (requested ? 'Requested model honored' : 'Installation default selected') : 'Awaiting backend selection';
+  if(sameClaude && requested !== selected) note = 'Requested model honored · Claude ID formatting only';
   if (changed) note = record.continuedFrom ? 'Continued existing SDK exchange'
     : record.routingMode === 'locked-default' ? 'Forced default routing'
     : 'Routed to a different model';

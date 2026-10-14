@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([int]$WaitSeconds=0)
+param([int]$WaitSeconds=0,[switch]$CancelActive)
 
 $ErrorActionPreference = 'Stop'
 $bridgeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -45,7 +45,7 @@ $removedAutoStart = Remove-CodexCopilotAutoStart -WatchScript $watchScript
 & $stopWatchdogScript | Out-Null
 & $stopConsoleScript | Out-Null
 $port = if ($state) { [int]$state.Port } else { 4144 }
-& $stopScript -Port $port -WaitSeconds $WaitSeconds | Out-Null
+& $stopScript -Port $port -WaitSeconds $WaitSeconds -CancelActive:$CancelActive | Out-Null
 
 if ($state) {
     $warnings = @()

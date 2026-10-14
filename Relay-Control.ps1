@@ -40,12 +40,40 @@ function Get-RelayListenerEvidence {
     return [pscustomobject]@{Pid=[int]$process.ProcessId;Created=$process.CreationDate;Health=$health}
 }
 function Stop-RelayOwnedListener {
-    param([string]$Root,[int]$Port,[int]$WaitSeconds = 0)
+    param([string]$Root,[int]$Port,[int]$WaitSeconds = 0,[switch]$CancelActive)
     $first = Get-RelayListenerEvidence -Root $Root -Port $Port
     if (-not $first) { return $true }
     $runtime = Join-Path $Root 'runtime'
     $command = Join-Path $runtime 'relay-stop.json'
     Assert-RelayLocalPath -Root $Root -Path $command
+    if ($CancelActive) {
+        $current=Get-RelayListenerEvidence -Root $Root -Port $Port
+        if (-not $current) { return $true }
+        if ($current.Pid -ne $first.Pid -or $current.Created -ne $first.Created -or
+            $current.Health.lifecycle.instanceId -cne $first.Health.lifecycle.instanceId) { throw 'Listener incarnation changed; cancellation refused.' }
+        if ($current.Health.lifecycle.cancelActive -eq $true) {
+            $id=[guid]::Empty
+            if (-not [guid]::TryParse([string]$current.Health.lifecycle.instanceId,[ref]$id)) { throw 'Invalid process incarnation.' }
+            $temp=Join-Path $runtime ('.relay-stop-'+[guid]::NewGuid().ToString('N'))
+            try {
+                [IO.File]::WriteAllText($temp,(@{instanceId=$id.ToString();mode='cancel-active'}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+                Protect-CodexCopilotConfigBackup -BackupPath $temp
+                Move-Item -LiteralPath $temp -Destination $command -Force
+            } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+            # Cancellation starts at once; this bounded wait is only for cleanup,
+            # never for completion of a model request or client-owned tool job.
+            for ($attempt=0;$attempt -lt 60;$attempt++) {
+                $process=Get-CimInstance Win32_Process -Filter "ProcessId=$($first.Pid)" -ErrorAction Stop
+                if (-not $process) { return $true }
+                if ($process.CreationDate -ne $first.Created -or -not (Test-RelayServerIdentity -Process $process -Root $Root)) { throw 'PID reused during cancellation; stop refused.' }
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        # Explicit manual stop only: older releases cannot understand cancellation;
+        # a hung cleanup also needs a bounded exit. Revalidate each owned process.
+        Stop-RelayOwnedProcessTree -Root $Root -Evidence $first
+        return $true
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
     $notified = $false
     do {
@@ -105,6 +133,38 @@ function Stop-RelayOwnedListener {
         if ([DateTime]::UtcNow -ge $deadline) { return $false }
         Start-Sleep -Seconds 2
     } while ($true)
+}
+function Stop-RelayOwnedProcessTree {
+    param([string]$Root,[object]$Evidence)
+    $rootProcess=Get-CimInstance Win32_Process -Filter "ProcessId=$($Evidence.Pid)" -ErrorAction Stop
+    if (-not $rootProcess) { return }
+    if ($rootProcess.CreationDate -ne $Evidence.Created -or -not (Test-RelayServerIdentity -Process $rootProcess -Root $Root)) { throw 'Unproven relay process; cancellation refused.' }
+    $queue=[Collections.Generic.Queue[object]]::new();$queue.Enqueue($rootProcess)
+    $seen=@{}
+    while ($queue.Count) {
+        $expected=$queue.Dequeue();$processId=[int]$expected.ProcessId
+        if ($seen.ContainsKey($processId)) { continue };$seen[$processId]=$true
+        $fresh=Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction Stop
+        if ($fresh -and ($fresh.CreationDate -ne $expected.CreationDate -or $fresh.CommandLine -cne $expected.CommandLine -or $fresh.ParentProcessId -ne $expected.ParentProcessId)) { throw 'Owned process identity changed; no further termination attempted.' }
+        # Snapshot before and after stopping the parent to catch a worker created
+        # during shutdown. The creation-time boundary excludes reused parent PIDs.
+        $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$processId" -ErrorAction Stop)
+        if ($fresh) { Stop-Process -Id $processId -Force -ErrorAction Stop }
+        $exited=$false
+        for ($attempt=0;$attempt -lt 40;$attempt++) {
+            $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction Stop
+            if (-not $remaining) { $exited=$true;break }
+            if ($remaining.CreationDate -ne $expected.CreationDate) { throw 'PID reused before exit confirmation.' }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $exited) { throw 'Owned process exit was not confirmed.' }
+        $exitBoundary=Get-Date
+        $children+=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$processId" -ErrorAction Stop)
+        foreach ($child in $children) {
+            if ($child.CreationDate -ge $expected.CreationDate -and $child.CreationDate -le $exitBoundary) { $queue.Enqueue($child) }
+        }
+    }
+    Write-Output 'Explicit cancellation stopped the verified relay process and its owned descendants. Client-owned tools were not targeted.'
 }
 function Get-RelayScriptProcesses {
     param([string]$Script)

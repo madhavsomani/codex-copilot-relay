@@ -16,7 +16,8 @@ import {preflightClientSettings} from './client-settings.mjs';
 export function retryProbeArguments(args){
   if(args.length!==1||args[0]!=='--local')throw new Error('Use --local for the synthetic non-retryable error proof. Paid inference and outage injection are unavailable.');
 }
-export async function createLocalRetryFixture(){
+export async function createLocalRetryFixture({admissionStatus}={}){
+  if(admissionStatus!==undefined&&![409,503].includes(admissionStatus))throw new Error('Unsupported local admission fixture.');
   const handler=new ClaudeRequestHandler(),sessions=new Set();let upstreamRequests=0,released=0,gateway;
   const upstream=http.createServer(async(req,res)=>{
     for await(const chunk of req){};upstreamRequests++;
@@ -40,7 +41,10 @@ export async function createLocalRetryFixture(){
     }
     async abort(){this.stopped=true;}async disconnect(){sessions.delete(this);}
   }
-  const runtime={snapshot:()=>({state:'local-fixture-not-authenticated'}),createSession:async()=>({session:new Session(),generation:1}),
+  const runtime={snapshot:()=>({state:'local-fixture-not-authenticated'}),createSession:async()=>{
+    if(admissionStatus)throw Object.assign(new Error('LOCAL_NON_RETRYABLE_FIXTURE'),{statusCode:admissionStatus,
+      type:admissionStatus===409?'invalid_request_error':'api_error',shouldRetry:'false'});
+    return {session:new Session(),generation:1};},
     release:()=>released++,stop:async()=>{}};
   const models=[{id:'claude-opus-5.5',name:'Local fixture, not a Copilot model receipt',supportedReasoningEfforts:['low'],
     capabilities:{limits:{max_prompt_tokens:1000000,max_context_window_tokens:1000000,max_output_tokens:128000}}}];
@@ -52,10 +56,10 @@ export async function createLocalRetryFixture(){
       async close(){await gateway.close();await closeUpstream();}};
   }catch(error){await gateway?.close();await closeUpstream();throw error;}
 }
-export async function runRetryProof(args=process.argv.slice(2)){
+export async function runRetryProof(args=process.argv.slice(2),{admissionStatus}={}){
   retryProbeArguments(args);
   const root=fileURLToPath(new URL('../runtime/',import.meta.url));mkdirSync(root,{recursive:true});
-  const workspace=mkdtempSync(path.join(root,'claude-stock-retry-local-')),fixture=await createLocalRetryFixture();
+  const workspace=mkdtempSync(path.join(root,'claude-stock-retry-local-')),fixture=await createLocalRetryFixture({admissionStatus});
   const executable=process.env.CLAUDE_EXECUTABLE??(process.platform==='win32'?'claude.exe':'claude');
   const env=clientEnvironment(fixture.gateway,fixture.token,{...process.env,CLAUDE_CONFIG_DIR:path.join(workspace,'client-state'),DISABLE_UPDATES:'1'});
   const capture=async arguments_=>{
@@ -76,14 +80,14 @@ export async function runRetryProof(args=process.argv.slice(2)){
     writeFileSync(path.join(workspace,'client-stdout.log'),result.stdout);writeFileSync(path.join(workspace,'client-stderr.log'),result.stderr);
     const output=JSON.parse(result.stdout.trim());assert.notEqual(result.code,0);assert.equal(output.is_error,true);
     assert.match(output.result,/LOCAL_NON_RETRYABLE_FIXTURE/);
-    const stats=fixture.stats();assert.equal(stats.upstreamRequests,1);assert.equal(stats.released,1);
+    const stats=fixture.stats(),expected=admissionStatus?0:1;assert.equal(stats.upstreamRequests,expected);assert.equal(stats.released,expected);
     assert.equal(stats.activeSessions,0);assert.equal(stats.bindings,0);
     const state=fixture.gateway.ledger.state;assert.equal(state.received,1);assert.equal(state.failed,1);assert.equal(state.completed,0);
     assert.ok(state.recent.every(row=>row.sdkApiCalls===0&&row.totalNanoAiu===null));
     assert.equal(fixture.gateway.turns.size,0);assert.equal(fixture.gateway.byTool.size,0);
     const report={ok:true,platform:process.platform,node:process.version,stockClient:version.stdout.trim(),
       scope:'scripted loopback non-retryable HTTP error only; not active-outage or sustained/provider proof',
-      stockStoppedWithoutRetry:true,upstreamRequests:1,failedRequests:1,completedRequests:0,ownedSessionsReleased:1,
+      stockStoppedWithoutRetry:true,httpStatus:admissionStatus??500,upstreamRequests:expected,failedRequests:1,completedRequests:0,ownedSessionsReleased:expected,
       sdkInferenceReceipts:0,copilotAuthenticationVerified:false,globalClientSettingsChanged:false};
     writeFileSync(path.join(workspace,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({...report,workspace}));return report;
   }catch(error){

@@ -4,6 +4,8 @@ import {CONNECTION_HTML,CONNECTION_STYLE,CONNECTION_SCRIPT} from './setup-ui.mjs
 import {TRENDS_HTML,TRENDS_STYLE,TRENDS_SCRIPT} from './dashboard-trends.mjs';
 import {TASKS_HTML,TASKS_STYLE,TASKS_SCRIPT} from './dashboard-tasks.mjs';
 import {CLAUDE_HTML,CLAUDE_STYLE,CLAUDE_SCRIPT} from './dashboard-claude.mjs';
+import {CLAUDE_GUIDE_STYLE,renderClaudeSetupGuide} from './claude-setup-guide.mjs';
+import {BROWSER_HTML,BROWSER_SCRIPT} from './dashboard-browser.mjs';
 
 export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -188,7 +190,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .history-table th, .history-table td { padding: 9px 7px; white-space: normal; overflow-wrap: anywhere; }
     .history-table th { font-size: 9px; letter-spacing: .03em; }
     .history-table td.wrap { min-width: 0; max-width: none; }
-    .history-table th:nth-child(1), .history-table th:nth-child(2) { width: 9%; }
+    .history-table th:nth-child(1) { width: 16%; }
+    .history-table th:nth-child(2) { width: 9%; }
+    .history-table .session-cell { white-space: pre-line; }
+    .history-toolbar { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .history-toolbar select { background:var(--panel2);color:var(--text);border:1px solid var(--line);padding:6px 9px;border-radius:7px;font:inherit; }
     .history-table th:nth-child(3), .history-table th:nth-child(6) { width: 8%; }
     .history-table th:nth-child(4) { width: 12%; }
     .history-table th:nth-child(5), .history-table th:nth-child(10) { width: 6%; }
@@ -196,6 +202,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .history-table th:nth-child(8), .history-table th:nth-child(12), .history-table th:nth-child(13) { width: 5%; }
     .history-table th:nth-child(9) { width: 10%; }
     .history-table th:nth-child(11) { width: 4%; }
+    .history-table th:nth-child(8) { width: 86px; }
+    .history-table th:nth-child(13) { width: 82px; }
+    .history-table td:nth-child(8), .history-table td:nth-child(13) { white-space:nowrap; overflow-wrap:normal; }
     .history-table .total-token-cell { color: var(--text); font-weight: 650; }
     .history-table .effort-cell { white-space: pre-line; color: var(--accent); }
     .history-explainer { margin: 0; padding: 12px 16px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
@@ -370,6 +379,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
     ${CONNECTION_STYLE}
     ${CLAUDE_STYLE}
+    ${CLAUDE_GUIDE_STYLE}
   </style>
 </head>
 <body>
@@ -392,14 +402,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </div>
   </header>
   <main>
-    ${CONNECTION_HTML}
+    ${CONNECTION_HTML.replace('href="/dashboard/setup#claude"','href="#claude-setup-guide"')}
+    ${renderClaudeSetupGuide()}
+    ${BROWSER_HTML}
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
     <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
     <details class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
       <summary class="provider-summary"><strong>Where calls actually go</strong><span class="provider-overview">Model calls → Copilot · Native images → Codex / OpenAI · API → explicit only</span><span class="pill" id="no-fallback">Loading policy…</span></summary>
       <div class="provider-content">
       <div class="provider-grid">
-        <article class="provider-card" id="provider-copilot"><h3>GitHub Copilot</h3><div class="provider-route">Codex → Relay → Copilot SDK → selected model</div><div class="provider-values"><div><strong id="provider-copilot-calls">—</strong><small>SDK model calls</small></div><div><strong id="provider-copilot-in">—</strong><small>input tokens</small></div><div><strong id="provider-copilot-out">—</strong><small>output tokens</small></div></div><div class="provider-note" id="provider-copilot-state">Default inference route</div></article>
+        <article class="provider-card" id="provider-copilot"><h3>GitHub Copilot · both clients</h3><div class="provider-route">Codex / Claude Code → Relay → Copilot SDK → selected GPT / Claude model</div><div class="provider-values"><div><strong id="provider-copilot-calls">—</strong><small>SDK model calls · both clients</small></div><div><strong id="provider-copilot-in">—</strong><small>input tokens</small></div><div><strong id="provider-copilot-out">—</strong><small>output tokens</small></div></div><div class="provider-note" id="provider-copilot-state">Default inference route</div>${CLAUDE_HTML}</article>
         <article class="provider-card" id="provider-native"><h3>Native Codex / OpenAI</h3><div class="provider-route">Feature tool → native Codex helper → OpenAI</div><div class="provider-values"><div><strong id="provider-native-calls">—</strong><small>helper calls submitted</small></div><div><strong id="provider-native-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-native-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-native-state">Image generation · native search removed · Codex sign-in allowance</div></article>
         <article class="provider-card" id="provider-platform"><h3>OpenAI Platform API</h3><div class="provider-route">Explicit API / voice request → OpenAI Platform</div><div class="provider-values"><div><strong id="provider-platform-calls">—</strong><small>API requests submitted</small></div><div><strong id="provider-platform-in">—</strong><small>reported input tokens</small></div><div><strong id="provider-platform-out">—</strong><small>reported output tokens</small></div></div><div class="provider-note" id="provider-platform-state">Separate API billing · never automatic fallback</div></article>
       </div>
@@ -411,8 +423,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </details>
       </div>
     </details>
-    ${CLAUDE_HTML}
-    <p class="tiny">Codex analytics below · Claude Code has separate outcomes, usage and request history above. The live fabric shows both clients.</p>
+    <p class="tiny">History, session checkpoints and provider totals include Codex + Claude Code. Trend charts and legacy KPI cards below remain labelled Codex-only; source ledgers stay separate.</p>
     ${TRENDS_HTML}
     ${TASKS_HTML}
     <section class="kpis" id="observability-kpis" aria-label="Relay key performance indicators">
@@ -545,9 +556,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </aside>
     </section>
     <div class="workspace" id="history">
-      <section class="panel"><div class="panel-head"><h2 id="history-heading">Recent call history</h2><span class="tiny" id="count">0 records</span></div>
-        <p class="history-explainer" id="history-units">Exact SDK tokens per relay response, summed across its SDK calls. Total = input + output; cached input is included once. Non-cached = input minus cache reads, not necessarily unique text. In-progress usage is partial. All 13 fields are retained; smaller screens scroll sideways. Select a row to view its details directly below.</p>
-        <div class="table-wrap history-scroll" role="region" tabindex="0" aria-labelledby="history-heading"><table class="history-table" aria-describedby="history-units"><thead><tr><th>Received</th><th title="Applied SDK session reasoning effort, not an intelligence score">Intelligence · effort</th><th>Total tokens</th><th>Input tokens</th><th>Output tokens</th><th>AI credits · SDK</th><th>Route / model</th><th>Status</th><th>Payload bytes</th><th>Latency</th><th>Tools</th><th>Replay</th><th>Tier</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No Responses calls have crossed the bridge yet.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
+      <section class="panel"><div class="panel-head"><h2 id="history-heading">Recent call history</h2><div class="history-toolbar"><label>Client <select id="history-client"><option value="all">All clients</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option></select></label><span class="tiny" id="count">0 records</span></div></div>
+        <p class="history-explainer" id="history-units">Codex + Claude Code in one timeline. Exact SDK tokens per relay response, summed across its SDK calls. Total = input + output; cached input is included once. Non-cached = input minus cache reads, not necessarily unique text. In-progress usage is partial. Client and session name appear with each timestamp; hover for the stable ID. Cost is reported Copilot AI credits, not a dollar invoice. Smaller screens scroll sideways. Select a row to view its details directly below.</p>
+        <div class="table-wrap history-scroll" role="region" tabindex="0" aria-labelledby="history-heading"><table class="history-table" aria-describedby="history-units"><thead><tr><th>Received / client / session</th><th title="Applied SDK session reasoning effort, not an intelligence score">Intelligence · effort</th><th>Total tokens</th><th>Input tokens</th><th>Output tokens</th><th>AI credits · SDK</th><th>Route / model</th><th>Status</th><th>Payload bytes</th><th>Latency</th><th>Tools</th><th>Replay</th><th>Tier</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty">No calls match this client filter.</div></div><div class="more"><button id="show-more" hidden>Show 200 more</button></div></section>
       <section class="panel detail" id="selected-call" tabindex="-1" aria-labelledby="selected-call-heading"><div class="panel-head"><h2 id="selected-call-heading">Selected call</h2><span class="tiny" id="selected-id">none</span><a class="detail-back" href="#history">Back to call history</a></div><div class="detail-body" id="detail"><div class="empty">Select a row above. Detailed bodies load only when requested; older entries keep lightweight metadata.</div></div></section>
     </div>
   </main>
@@ -581,7 +592,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     function routeLines(record) {
       const route = callRoute(record, state.current || {});
-      return "Selected: " + (route.selected || "pending") + "\nRequested: " + (route.requested || "default")
+      return (record.clientLabel || "Codex") + " → GitHub Copilot SDK\nSelected: " + (route.selected || "pending") + "\nRequested: " + (route.requested || "default") + "\nSDK: " + (route.reported.join(", ") || "not reported")
         + (route.changed || route.historical ? "\n" + route.note : "");
     }
     function svgElement(name, attributes) { const node = document.createElementNS(svgNs, name); for (const entry of Object.entries(attributes || {})) node.setAttribute(entry[0], String(entry[1])); return node; }
@@ -896,8 +907,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       source.onerror = () => { $("live-badge").className = "live-badge"; setText("live-status", "reconnecting live feed"); };
     }
     function renderStats(data) {
+      renderBrowserSetup(data);
       renderProviders(data);
-      renderClaudeGateway(data.claude);
+      renderClaudeGateway(data.claude, data.summary);
+      renderSessionLeases(data.sessionControl);
       const summary = data.summary || {}, storage = data.storage || {};
       state.current = { startedAt: data.startedAt, routing: data.routing };
       setText("routing-policy", data.routing?.mode === "per-request"
@@ -908,7 +921,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("routing-context", "Copilot stays the default. OpenAI feature limits do not switch or disable Copilot. Current relay started " + time(data.startedAt) + ".");
       setText("network-model-name", state.latestInspectorRecord?.selectedModel || "Awaiting selection");
       setText("received", number(summary.received)); setText("replayed", number(summary.replayed)); setText("completed", number(summary.completed)); setText("failed", number(summary.failed)); setText("tools", number(summary.toolCalls)); setText("latency", duration(summary.avgLatencyMs)); setText("traffic", bytes((summary.inputBytes || 0) + (summary.outputBytes || 0)));
-      setText("limit", number(data.maxRecords || 1000)); setText("detail-limit", number(data.maxDetailedRecords || 200) + " detailed"); setText("count", number(state.records.length) + " retained records");
+      setText("limit", number(data.maxRecords || 1000)); setText("detail-limit", number(data.maxDetailedRecords || 200) + " detailed");
       const auxiliaryBytes = (storage.metricsBytes || 0) + (storage.eventLogBytes || 0) + (storage.watchdogLogBytes || 0) + (storage.processStdoutBytes || 0) + (storage.processStderrBytes || 0);
       const storageCapacity = storage.telemetryCapBytes || 0, storageRatio = storageCapacity ? Math.min(1, (storage.totalBytes || 0) / storageCapacity) : 0;
       setText("storage-total", bytes(storage.totalBytes || 0)); setText("storage-utilization", (storageRatio * 100).toFixed(storageRatio > 0 && storageRatio < .1 ? 1 : 0) + "%"); setText("telemetry-cap", bytes(storageCapacity)); setText("retained", number(summary.detailed || 0) + " detailed · " + number(summary.lightweight || 0) + " light");
@@ -922,7 +935,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setText("updated", "live data · " + time(data.sampledAt || Date.now())); $("updated").className = "pill";
     }
     function renderRows() {
-      const rows = $("rows"); rows.replaceChildren(); const records = state.records.slice(0, state.visible); $("empty").style.display = records.length ? "none" : "block";
+      const rows = $("rows"); rows.replaceChildren();
+      const filtered = state.records.filter(record=>!state.historyClient||state.historyClient==='all'||record.client===state.historyClient);
+      const countLabel=$('count');if(countLabel)countLabel.textContent=filtered.length+' matching / '+state.records.length+' retained';
+      const records = filtered.slice(0, state.visible); $("empty").style.display = records.length ? "none" : "block";
       for (const record of records) {
         const row = document.createElement("tr"); row.dataset.recordId = record.id; if (record.id === state.selected) row.className = "selected"; row.tabIndex = 0; row.setAttribute("role", "button"); row.onclick = () => selectRecord(record.id); row.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRecord(record.id); } };
         row.setAttribute('aria-controls', 'selected-call'); row.setAttribute('aria-pressed', String(record.id === state.selected));
@@ -933,30 +949,33 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         const total = tokenText(usage.totalTokens) + "\n" + (usage.sdkApiCalls === null ? "SDK calls not reported" : number(usage.sdkApiCalls) + " SDK call" + (usage.sdkApiCalls === 1 ? "" : "s")) + (record.completedAt ? "" : " · partial");
         const input = tokenText(usage.inputTokens) + "\nCached: " + tokenText(usage.cachedInputTokens) + "\nNon-cached: " + tokenText(usage.nonCachedInputTokens);
         const payload = "Request: " + bytes(record.inputBytes) + "\nResponse: " + bytes(record.outputBytes);
-        const values = [time(record.receivedAt), effort, total, input, tokenText(usage.outputTokens), creditsText(record.usage), (record.requestPath || "—") + "\n" + routeLines(record), record.status, payload, duration(record.latencyMs), record.toolCalls || 0, record.replayCount || 0, record.detailTier];
+        const session = time(record.receivedAt) + '\n' + (record.clientLabel || 'Codex') + '\n' + (record.sessionName || 'Session not reported');
+        const partialCredits = record.usage?.sdkApiCalls > (record.usage?.creditMeteredApiCalls || 0) && Number.isFinite(record.usage?.totalNanoAiu) ? ' · partial' : '';
+        const values = [session, effort, total, input, tokenText(usage.outputTokens), creditsText(record.usage) + partialCredits, (record.requestPath || "—") + "\n" + routeLines(record), record.status, payload, duration(record.latencyMs), tokenText(record.toolCalls ?? null), tokenText(record.replayCount ?? null), record.detailTier];
         values.forEach((value, index) => {
           const cell = document.createElement("td");
+          if (index === 0) { cell.className='session-cell'; cell.title='Client: '+(record.clientLabel||'Codex')+' · Session ID: '+(record.taskId||'not reported')+' · Name source: '+(record.sessionNameSource||'unavailable'); }
           if (index === 1) { cell.className = 'effort-cell'; cell.title = reasoning.note; }
           if (index >= 2 && index <= 5) cell.className = "token-cell" + (index === 2 ? " total-token-cell" : index === 3 ? " input-token-cell" : "");
           if (index === 6) { cell.className = "wrap model"; cell.style.whiteSpace = "pre-line"; }
           if (index === 7) cell.className = "status " + record.status;
-          if (index === 8) { cell.className = "payload-cell"; cell.title = "Codex-to-relay JSON request and recorded response bytes, not model tokens. Requests may include history, instructions, tool schemas/results and encoded images. SDK context can persist across continuations. Exact request: " + tokenText(Number.isFinite(record.inputBytes) ? record.inputBytes : null) + " bytes; response: " + tokenText(Number.isFinite(record.outputBytes) ? record.outputBytes : null) + " bytes."; }
-          if (index === 12) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : "detail"; cell.appendChild(badge); }
+          if (index === 8) { cell.className = "payload-cell"; cell.title = "Client-to-relay JSON request and recorded response bytes, not model tokens. Missing byte measurements stay unknown. Requests may include history, instructions, tool schemas/results and encoded images. Exact request: " + tokenText(Number.isFinite(record.inputBytes) ? record.inputBytes : null) + " bytes; response: " + tokenText(Number.isFinite(record.outputBytes) ? record.outputBytes : null) + " bytes."; }
+          if (index === 12) { const badge = document.createElement("span"); badge.className = "tier " + record.detailTier; badge.textContent = record.detailTier === "lightweight" ? "light" : record.detailTier === 'metadata' ? 'metadata' : "detail"; cell.appendChild(badge); }
           else cell.textContent = value;
           row.appendChild(cell);
         });
         rows.appendChild(row);
       }
-      $("show-more").hidden = state.visible >= state.records.length;
+      $("show-more").hidden = state.visible >= filtered.length;
     }
     const providerName = value => ({'github-copilot-sdk':'GitHub Copilot','openai-codex':'Native Codex / OpenAI','openai-platform':'OpenAI Platform API'}[value] || 'Not recorded');
     const reportedTokens = value => typeof value==='number'&&Number.isFinite(value)?number(value):'not reported';
     function renderProviders(data) {
       state.providerData=data.providers;
       setText('no-fallback',data.providers?.policy?.automaticFallback===false?'No automatic fallback':'Policy unavailable');
-      const summary=data.summary||{};
+      const summary=data.unifiedCopilot||data.summary||{};
       setText('provider-copilot-calls',number(summary.sdkApiCalls||0));setText('provider-copilot-in',reportedTokens(summary.inputTokens));setText('provider-copilot-out',reportedTokens(summary.outputTokens));
-      setText('provider-copilot-state','Default inference · '+number(data.activeExchanges||0)+' active exchanges · Copilot entitlement. OpenAI limits stay isolated.');
+      setText('provider-copilot-state','Codex + Claude Code receipt totals · independent ledger start dates · Copilot entitlement. OpenAI limits stay isolated.');
       $('provider-copilot').dataset.active=String((data.activeExchanges||0)>0);
       for(const [key,id] of [['openai-codex','native'],['openai-platform','platform']]){
         const total=data.providers?.totals?.[key]||{},records=(data.providers?.records||[]).filter(record=>record.provider===key);
@@ -976,8 +995,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     function renderProviderRows(){
       const native=state.providerData?.records||[];
-      const copilot=state.records.map(record=>({id:record.id,provider:'github-copilot-sdk',kind:'inference',model:record.selectedModel,
-        status:record.status,receivedAt:record.receivedAt,submitted:(record.replayCount||0)>0,
+      const copilot=state.records.map(record=>({id:record.id,provider:'github-copilot-sdk',kind:record.clientLabel||'Codex',model:record.selectedModel,client:record.clientLabel,sessionName:record.sessionName,taskId:record.taskId,requestedModel:record.requestedModel,reasoning:callReasoning(record),actualModels:record.usage?.models,
+        status:record.status,receivedAt:record.receivedAt,submitted:record.client==='claude-code'?(record.usage?.sdkApiCalls>0?true:null):(record.replayCount||0)>0,
         usage:record.usage?.metered?record.usage:{inputTokens:null,outputTokens:null},usageSource:record.usage?.metered?'Copilot SDK':'not_reported',usageComplete:Boolean(record.usage?.metered)}));
       const filter=$('provider-filter').value;
       const records=[...native,...copilot].filter(record=>filter==='all'||record.provider===filter).sort((a,b)=>Date.parse(b.receivedAt)-Date.parse(a.receivedAt));
@@ -986,11 +1005,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         const row=document.createElement('tr');row.tabIndex=0;row.setAttribute('role','button');
         const usage=record.usage||{};
         const values=[time(record.receivedAt)+' · '+record.id.slice(-8),providerName(record.provider)+' / '+record.kind,
-          (record.model||'not reported')+(record.featureModel?' → '+record.featureModel:''),record.status+(record.submitted?' · submitted':' · not submitted'),
+          (record.model||'not reported')+(record.reasoning?.selected?' · '+record.reasoning.selected:'')+(record.featureModel?' → '+record.featureModel:''),record.status+(record.submitted===true?' · submitted':record.submitted===null?' · submission unreported':' · not submitted'),
           reportedTokens(usage.inputTokens)+' / '+reportedTokens(usage.outputTokens),record.source==='legacy-log'?'legacy log · partial':(record.usageSource||'not_reported')+(record.usageComplete?'':' · partial/unknown')];
         for(const value of values){const cell=document.createElement('td');cell.textContent=value;row.appendChild(cell);}
         const select=()=>{$('provider-call-detail').textContent=JSON.stringify({id:record.id,destination:providerName(record.provider),feature:record.kind,
-          model:record.model,featureModel:record.featureModel,status:record.status,submitted:record.submitted,parentCallId:record.parentId,
+          client:record.client,session:record.sessionName,sessionId:record.taskId,requestedModel:record.requestedModel,model:record.model,actualModels:record.actualModels,reasoning:record.reasoning,aiCredits:sdkCredits(record.usage),dollarCost:null,featureModel:record.featureModel,status:record.status,submitted:record.submitted,parentCallId:record.parentId,
           receivedAt:record.receivedAt,completedAt:record.completedAt,errorCode:record.errorCode,usage:record.usage,
           source:record.usageSource,completeUsage:record.usageComplete,
           note:'Null = not reported. Cached/audio/image/reasoning counts are subsets, not extra totals. Native image helper usage does not establish generation cost.'},null,2);};
@@ -1001,10 +1020,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function routeSummary(record) {
       const route = callRoute(record, state.current || {});
       const box = document.createElement("section"); box.className = "route-summary";
-      const heading = document.createElement("h3"); heading.textContent = "Model route for this call";
+      const heading = document.createElement("h3"); heading.textContent = (record.clientLabel || 'Codex') + ' → Local relay → GitHub Copilot SDK';
       const models = document.createElement("p"); models.textContent = "Requested: " + (route.requested || "installation default") + "\nSelected: " + (route.selected || "pending") + "\nSDK reported: " + (route.reported.join(", ") || "not reported");
       const note = document.createElement("p"); note.className = route.changed ? "route-change" : "muted"; note.textContent = route.note;
-      const credits = document.createElement("p"); credits.className = "sdk-credit-value"; credits.textContent = "AI credits: " + creditsText(record.usage);
+      const credits = document.createElement("p"); credits.className = "sdk-credit-value"; credits.textContent = "AI credits: " + creditsText(record.usage) + (record.usage?.sdkApiCalls>(record.usage?.creditMeteredApiCalls||0)?' · partial reporting':'') + ' · Dollar charge: not reported (credits are not USD)';
       const provenance = document.createElement("p"); provenance.className = "tiny"; provenance.textContent = "Relay version: " + (record.relayVersion || "not recorded") + " · Policy: " + (record.routingMode || "not recorded");
       box.append(heading, models, note, credits, provenance); return box;
     }
@@ -1016,12 +1035,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       detail.prepend(routeSummary(record));
       detail.appendChild(section('Intelligence / reasoning effort', callReasoning(record)));
       detail.appendChild(section('Context efficiency (local estimates)', record.contextStats || {note:'Not recorded for this call. Character savings are not billed-token or credit savings.'}));
-      detail.appendChild(section('Task and session efficiency', {taskId:record.taskId ?? 'Not recorded',sessionReason:record.sessionReason ?? 'Not recorded',costCheckpoint:record.costCheckpoint ?? 'No checkpoint on this response'}));
-      detail.appendChild(section("Token and byte breakdown", {...callTokenUsage(record.usage), requestBytes:record.inputBytes, recordedResponseBytes:record.outputBytes, requestImagesRetained:record.ingress?.retainedImages ?? null, usagePartial:!record.completedAt,
+      detail.appendChild(section('Session and cost attribution', {client:record.clientLabel,sessionName:record.sessionName,sessionId:record.taskId ?? 'Not recorded',titleSource:record.sessionNameSource,requestClass:record.requestClass,sessionReason:record.sessionReason ?? 'Not recorded',costCheckpoint:record.costCheckpoint ?? 'No checkpoint on this response',usageNote:record.usageNote,dollarCost:null,continuationMode:record.continuationMode,continuationChanges:record.continuationChanges,httpStatus:record.httpStatus,errorCode:record.errorCode}));
+      detail.appendChild(section("Token and byte breakdown", {...callTokenUsage(record.usage), requestBytes:record.inputBytes, recordedResponseBytes:record.outputBytes, requestImagesRetained:record.ingress?.retainedImages ?? null, usagePartial:record.client==='claude-code'?record.status==='active':!record.completedAt,
         note:"Bytes measure the structured Codex-to-relay payload, not new words. Requests may carry prior messages, instructions, tool declarations/results, and base64 images. SDK token counts cover model context, including context retained from earlier continuations. Cached input is already part of input; reasoning is already part of output."}));
       detail.appendChild(section("Measured SDK usage and public API benchmark", record.usage ? {...record.usage, aiCredits:sdkCredits(record.usage)} : { metered: false, note: "No SDK usage was reported for this call." }));
       if (loading) { const note = document.createElement("div"); note.className = "empty"; note.textContent = "Loading sanitized detail on demand…"; detail.appendChild(note); return; }
-      if (record.detailTier === "lightweight" || !record.detailAvailable) { detail.appendChild(section("Lightweight retention", { note: "The full body aged out of the 200-call detailed tier. Mileage and metadata remain durable.", errorSummary: record.errorSummary || null })); return; }
+      if (record.detailTier === "lightweight" || !record.detailAvailable) { detail.appendChild(section("Lightweight retention", { note: record.client==='claude-code' ? 'Claude retains metadata only; prompts and tool bodies were never stored. Missing historical fields remain unknown.' : "The full body aged out of the 200-call detailed tier. Mileage and metadata remain durable.", errorSummary: record.errorSummary || null })); return; }
       detail.appendChild(section("Codex input (sanitized)", record.input)); detail.appendChild(section("Copilot replay(s)", record.copilotReplays)); if (record.toolRequests?.length) detail.appendChild(section("Tool requests", record.toolRequests)); if (record.toolResolutions?.length) detail.appendChild(section("Tool resolutions", record.toolResolutions)); detail.appendChild(section("Codex output (sanitized)", record.output)); if (record.error) detail.appendChild(section("Error", record.error, "error"));
     }
     async function selectRecord(id) {
@@ -1060,9 +1079,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
     $("show-more").onclick = () => { state.visible += 200; renderRows(); };
     $('provider-filter').onchange=renderProviderRows;
-    $("clear").onclick = async () => { if (!confirm("Clear the 1,000-entry detailed history? Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
+    $('history-client').onchange=event=>{state.historyClient=event.target.value;state.visible=200;renderRows();};
+    $("clear").onclick = async () => { if (!confirm("Clear Codex detailed history only? Claude history is retained. Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
     ${CLAUDE_SCRIPT}
+    ${BROWSER_SCRIPT}
     ${TRENDS_SCRIPT}
     ${TASKS_SCRIPT}
     setText("relay-address", location.host); connectLiveEvents(); refresh(); setInterval(refresh, 5000);

@@ -740,8 +740,27 @@ export class ProxyRecorder {
 
   usageObserved(record, usage, callUsage = null) {
     if (!record) return;
-    // Live cumulative usage is display-only; lifetime counters change once at finish.
-    if (callUsage) record.usage = normalizedUsageSummary(callUsage);
+    if (callUsage) {
+      const before=normalizedUsageSummary(record.usage),after=normalizedUsageSummary(callUsage);
+      if(after.sdkApiCalls<before.sdkApiCalls)return; // Never roll back cumulative receipts.
+      if(record.completedAt){
+        const oldCounters=usageCounterChanges(before),newCounters=usageCounterChanges(after);
+        const changes=Object.fromEntries([...new Set([...Object.keys(oldCounters),...Object.keys(newCounters)])]
+          .map(key=>[key,(newCounters[key]??0)-(oldCounters[key]??0)]));
+        if(!Object.values(changes).some(value=>value!==0))return;
+        const delta={metered:true,models:after.models.map(row=>{
+          const prior=before.models.find(value=>value.model===row.model);
+          return {model:row.model,...Object.fromEntries(Object.entries(modelUsageCounterChanges(row)).map(([key,value])=>[key,value-(prior?.[key]??0)]))};
+        })};
+        if(!after.models.length)Object.assign(delta,Object.fromEntries(Object.entries(modelUsageCounterChanges(after)).map(([key,value])=>[key,value-before[key]])));
+        const taskKey=pacificDay(record.completedAt)+'|'+(record.taskId??'unattributed');
+        // Keep the original completion day; never resurrect an expired rollup.
+        if(this.metrics.taskDaily[taskKey])addCounters(this.metrics.taskDaily[taskKey],changes);
+        this.updateMetrics(record.completedAt,changes,record.selectedModel??record.requestedModel,
+          {meteredCalls:changes.meteredCalls??0,unmeteredCalls:changes.unmeteredCalls??0},delta);
+        record.usage=after;this.persist(record);
+      }else record.usage=after;
+    }
     const safeUsage = normalizedUsageSummary({
       metered: true,
       sdkApiCalls: 1,

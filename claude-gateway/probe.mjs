@@ -10,6 +10,9 @@ import {ClaudeRequestHandler} from './request-handler.mjs';
 import {digest} from './protocol.mjs';
 import {bounded} from '../copilot-runtime.mjs';
 import sharp from 'sharp';
+import http from 'node:http';
+import {readdirSync} from 'node:fs';
+import {browserPackage} from '../claude-browser-setup.mjs';
 
 // Explicit opt-in: uses the signed-in Copilot account and incurs Copilot usage.
 // All source files/configuration edits and MCP execution stay in this fixture.
@@ -95,8 +98,23 @@ async function run(name,prompt,args=[]) {
 }
 try {
   const chosen=process.argv.find(arg=>arg.startsWith('--case='))?.slice(7)??'all';
-  if(!['all','files','structured','outage','thinking','recovery','mcp','agents','auto','images','skills','resume','local'].includes(chosen))
+  if(!['all','files','structured','outage','thinking','recovery','mcp','agents','auto','images','skills','resume','local','browser'].includes(chosen))
     throw new Error('Unknown probe case; refusing an empty success report.');
+  if(chosen==='browser'){
+    const marker='BROWSER_'+randomBytes(5).toString('hex');
+    const page=http.createServer((_req,res)=>{res.writeHead(200,{'content-type':'text/html'});res.end('<!doctype html><html><title>Relay browser proof</title><body><h1>Local browser proof</h1><button onclick="const c=document.querySelector(\'canvas\').getContext(\'2d\');c.font=\'30px Arial\';c.fillText(\''+marker+'\',16,60)">Run test</button><canvas width="700" height="100" aria-label="Visual verification code"></canvas></body></html>');});
+    await new Promise(resolve=>page.listen(0,'127.0.0.1',resolve));
+    try{
+      const args=['--yes',browserPackage,'--headless','--isolated','--browser','msedge','--no-webmcp','--viewport-size','800x600','--output-dir',workspace];
+      const config={mcpServers:{relay_browser:process.platform==='win32'?{command:'cmd',args:['/d','/c','npx',...args]}:{command:'npx',args}}};
+      const r=await run('browser','Use relay_browser MCP to navigate to http://127.0.0.1:'+page.address().port+'. Read its title and take a before screenshot. IMPORTANT: omit the filename parameter on both screenshot calls so Playwright returns the pixels inline (it still saves generated filenames). Get a snapshot, click Run test, take a second screenshot, and read the BROWSER_ code painted in the canvas from that second image. Report that exact code. Do not use evaluation, scripts, shell, source inspection or files to get the code; use the screenshot pixels. Do not claim success without tool results.',
+        ['--tools','','--allowedTools','mcp__relay_browser__browser_navigate,mcp__relay_browser__browser_snapshot,mcp__relay_browser__browser_find,mcp__relay_browser__browser_click,mcp__relay_browser__browser_take_screenshot',
+          '--max-turns','8','--permission-mode','dontAsk','--mcp-config',JSON.stringify(config)]);
+      assert.ok(r.result.includes(marker));assert.ok(readdirSync(workspace,{recursive:true}).filter(name=>String(name).endsWith('.png')).length>=2,'Two screenshot files are required');
+      assert.ok(reports.at(-1).requests.every(row=>row.status==='completed'),'Browser requests failed');
+      assert.ok(reports.at(-1).requests.some(row=>row.browserResults>0),'No browser tool-result receipts');
+    }finally{await new Promise(resolve=>page.close(resolve));}
+  }
   if(chosen==='structured'){
     const schema={type:'object',properties:{marker:{type:'string',enum:['STOCK_SCHEMA_OK']},answer:{type:'integer',enum:[42]}},
       required:['marker','answer'],additionalProperties:false};

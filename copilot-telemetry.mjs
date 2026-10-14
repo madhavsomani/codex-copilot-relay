@@ -1,4 +1,5 @@
 import { estimateOpenAiEquivalent } from "./pricing.mjs";
+import {UsageReceipts} from './usage-receipts.mjs';
 
 function nonNegative(value) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -33,7 +34,9 @@ export function normalizeAssistantUsage(value) {
 }
 
 export function summarizeAssistantUsage(values = []) {
+  const receipts=new UsageReceipts();
   const events = (Array.isArray(values) ? values : [])
+    .filter(value=>receipts.accept(value))
     .map(normalizeAssistantUsage)
     .filter(Boolean);
   const estimate = estimateOpenAiEquivalent(events);

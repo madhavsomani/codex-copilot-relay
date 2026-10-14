@@ -28,6 +28,26 @@ function fixture(options = {}) {
   return { runtime, clients, lost };
 }
 
+test('one owned replacement can escape full capacity without dropping the old session',async()=>{
+  const {runtime}=fixture({maxSessions:1});await runtime.start();
+  const old=await runtime.createSession({});
+  await assert.rejects(runtime.createSession({}),e=>e.code==='relay_session_capacity'&&e.shouldRetry==='false');
+  const replacement=await runtime.createSession({}, {replacementFor:old.session});
+  assert.equal(runtime.sessions.size,2);assert.ok(runtime.sessions.has(old.session));
+  await assert.rejects(runtime.createSession({}, {replacementFor:old.session}),e=>e.code==='relay_session_capacity');
+  runtime.release(old.session);assert.equal(runtime.sessions.size,1);
+  runtime.release(replacement.session);const next=await runtime.createSession({});assert.ok(next.session);await runtime.stop();
+});
+
+test('failed replacement preserves old ownership and releases reserved headroom',async()=>{
+  const {runtime,clients}=fixture({maxSessions:1});await runtime.start();const old=await runtime.createSession({});
+  const create=clients[0].createSession;clients[0].createSession=async()=>{throw new Error('fixture rejected allocation');};
+  await assert.rejects(runtime.createSession({}, {replacementFor:old.session}),/rejected allocation/);
+  assert.ok(runtime.sessions.has(old.session));assert.equal(runtime.sessions.size,1);
+  clients[0].createSession=create;const next=await runtime.createSession({}, {replacementFor:old.session});
+  assert.ok(next.session);await runtime.stop();
+});
+
 test("health checks the SDK rather than merely the outer HTTP listener", async () => {
   const { runtime, clients, lost } = fixture();
   await runtime.start();

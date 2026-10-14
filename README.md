@@ -23,16 +23,48 @@ Codex and the official GitHub Copilot SDK.
 
 ## Keep Codex. Change the inference path.
 
-**One Windows EXE entry point:** build `Copilot-Relay.exe` with
-`Build-RelayLauncher.ps1`, then run `Install-RelayDesktopControls.ps1`. Both desktop
-controls use that EXE (`start` / `stop`). This is a lightweight launcher for the
-installed checkout, **not a self-contained SDK bundle**.
-See [build, use, and rollback](docs/WINDOWS-LAUNCHER.md).
+**Using Claude Code?** Read the [complete Claude Code guide](docs/CLAUDE-CODE-GUIDE.md):
+setup, model families, on-demand tool loading, browser and research, costs and
+troubleshooting.
+
+**1.3.81–1.3.84:**
+- On-demand MCP tool loading (tool search) and context editing pass through.
+- Native PDF documents.
+- Sonnet/Haiku routing and Haiku large-prompt fixes.
+- Fail-fast on SDK stalls after a finished stream.
+- Selectable Edge/Chrome for the browser tool.
+
+**1.3.80 startup repair:** permits SDK model discovery through the native request
+hook. Desktop **Start Relay** now explicitly cancels existing relay sessions and
+loads the latest local package. Repair and watchdog updates still wait for work
+to finish. Browser resume also repairs a missing opted-in skill when Desktop
+retained the identical connector. See [verification](docs/RELIABILITY-1.3.80.md).
+
+**1.3.78 reliability update:** fixes stock Edit-default replay, split/chunked
+tool batches and interleaved result delivery. Explicit entitled Claude model
+changes rebuild at a completed tool boundary; unbound SDK inference fails
+before transport. See [evidence, routing and peer audit](docs/RELIABILITY-1.3.78.md).
+This is not a claim of full native compatibility or zero unreported usage.
+
+**Two PowerShell shortcuts, no relay EXE required:** `Start Relay` runs
+`Start-Relay.ps1`; `Stop & Restore` runs `Stop-Relay.ps1`. Run
+`Install-RelayDesktopControls.ps1` to install or migrate both shortcuts.
+The source and dependencies stay together in the installation folder.
+The dashboard includes an open **Connect Claude Code** guide and crash-recovery
+instructions. Existing Windows EXE builds are legacy optional developer tools;
+they are no longer selected by the shortcut installer.
+
+**Optional Claude browser/research setup:** see [browser integration](docs/CLAUDE-BROWSER.md).
+For unchanged screenshot/signed-history transport, inline screenshot instructions,
+test evidence and remaining limits, see [Claude image compatibility](docs/CLAUDE-IMAGES.md).
+It adds pinned Playwright MCP plus a source-citing research skill, with user-approved
+extension access and a scoped rollback. Browser connection is separate from model
+routing; hosted Anthropic search and full Desktop GUI parity are not promised.
 
 The desktop workflow is **one installation folder + two shortcuts**. The first
 terminal screen explains automatic Codex routing and Claude's one-time Gateway
 setup; type `setup`, `models`, `status`, or `key`. Both clients appear in the live
-fabric and event stream, with separate usage/history and client-owned tool
+fabric and event stream, with merged history/session views, separate durable ledgers and client-owned tool
 handoffs. Older controls are archived inside `runtime/desktop-backups/`, never
 published. [Customer workflow and folder map](docs/TWO-CONTROLS.md).
 
@@ -98,6 +130,14 @@ SDK.
   It retains 31 Pacific dates and survives history clearing/restarts. Attribution
   begins with this release; older costs are not guessed or backfilled. The table
   distinguishes relay responses, SDK **model steps**, tokens, and SDK AI credits.
+
+**Unified dashboard (1.3.71+):** Recent call history now includes both Codex and
+Claude Code, with a client filter, session names, requested/selected/actual model,
+applied reasoning, route, tokens and SDK AI credits. Claude's separate history
+panel is replaced by a client breakdown in **Where calls actually go**. Daily
+session checkpoints include both clients. Claude advisory status is displayed
+on the dashboard; this change does not inject checkpoint prompts into Claude.
+See [metering, name discovery and privacy boundaries](docs/UNIFIED-HISTORY.md).
 
 The relay defaults to GPT-6.1 Sol at `xhigh` when effort is omitted.
 Explicit task model and effort choices remain unchanged, including child agents.
@@ -537,13 +577,14 @@ Every deployable runtime or dashboard change must bump the version in both
 `package.json` and `package-lock.json`, then start or repair the watchdog. The
 watchdog reads its expected version once when it starts, so arbitrary file edits
 and an unchanged version never deploy automatically.
-The **Start or Repair Codex Copilot Bridge** Desktop shortcut compares the
+The `Repair-Codex-CopilotProxy.ps1` script compares the
 running `/health` version with `package.json`. If an older healthy process still
 owns active tool continuations, repair completes without rolling the Codex
 config back: the existing relay, visible console, and dashboard remain usable.
 The watchdog then replaces the outdated managed process automatically after
-three consecutive idle checks. This makes repeated Start/Repair clicks safe
-while long-running Codex work is still finishing.
+three consecutive idle checks. Repair preserves long-running work. The current
+desktop **Start Relay** shortcut instead performs an intentional restart and
+cancels active exchanges, just like the explicit **Stop & Restore** control.
 
 The equivalent manual sequence is:
 
@@ -961,6 +1002,21 @@ parent. It refuses this exception for supervised releases and live workers; do
 not use it as a force-update flag. The normal stop/restore shortcut remains the
 way to return Codex to its original provider configuration.
 
+Since **1.3.76**, **Stop & Restore** deliberately cancels active relay work on
+both adapters, disables recovery, confirms owned-process exit, and restores the
+protected original TOML. Click **Start Relay** next to load the latest local code.
+History, keys and backups remain intact. This manual cancellation is separate
+from internal Start/Repair and automatic updates, which still protect active work.
+Since **1.3.79**, desktop **Start Relay** also cancels owned sessions before loading
+the latest local package, while retaining the managed configuration.
+See [the two-control contract](docs/TWO-CONTROLS.md).
+
+Since **1.3.77**, Claude has **64 local session slots** by default (previously
+16), independently of Codex's 64-slot default. Tool-waiting sessions count, too;
+they are never evicted just to admit unrelated work. Developers can configure
+`BRIDGE_MAX_CLAUDE_SESSIONS` (2-128) in the launching environment. This is not a
+provider quota increase. See [capacity and verification](docs/CLAUDE-CAPACITY.md).
+
 The context guard limits each historical text tool result to 64 KiB. Image count
 and per-image size are taken from the selected Copilot model's advertised
 capabilities. For `gpt-5.6-sol`, Copilot currently advertises one prompt image,
@@ -1170,6 +1226,7 @@ recovery and gateway restart now have scoped live proof.
 Auto-mode classification for parallel fixture agents also passed; permissions
 remain enforced by stock Claude Code.
 
+For everyday desktop use, start with the [complete Claude Code guide](docs/CLAUDE-CODE-GUIDE.md).
 See the [preview setup, architecture, compatibility and rollback guide](docs/CLAUDE-GATEWAY-PREVIEW.md).
 
 Failed HTTP requests now retain validated upstream retry decisions, whole-second

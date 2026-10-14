@@ -8,12 +8,17 @@ import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
 import { requestOwner, requestTaskId, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
 import {sessionSignature, prepareDiscoveryContinuation, checkpointPolicy, toolOutputPolicy} from './efficiency-policy.mjs';
 import { DASHBOARD_HTML } from "./dashboard.mjs";
+import {mergeDashboardHistory,identifySession} from './unified-history.mjs';
+import {createSessionNames} from './session-names.mjs';
+const sessionNames=createSessionNames();
 import { SETUP_HTML } from './setup-ui.mjs';
 import { createSetupStatus, sameOriginLocal } from './setup-status.mjs';
 import {mountClaudeGateway} from './unified-gateway.mjs';
 import {createGatewayReporter} from './unified-events.mjs';
 import {renderUnifiedSetupPage} from './unified-setup.mjs';
 import {createRelayStopControl} from './relay-stop-control.mjs';
+import {UsageReceipts,UsageOwners} from './usage-receipts.mjs';
+import {SessionLease,createSessionControl} from './relay-session-control.mjs';
 import {createLocalUsageReader} from './local-usage-history.mjs';
 import {
   BlankCompletionGuard,
@@ -70,6 +75,7 @@ import {
 } from "./bridge-core.mjs";
 
 const host = "127.0.0.1";
+const sdkUsageReceipts=new UsageReceipts();
 const nativeToolsRoot = path.dirname(fileURLToPath(import.meta.url));
 let nativeToolsConfig = await loadNativeToolsConfig(nativeToolsRoot);
 const port = Number.parseInt(process.env.BRIDGE_PORT ?? "4141", 10);
@@ -239,15 +245,16 @@ function telemetryStorage() {
   const processStdoutBytes = localFileSize(path.join(runtimeDirectory, "proxy.process.stdout.log"));
   const processStderrBytes = localFileSize(path.join(runtimeDirectory, "proxy.stderr.log"));
   const providerTelemetryBytes = localFileSize(providerTelemetry.file);
+  const claudeTelemetryBytes = localFileSize(claudeMount?.gateway.ledger.file);
   const totalBytes = recorderStorage.totalBytes
     + eventLogBytes
     + watchdogLogBytes
     + processStdoutBytes
-    + processStderrBytes + providerTelemetryBytes;
+    + processStderrBytes + providerTelemetryBytes + claudeTelemetryBytes;
   const telemetryCapBytes = recorderStorage.telemetryCapBytes
     + eventLogMaxBytes
     + watchdogLogMaxBytes
-    + (2 * auxiliaryLogMaxBytes) + 8 * 1024 * 1024;
+    + (2 * auxiliaryLogMaxBytes) + 12 * 1024 * 1024;
   return {
     ...recorderStorage,
     eventLogBytes,
@@ -255,6 +262,7 @@ function telemetryStorage() {
     processStdoutBytes,
     processStderrBytes,
     providerTelemetryBytes,
+    claudeTelemetryBytes,
     totalBytes,
     telemetryCapBytes,
     diskBudgetBytes: telemetryDiskBudgetBytes,
@@ -264,6 +272,7 @@ function telemetryStorage() {
   };
 }
 
+import {browserSetupStatus} from './claude-browser-setup.mjs';
 function dashboardSnapshot() {
   const snapshot = recorder.snapshot({ includeDetails: false });
   snapshot.sampledAt = new Date().toISOString();
@@ -275,6 +284,8 @@ function dashboardSnapshot() {
   snapshot.storage = telemetryStorage();
   snapshot.activeExchanges = exchanges.size;
   snapshot.claude = claudeMount?.visibility() ?? null;
+  snapshot.sessionControl = sessionControl.snapshot();
+  snapshot.browserSetup = browserSetupStatus();
   snapshot.copilot = {
     quota: copilotQuota,
     modelBilling: copilotModelBilling,
@@ -286,7 +297,7 @@ function dashboardSnapshot() {
   snapshot.providers.policy = {automaticFallback:false,defaultProvider:'github-copilot-sdk',nativeFeatures:['image'],quotaIsolation:true};
   snapshot.providers.native = {enabled:false,searchEnabled:false,imageEnabled:nativeToolsConfig.imageEnabled === true};
   snapshot.providers.platform = openaiFallback.health();
-  return snapshot;
+  return mergeDashboardHistory(snapshot,claudeMount?.gateway.ledger.state,sessionNames);
 }
 
 const reportGatewayEvent=process.env.BRIDGE_CLAUDE_TOKEN&&process.send?
@@ -605,6 +616,8 @@ class Exchange {
     this.responseItems = [];
     this.pendingFinalMessage = null;
     this.usageEvents = [];
+    this.usageOwners = new UsageOwners();
+    this.lease = new SessionLease('codex');
     this.requiresAction = requiresAction;
     this.toolCount = toolCount;
     this.blankGuard = new BlankCompletionGuard({
@@ -640,6 +653,7 @@ class Exchange {
     this.responseItems = [];
     this.pendingFinalMessage = null;
     this.usageEvents = [];
+    this.usageAccount = {record:this.record,events:this.usageEvents};
     this.streamedContent = "";
     this.streamedReasoning = "";
     this.currentMessageMetadata = {};
@@ -667,11 +681,13 @@ class Exchange {
   }
 
   armModelDeadline() {
+    this.lease.set('streaming',exchangeTimeoutMs);
     this.deadlinePhase = "model activity";
     this.deadline.touch(exchangeTimeoutMs);
   }
 
   armToolDeadline() {
+    this.lease.set('waiting-for-tools',toolResultTimeoutMs);
     this.deadlinePhase = "outer tool execution";
     this.deadline.touch(toolResultTimeoutMs);
   }
@@ -696,13 +712,16 @@ class Exchange {
     if (this.sink && !this.sink.closed) this.armModelDeadline();
 
     if (event.type === "assistant.usage") {
+      if(!sdkUsageReceipts.accept(event.data,event))return;
       const usage = normalizeAssistantUsage(event.data);
       if (usage) {
-        this.usageEvents.push(usage);
-        recorder.usageObserved(this.record, usage, this.currentUsage());
+        const account=this.usageOwners.get(event.data,this.usageAccount);
+        account.events.push(usage);
+        recorder.usageObserved(account.record, usage, summarizeAssistantUsage(account.events));
       }
       return;
     }
+    if(event.type==='assistant.message')this.usageOwners.bind(event.data,this.usageAccount);
 
     if (event.type === "assistant.turn_start") {
       this.streamedContent = "";
@@ -1136,6 +1155,16 @@ class Exchange {
       this.detach();
     }
   }
+
+  async cancelForShutdown() {
+    if(this.done||this.disconnecting)return;
+    this.done=true;this.deadline.stop();
+    const error=new Error('Cancelled by Stop & Restore. This request was not replayed.');
+    log('exchange.cancelled',{responseId:this.sink?.responseId??null,code:'relay_stopped'});
+    this.sink?.fail(error,'relay_stopped',this.currentUsage());
+    await bounded(()=>this.session.abort(),2500,'SDK cancellation').catch(()=>{});
+    await this.disconnect();
+  }
 }
 
 sdkRuntime = new CopilotRuntime({
@@ -1551,16 +1580,28 @@ const readSetupStatus = createSetupStatus({root:nativeToolsRoot,port,
   relay:async()=>({ok:(await sdkRuntime.checkHealth()).ok,version:relayVersion,model:defaultModel,activeExchanges:exchanges.size,lastCodexRequestAt}),
   auth:async()=>{const client=await sdkRuntime.ready();const auth=await bounded(()=>client.getAuthStatus(),4000,'Copilot sign-in check');return {authenticated:auth.isAuthenticated===true,models:auth.isAuthenticated?availableOpenAiModels:[]};}});
 
-let admittedRequests=0;
+let admittedRequests=0,shuttingDown=false;
+const activeResponses=new Set();
 const activeWork=()=>exchanges.size+nativeJobs.size+openaiFallback.jobs.size+(claudeMount?.gateway.turns.size??0);
 const stopControl=createRelayStopControl({directory:runtimeDirectory,active:()=>activeWork()+admittedRequests,
-  stop:()=>void shutdown('local-stop-after-drain')});
-const stopControlTimer=setInterval(()=>stopControl.check(),1000);stopControlTimer.unref();
+  stop:mode=>void shutdown(mode==='cancel-active'?'manual-stop-cancel-active':'local-stop-after-drain')});
+const sessionControl=createSessionControl({directory:runtimeDirectory,instanceId:stopControl.instanceId,
+  entries:()=>[
+    ...[...exchanges].filter(exchange=>!exchange.done&&!exchange.disconnecting).map(exchange=>({
+      view:exchange.lease.view({model:exchange.model,taskId:exchange.record?.taskId??null,pendingTools:exchange.pendingCalls.size}),
+      canCancel:()=>!exchange.done&&!exchange.disconnecting&&(!exchange.sink||exchange.sink.closed)&&exchange.pendingCalls.size>0,
+      cancel:()=>{exchange.done=true;return exchange.disconnect();}})),
+    ...[...(claudeMount?.gateway.turns??[])].filter(turn=>!turn.done).map(turn=>({
+      view:turn.lease.view({model:turn.selected.model.id,taskId:turn.row?.session??null,pendingTools:turn.pending.size}),
+      canCancel:()=>!turn.done&&!turn.sink&&!turn.rebuilding&&turn.pending.size>0,
+      cancel:()=>turn.dispose()}))],
+  onResult:(status,id)=>log('session.control',{status,id})});
+const stopControlTimer=setInterval(()=>{stopControl.check();void sessionControl.check();},1000);stopControlTimer.unref();
 const server = http.createServer(async (request, response) => {
-  if(stopControl.stopping)return sendJson(response,503,errorPayload('Relay is stopping. Use Start Relay to resume.','relay_stopping'));
+  if(shuttingDown||stopControl.stopping)return sendJson(response,503,errorPayload('Relay is stopping. Use Start Relay to resume.','relay_stopping'));
   if(request.method!=='GET'){
-    admittedRequests++;let done=false;
-    const release=()=>{if(!done){done=true;admittedRequests--;}};
+    admittedRequests++;activeResponses.add(response);let done=false;
+    const release=()=>{if(!done){done=true;admittedRequests--;activeResponses.delete(response);}};
     response.once('finish',release);response.once('close',release);
   }
   if(claudeMount?.route(request,response))return;
@@ -1587,8 +1628,9 @@ const server = http.createServer(async (request, response) => {
          defaultReasoningEffort: defaultEffort(modelsById.get(id), id === defaultModel ? preferredDefaultEffort : null),
       }])),
       activeExchanges: Math.max(activeWork(),admittedRequests),
-      lifecycle:{control:'local-file-v1',instanceId:stopControl.instanceId,stopping:stopControl.stopping,admittedRequests,managedDesktop},
+      lifecycle:{control:'local-file-v1',cancelActive:true,instanceId:stopControl.instanceId,stopping:shuttingDown||stopControl.stopping,admittedRequests,managedDesktop},
       exchangeStates: ownership.snapshot(),
+      sessionControl:sessionControl.snapshot(),
       routing: {
         mode: modelRoutingPolicy.mode,
         lockedModel: modelRoutingPolicy.mode === MODEL_ROUTING_LOCKED_DEFAULT
@@ -1712,7 +1754,7 @@ const server = http.createServer(async (request, response) => {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
       });
-      response.end(DASHBOARD_HTML);
+      response.end(DASHBOARD_HTML.replaceAll('__CLAUDE_GATEWAY_BASE__', `http://127.0.0.1:${port}/claude`));
       return;
     }
     if (request.method === "GET" && url.pathname === "/dashboard/events") {
@@ -1740,7 +1782,9 @@ const server = http.createServer(async (request, response) => {
       } catch {
         return sendJson(response, 400, errorPayload("Invalid record identifier.", "invalid_record_id"));
       }
-      const record = recorder.detail(recordId);
+      const sourceRecord = recorder.detail(recordId);
+      const record = sourceRecord ? identifySession({...sourceRecord,client:'codex',provider:'github-copilot-sdk'},sessionNames)
+        : dashboardSnapshot().records.find(row=>row.id===recordId);
       if (!record) return sendJson(response, 404, errorPayload("Record not found.", "not_found"));
       return sendJson(response, 200, {
         ok: true,
@@ -1934,14 +1978,25 @@ server.listen(port, host, () => {
 });
 
 async function shutdown(signal) {
+  if(shuttingDown)return;
+  shuttingDown=true;
   clearInterval(stopControlTimer);
   log("bridge.shutdown", { signal });
   if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
   openaiFallback.close();
   for (const child of nativeJobs) child.kill();
-  await Promise.allSettled([...exchanges].map((exchange) => exchange.disconnect()));
-  if(claudeMount){claudeMount.gateway.mountedListening=false;await claudeMount.close();}
+  const cleanups=[...exchanges].map(exchange=>exchange.cancelForShutdown());
+  if(claudeMount){claudeMount.gateway.mountedListening=false;cleanups.push(claudeMount.close());}
+  // Both protocols have emitted structured failures. Also close incomplete
+  // uploads/admission waits: they have no SDK session/sink to cancel yet.
+  for(const response of activeResponses){
+    if(response.writableEnded||response.destroyed)continue;
+    if(!response.headersSent)sendJson(response,503,errorPayload('Cancelled by Stop & Restore.','relay_stopped'));
+    else response.end();
+  }
+  server.closeAllConnections();
+  await Promise.allSettled(cleanups);
   await sdkRuntime.stop();
   process.exit(0);
 }

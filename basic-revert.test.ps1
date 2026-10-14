@@ -9,8 +9,11 @@ try {
     $helper += "`n" + 'function Remove-CodexCopilotAutoStart { param([string]$WatchScript) ''fixture-autostart'' }'
     [IO.File]::WriteAllText((Join-Path $testRoot 'Codex-Copilot-Config.ps1'), $helper)
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Disable-Codex-CopilotProxy.ps1') -Destination $testRoot
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Stop-Relay.ps1') -Destination $testRoot
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Relay-Control.ps1') -Destination $testRoot
     foreach ($name in @('Stop-Codex-CopilotWatchdog.ps1', 'Stop-Codex-CopilotGatewayConsole.ps1', 'Stop-Codex-CopilotProxy.ps1')) {
-        $stub = 'param([int]$Port)' + "`n" + '[IO.File]::AppendAllText((Join-Path $PSScriptRoot ''stops.txt''), ''stopped'' + [Environment]::NewLine)'
+        $stub = 'param([int]$Port,[int]$WaitSeconds,[switch]$CancelActive)' + "`n" + '[IO.File]::AppendAllText((Join-Path $PSScriptRoot ''stops.txt''), ''stopped'' + [Environment]::NewLine)'
+        if ($name -eq 'Stop-Codex-CopilotProxy.ps1') { $stub += "`n" + 'if (-not $CancelActive) { throw ''Explicit cancellation switch was lost.'' }' }
         [IO.File]::WriteAllText((Join-Path $testRoot $name), $stub)
     }
     $runtime = Join-Path $testRoot 'runtime'
@@ -32,7 +35,7 @@ try {
     # Setup-era additions must be removed by exact restoration, too.
     $candidate = '# setup fixture marker' + "`r`n" + [IO.File]::ReadAllText($configPath)
     [IO.File]::WriteAllText($configPath, $candidate)
-    $fixtureOutput = & powershell -NoProfile -File (Join-Path $testRoot 'Disable-Codex-CopilotProxy.ps1') 2>&1
+    $fixtureOutput = & powershell -NoProfile -File (Join-Path $testRoot 'Stop-Relay.ps1') 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Basic revert fixture failed: $fixtureOutput" }
     if ([IO.File]::ReadAllText($configPath) -cne $original) { throw 'Basic revert did not restore the exact original TOML.' }
     if (Test-Path -LiteralPath $statePath) { throw 'Managed activation state survived basic revert.' }
@@ -40,7 +43,7 @@ try {
     foreach ($file in $protected.Keys) {
         if ((Get-FileHash -LiteralPath $file).Hash -ne $protected[$file]) { throw 'Protected fixture changed.' }
     }
-    $null = & powershell -NoProfile -File (Join-Path $testRoot 'Disable-Codex-CopilotProxy.ps1') 2>&1
+    $null = & powershell -NoProfile -File (Join-Path $testRoot 'Stop-Relay.ps1') 2>&1
     if ($LASTEXITCODE -ne 0 -or [IO.File]::ReadAllText($configPath) -cne $original) { throw 'Repeated basic revert was not safe.' }
     Write-Output 'BASIC_REVERT_RESTORES_EXACT_CONFIG_AND_IS_REPEATABLE_OK'
     Write-Output 'ACCOUNT_PAIRING_POLICY_AND_UNREPLACED_ENGINE_PRESERVED_OK'

@@ -22,6 +22,67 @@ const tools=[{name:'Read',input_schema:{type:'object',properties:{path:{type:'st
 const outputFormat={type:'json_schema',schema:{type:'object',properties:{answer:{type:'integer'}},required:['answer'],additionalProperties:false}};
 const olderModels=[{...models[0],id:'claude-opus-5'}];
 
+async function nativeTestImage(color='#ff6600'){
+  const sharp=(await import('sharp')).default;
+  return {type:'image',source:{type:'base64',media_type:'image/png',data:(await sharp({create:{width:8,height:8,channels:3,background:color}}).png().toBuffer()).toString('base64')}};
+}
+test('Claude native images: signed replay preserves duplicates and accumulated screenshots exactly',async t=>{
+  const a=await nativeTestImage(),b=await nativeTestImage('#113355'),bindings=[];
+  const f=await fixture(t,s=>s.final('IMAGE_REPLAY_OK'),{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
+  for(const images of [[a,a],[a,b],Array(13).fill(a)]){
+    const body=request({messages:[{role:'user',content:[images[0]]},
+      {role:'assistant',content:[{type:'thinking',thinking:'',signature:'local-fixture-only'},{type:'text',text:'Checked'}]},
+      {role:'user',content:images.slice(1)}]});
+    const before=structuredClone(body),response=await f.call(body);
+    assert.equal(response.status,200,await response.clone().text());await response.text();
+    assert.deepEqual(bindings.at(-1),body.messages);assert.deepEqual(body,before);
+    assert.ok(!f.sessions.at(-1).input.attachments?.length,'Images travel once, in the native hook, not flattened SDK attachments');
+  }
+});
+test('Claude native images: screenshot tool results preserve pixels and signed positions across continuation',async t=>{
+  const image=await nativeTestImage(),bindings=[];
+  const f=await fixture(t,s=>{
+    nativeFixture([...f.gateway.turns].find(turn=>turn.session===s),['a','b']);
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
+  const initial=request({tools,messages:[{role:'user',content:[image]}]}),first=await(await f.call(initial)).json();
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
+    {role:'user',content:first.content.filter(b=>b.type==='tool_use').map(b=>({type:'tool_result',tool_use_id:b.id,content:[image]}))}]};
+  const response=await f.call(next);assert.equal(response.status,200);await response.text();
+  assert.deepEqual(bindings.at(-1),next.messages);
+  assert.ok(f.sessions[0].results.every(r=>!r.result.binaryResultsForLlm),'No second SDK-side image packing');
+});
+test('Claude native images: malformed new screenshot rejects before consuming pending tools',async t=>{
+  const f=await fixture(t,s=>{
+    nativeFixture([...f.gateway.turns].find(turn=>turn.session===s),['a','b']);
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  },{requestHandler:{bind(){},release(){}}});
+  const initial=request({tools}),first=await(await f.call(initial)).json(),image=await nativeTestImage();
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
+    {role:'user',content:first.content.filter(b=>b.type==='tool_use').map(b=>({type:'tool_result',tool_use_id:b.id,content:[image]}))}]};
+  const bad=structuredClone(next);bad.messages.at(-1).content[0].content[0].source.data='AAAA';
+  const rejected=await f.call(bad);assert.equal(rejected.status,400);await rejected.text();
+  assert.equal(rejected.headers.get('x-should-retry'),'false');assert.equal(f.sessions[0].results.length,0);assert.equal(f.gateway.byTool.size,2);
+  const valid=await f.call(next);assert.equal(valid.status,200);await valid.text();assert.equal(f.sessions[0].results.length,2);
+});
+test('Claude native images: changed settings rebuild signed screenshot history without replaying tools',async t=>{
+  const image=await nativeTestImage(),bindings=[];
+  const f=await fixture(t,s=>{
+    if(f.sessions.length>1)return s.final('REBUILT_IMAGE_OK');
+    nativeFixture([...f.gateway.turns].find(turn=>turn.session===s),['a','b']);
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
+  const initial=request({tools,messages:[{role:'user',content:[image]}]}),first=await(await f.call(initial)).json();
+  const next={...initial,system:'Updated client instructions',messages:[...initial.messages,{role:'assistant',content:first.content},
+    {role:'user',content:first.content.filter(b=>b.type==='tool_use').map(b=>({type:'tool_result',tool_use_id:b.id,content:[image]}))}]};
+  const response=await f.call(next);assert.equal(response.status,200);assert.match(await response.text(),/REBUILT_IMAGE_OK/);
+  assert.deepEqual(bindings.at(-1),next.messages);assert.equal(f.sessions.length,2);
+  assert.equal(f.sessions[0].results.length,0);assert.equal(f.sessions[1].results.length,0);assert.ok(f.sessions[0].released);
+});
+
 test('Claude tool controls validate exact model restrictions and parallel booleans',()=>{
   const body=request({model:'claude-opus-5',tools,tool_choice:{type:'tool',name:'Read',disable_parallel_tool_use:true},thinking:{type:'adaptive'}});
   assert.equal(validate(body,olderModels).model.id,'claude-opus-5');
@@ -143,10 +204,27 @@ test('Claude native limit without verified terminal or SDK receipt is not fabric
       if(missing!=='stop')turn.nativeEvent({type:'message_stop'});
       if(missing!=='receipt')session.emit('assistant.usage',{model:'claude-opus-5.5',inputTokens:11,outputTokens:1});
     },{modelTimeoutMs:40});
-    const response=await current.call(request({max_tokens:1}));assert.equal(response.status,504);await response.text();
+    // A terminated native stream that the SDK never settles fails as a 502.
+    const response=await current.call(request({max_tokens:1}));assert.equal(response.status,missing==='stop'?504:502);await response.text();
     assert.equal(current.gateway.ledger.state.completed,0);assert.equal(current.gateway.ledger.state.failed,1);
     assert.equal(current.gateway.ledger.state.recent[0].totalNanoAiu,null);
+    assert.equal(current.gateway.ledger.state.recent[0].failurePhase,missing==='stop'?'native-streaming':'after-native-stop');
   }
+});
+test('Claude turn stalled after native message_stop fails fast despite heartbeats and a long model deadline',async t=>{
+  const current=await fixture(t,session=>{
+    const turn=[...current.gateway.turns].find(item=>item.session===session);
+    turn.nativeEvent({type:'message_start'});
+    turn.nativeEvent({type:'content_block_start',index:0,content_block:{type:'text',text:'partial'}});
+    turn.nativeEvent({type:'content_block_stop',index:0});
+    turn.nativeEvent({type:'message_delta',delta:{stop_reason:'end_turn'}});
+    turn.nativeEvent({type:'message_stop'});
+    // SDK never emits assistant.message/session.idle.
+  },{modelTimeoutMs:60000,postStreamMs:60,heartbeatMs:10});
+  const started=Date.now();const response=await current.call(request({stream:true}));const wire=await response.text();
+  assert.ok(Date.now()-started<5000);assert.match(wire,/event: error/);assert.match(wire,/did not finish the turn/);
+  assert.doesNotMatch(wire,/event: message_stop/);
+  assert.equal(current.gateway.ledger.state.recent[0].failurePhase,'after-native-stop');assert.equal(current.gateway.turns.size,0);
 });
 test('Claude native max-token response and released sessions reject SDK retries before transport',async t=>{
   let requests=0;
@@ -259,6 +337,28 @@ async function fixture(t,action,options={}){
   const call=async(body,custom={})=>fetch(`http://127.0.0.1:${address.port}/v1/messages`,{method:'POST',headers:{...headers,...custom},body:JSON.stringify(body)});
   return {gateway,runtime,sessions,headers,call,base:`http://127.0.0.1:${address.port}`};
 }
+test('Claude shutdown fails a streaming request, aborts SDK work and never emits success',async t=>{
+  const f=await fixture(t,s=>s.emit('assistant.message_delta',{deltaContent:'partial'}));
+  const response=await f.call(request({stream:true})),wire=response.text();
+  let stopped=0;f.runtime.stop=async()=>{stopped++;};
+  await f.gateway.close();await f.gateway.close();
+  const text=await wire;
+  assert.match(text,/event: error/);assert.doesNotMatch(text,/event: message_stop/);
+  assert.equal(f.sessions[0].aborted,true);assert.equal(f.sessions[0].disconnected,true);
+  assert.equal(f.gateway.turns.size,0);assert.equal(f.gateway.byTool.size,0);
+  assert.equal(stopped,1);assert.equal(f.gateway.ledger.state.failed,1);
+  assert.equal(f.gateway.ledger.state.recent[0].sdkApiCalls,0);
+});
+test('Claude shutdown releases retained tool ownership without replaying client tools',async t=>{
+  const f=await fixture(t,s=>{
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'wait'}]});
+    s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'wait',requestId:'pending',arguments:{path:'x'}});
+  });
+  await(await f.call(request({tools}))).text();assert.equal(f.gateway.byTool.size,1);
+  await f.gateway.close();assert.equal(f.gateway.byTool.size,0);assert.equal(f.gateway.turns.size,0);
+  assert.equal(f.sessions[0].aborted,true);assert.equal(f.sessions[0].disconnected,true);
+  assert.equal(f.sessions[0].results.length,0);
+});
 test('Claude authenticated message failures before SDK attach each have one terminal ledger row',async t=>{
   const f=await fixture(t,s=>s.final('OK'));
   const attempts=[
@@ -348,7 +448,12 @@ test('Claude continuation rejection has its own receipt without corrupting compl
   const changed={...initial,messages:[...initial.messages,{role:'assistant',content:result.content},
     {role:'user',content:[{type:'tool_result',tool_use_id:result.content[0].id,content:'value'}]}]};
   changed.messages[0].content='tampered history';
-  const response=await f.call(changed);assert.equal(response.status,409);await response.text();
+  const response=await f.call(changed);assert.equal(response.status,409);
+  assert.equal(response.headers.get('x-should-retry'),'false');await response.text();
+  assert.deepEqual(f.gateway.ledger.state.recent.at(-1).historyMismatch,
+    {expectedMessages:2,receivedMessages:2,messageIndex:0,blockIndex:0,reason:'content'});
+  assert.equal(f.gateway.ledger.state.recent.at(-1).errorCode,'claude_history_prefix_mismatch');
+  assert.doesNotMatch(JSON.stringify(f.gateway.ledger.state),/tampered history/);
   assert.equal(f.gateway.ledger.state.received,2);assert.equal(f.gateway.ledger.state.failed,1);
   assert.deepEqual(f.gateway.ledger.state.recent[0],first);assert.equal(f.gateway.ledger.state.recent[1].httpStatus,409);
   await [...f.gateway.turns][0].fail(Object.assign(new Error('Expired tool fixture'),{statusCode:504}));
@@ -391,11 +496,90 @@ test('Claude rebuild failure preserves pending ownership for a valid retry',asyn
   f.runtime.createSession=create;const retried=await f.call(next);assert.equal(retried.status,200);await retried.text();
   assert.equal(holder.done,true);assert.equal(f.sessions.length,2);
 });
+test('Claude usage receipt identity is deduplicated without collapsing distinct equal-cost calls',()=>{
+  const ledger=new Ledger(),row=ledger.start(request(),{},validate(request(),models));
+  const usage={apiCallId:'provider-call-one',model:'claude-opus-5.5',inputTokens:12,outputTokens:2,copilotUsage:{totalNanoAiu:100}};
+  ledger.usage(row,usage,{id:'event-one'});ledger.usage(row,usage,{id:'event-two'});
+  ledger.usage(row,{...usage,apiCallId:'provider-call-two'},{id:'event-three'});
+  assert.equal(row.sdkApiCalls,2);assert.equal(row.totalNanoAiu,200);assert.equal(ledger.state.usage[0].sdkApiCalls,2);
+  assert.ok(!JSON.stringify(ledger.state).includes('provider-call-one'));
+});
+
+test('Claude metadata session IDs isolate continuations when GUI omits custom session headers',async t=>{
+  const f=await fixture(t,s=>{
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'metadata-tool'}]});
+    s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'metadata-tool',requestId:'pending',arguments:{path:'x'}});
+  });
+  const meta=id=>({user_id:JSON.stringify({session_id:id})});
+  const initial=request({tools,metadata:meta('00000000-0000-4000-8000-000000000001')});
+  const first=await (await f.call(initial,{'x-claude-code-session-id':''})).json();
+  f.sessions[0].rpc.tools.handlePendingToolCall=async result=>{f.sessions[0].results.push(result);f.sessions[0].final('WRONG_OWNER_ACCEPTED');};
+  const next={...initial,metadata:meta('00000000-0000-4000-8000-000000000002'),messages:[...initial.messages,
+    {role:'assistant',content:first.content},{role:'user',content:[{type:'tool_result',tool_use_id:first.content[0].id,content:'result'}]}]};
+  const response=await f.call(next,{'x-claude-code-session-id':''});
+  assert.equal(response.status,409);await response.text();assert.equal(f.sessions[0].results.length,0);
+  assert.equal(f.gateway.byTool.size,1);
+});
+
+test('Claude late SDK receipt after tool continuation updates the original request and task exactly once',async t=>{
+  const f=await fixture(t,s=>{
+    s.emit('assistant.message',{apiCallId:'original-call',content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  });
+  const initial=request({tools}),reply=await(await f.call(initial)).json();
+  const first=f.gateway.ledger.state.recent[0];assert.equal(first.sdkApiCalls,0);
+  const session=f.sessions[0];
+  session.rpc.tools.handlePendingToolCall=async result=>{
+    session.results.push(result);
+    if(session.results.length===2){
+      const late={apiCallId:'original-call',model:'claude-opus-5.5',inputTokens:7,outputTokens:3,copilotUsage:{totalNanoAiu:1e9}};
+      session.emit('assistant.usage',late);session.emit('assistant.usage',late);session.final('OK');
+    }
+  };
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:reply.content},
+    {role:'user',content:reply.content.map(block=>({type:'tool_result',tool_use_id:block.id,content:'result'}))}]};
+  const response=await f.call(next);assert.equal(response.status,200);const final=await response.json();
+  assert.equal(final.usage.output_tokens,5);assert.equal(first.sdkApiCalls,1);assert.equal(first.totalNanoAiu,1e9);
+  const second=f.gateway.ledger.state.recent[1];assert.equal(second.sdkApiCalls,1);assert.equal(second.totalNanoAiu,1.5e9);
+  const task=f.gateway.ledger.state.taskDaily[0];assert.equal(task.completed,2);assert.equal(task.totalNanoAiu,2.5e9);
+  assert.equal(task.unmeteredCalls,0);assert.equal(task.meteredCalls,2);
+});
+
+test('Claude late transport metadata remains on the request that initiated it',async t=>{
+  const callbacks=[];const f=await fixture(t,s=>{
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  },{requestHandler:{bind(_id,_body,_selected,_messages,callback){callbacks.push(callback);},release(){}}});
+  const initial=request({tools}),reply=await (await f.call(initial)).json(),first=f.gateway.ledger.state.recent[0];
+  const old=callbacks.at(-1);old({type:'relay_transport_attempt'});
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:reply.content},
+    {role:'user',content:reply.content.map(b=>({type:'tool_result',tool_use_id:b.id,content:'result'}))}]};
+  // Leave the next request in flight while the previous transport completes.
+  f.sessions[0].rpc.tools.handlePendingToolCall=async()=>{};
+  const controller=new AbortController();const pending=fetch(f.base+'/v1/messages',{method:'POST',headers:f.headers,body:JSON.stringify(next),signal:controller.signal}).catch(()=>{});
+  while(callbacks.length<2)await new Promise(resolve=>setTimeout(resolve,2));
+  old({type:'relay_transport_response',status:200});
+  const second=f.gateway.ledger.state.recent.at(-1);
+  assert.equal(first.sdkTransportResponses,1);assert.equal(second.sdkTransportResponses,0);
+  controller.abort();await pending;
+});
+
+test('Claude partial native stream cannot trigger another paid transport attempt',async t=>{
+  let attempts=0;const provider=http.createServer((_req,res)=>{attempts++;res.writeHead(200,{'content-type':'text/event-stream'});
+    res.end('data: {"type":"message_start"}\n\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}\n\n');});
+  await new Promise(resolve=>provider.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>provider.close(resolve)));
+  const handler=new ClaudeRequestHandler(),body=request();handler.bind('partial',body,validate(body,models),body.messages,()=>{});
+  const send=()=>handler.sendRequest(new Request(`http://127.0.0.1:${provider.address().port}/v1/messages`,{
+    method:'POST',body:JSON.stringify({model:'claude-opus-5.5',stream:true,messages:[]})}),{sessionId:'partial',signal:new AbortController().signal});
+  await assert.rejects(async()=>await(await send()).text(),/before message_stop/);
+  await assert.rejects(send(),error=>error.name==='AbortError');assert.equal(attempts,1);
+});
+
 test('Claude catalog maps only entitled Claude IDs, effort/context validation is explicit',()=>{
   assert.deepEqual(catalog(models).map(m=>m.id),['claude-opus-5-5']);
   assert.equal(validate(request({output_config:{effort:'xhigh'}}),models).model.id,'claude-opus-5.5');
   assert.throws(()=>validate(request({model:'claude-opus-madeup'}),models),/not exposed/);
-  assert.throws(()=>validate(request({context_management:{}}),models),/Unsupported request field/);
+  assert.throws(()=>validate(request({container:{}}),models),/Unsupported request field/);
   assert.throws(()=>validate(request({max_tokens:128001}),models),/max_tokens/);
 });
 test('Claude malformed message/tool contents fail as client errors, not internal TypeErrors',()=>{
@@ -595,7 +779,7 @@ test('Claude native image history sends bounded packed pixels, never the origina
   assert.equal(messages[0].content[0].source.data,'AAAA');
 });
 test('Claude rejected features are counted without saving private prompt content',async t=>{
-  const f=await fixture(t,s=>s.final('OK'));const response=await f.call(request({system:'DO_NOT_SAVE_PRIVATE_TEXT',context_management:{}}));
+  const f=await fixture(t,s=>s.final('OK'));const response=await f.call(request({system:'DO_NOT_SAVE_PRIVATE_TEXT',container:{}}));
   assert.equal(response.status,400);assert.equal(f.gateway.ledger.state.received,1);assert.equal(f.gateway.ledger.state.failed,1);
   assert.ok(!JSON.stringify(f.gateway.ledger.state).includes('DO_NOT_SAVE_PRIVATE_TEXT'));assert.equal(f.sessions.length,0);
 });
@@ -630,7 +814,8 @@ test('Claude signed and redacted input blocks remain opaque native history, not 
   const body=request({messages:[{role:'user',content:'earlier'},
     {role:'assistant',content:[thinking,redacted,{type:'text',text:'answer'}]},{role:'user',content:'next'}]});
   assert.doesNotThrow(()=>validate(body,models));
-  assert.match(sessionInput(body).prompt,/opaque-fixture-signature/);
+  assert.match(sessionInput(body).prompt,/fixture summary/);
+  assert.doesNotMatch(sessionInput(body).prompt,/opaque-fixture-(signature|redaction)/);
   assert.deepEqual(nativeHistory(body.messages,[],{attachments:[]}),body.messages);
   for(const block of [{...thinking,signature:''},{...thinking,thinking:7},{...redacted,data:9}])
     assert.throws(()=>validate(request({messages:[{role:'assistant',content:[block]}]}),models),e=>e.statusCode===400);
@@ -962,4 +1147,137 @@ test('Claude tool catalog cache updates cannot change another owner or bypass re
   assert.equal(holder.selected.signature,original.signature);assert.equal(otherHolder.selected,otherOriginal);
   assert.deepEqual(otherHolder.selected.tools,initial.tools);assert.equal(f.sessions[1].results.length,0);
   assert.equal(f.gateway.byTool.size,2);assert.equal(f.gateway.ledger.state.completed,3);assert.equal(f.gateway.ledger.state.failed,3);
+});
+
+test('Claude continuation batch spans adjacent result messages and system reminders without losing native boundaries',async t=>{
+  const bindings=[];
+  const f=await fixture(t,s=>{
+    nativeFixture([...f.gateway.turns][0],['a','b']);
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
+  const initial=request({tools}),first=await(await f.call(initial)).json();
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'a',content:'A'}]},
+    {role:'system',content:'between-result reminder'},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'b',content:'B'},{type:'text',text:'new steering'}]},
+    {role:'system',content:'trailing reminder'}]};
+  const response=await f.call(next);assert.equal(response.status,200,await response.clone().text());await response.text();
+  assert.deepEqual(bindings.at(-1),next.messages);assert.equal(f.sessions.length,1);assert.equal(f.sessions[0].results.length,2);
+  assert.equal(f.gateway.byTool.size,0);assert.equal(f.gateway.ledger.state.recent.at(-1).toolResults,2);
+});
+
+test('Claude native tools collect all SDK assistant chunks as one exact batch',async t=>{
+  const f=await fixture(t,s=>{
+    nativeFixture([...f.gateway.turns][0],['a','b']);
+    for(const [chunkIndex,id] of ['a','b'].entries()){
+      s.emit('assistant.message',{content:'',apiCallId:'batch',chunkIndex,chunkCount:2,toolRequests:[{toolCallId:id}]});
+      s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    }
+  });
+  const initial=request({tools}),response=await f.call(initial),first=await response.json();
+  assert.equal(response.status,200,JSON.stringify(first));assert.equal(first.content.filter(block=>block.type==='tool_use').length,2);
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
+    {role:'user',content:first.content.filter(block=>block.type==='tool_use').map(block=>({type:'tool_result',tool_use_id:block.id,content:'value'}))}]};
+  assert.equal((await f.call(next)).status,200);assert.equal(f.sessions[0].results.length,2);
+  assert.equal(f.gateway.ledger.state.recent[0].toolRequests,2);assert.equal(f.gateway.byTool.size,0);
+});
+
+test('Claude tool-result ownership is claimed atomically before interleaved SDK events',async t=>{
+  const emitBatch=(s,ids)=>{
+    nativeFixture([...f.gateway.turns][0],ids);
+    s.emit('assistant.message',{content:'',toolRequests:ids.map(toolCallId=>({toolCallId}))});
+    for(const id of ids)s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  };
+  const f=await fixture(t,s=>{
+    s.rpc.tools.handlePendingToolCall=async result=>{
+      s.results.push(result);
+      if(s.results.length===1)emitBatch(s,['c','d']);
+      if(s.results.length===4)s.final('ALL_BATCHES_OK');
+    };
+    emitBatch(s,['a','b']);
+  });
+  const body=request({tools});
+  for(let batch=0;batch<3;batch++){
+    const response=await f.call(body),reply=await response.json();assert.equal(response.status,200,JSON.stringify(reply));
+    if(batch===2){assert.equal(reply.content[0].text,'ALL_BATCHES_OK');break;}
+    assert.equal(f.gateway.ledger.state.recent.at(-1).toolRequests,2);
+    assert.equal([...f.gateway.turns][0].pending.size,2);
+    body.messages.push({role:'assistant',content:reply.content},{role:'user',content:reply.content.filter(block=>block.type==='tool_use')
+      .map(block=>({type:'tool_result',tool_use_id:block.id,content:'value'}))});
+  }
+  assert.equal(f.sessions[0].results.length,4);assert.equal(f.gateway.byTool.size,0);
+});
+
+test('Claude Edit replay accepts only the declared optional false default while preserving the original input',()=>{
+  const definition={name:'Edit',input_schema:{type:'object',properties:{replace_all:{type:'boolean',default:false},
+    file_path:{type:'string'},old_string:{type:'string'},new_string:{type:'string'}},required:['file_path','old_string','new_string']}};
+  const original=[{role:'assistant',content:[{type:'thinking',thinking:'',signature:'original'},
+    {type:'tool_use',id:'edit',name:'Edit',input:{file_path:'fixture.txt',old_string:'old',new_string:'new'}}]}];
+  const replay=structuredClone(original);replay[0].content[1].input.replace_all=false;
+  const before=structuredClone(original);
+  assert.equal(historyFingerprint(original,[definition]),historyFingerprint(replay,[definition]));
+  assert.deepEqual(original,before);
+  for(const changed of [true,null,'false']){
+    const invalid=structuredClone(replay);invalid[0].content[1].input.replace_all=changed;
+    assert.notEqual(historyFingerprint(original,[definition]),historyFingerprint(invalid,[definition]));
+  }
+  assert.notEqual(historyFingerprint(original),historyFingerprint(replay));
+  const undeclared=structuredClone(definition);delete undeclared.input_schema.properties.replace_all.default;
+  assert.notEqual(historyFingerprint(original,[undeclared]),historyFingerprint(replay,[undeclared]));
+  const required=structuredClone(definition);required.input_schema.required.push('replace_all');
+  assert.notEqual(historyFingerprint(original,[required]),historyFingerprint(replay,[required]));
+  const signature=structuredClone(replay);signature[0].content[0].signature='changed';
+  assert.notEqual(historyFingerprint(original,[definition]),historyFingerprint(signature,[definition]));
+});
+
+test('Claude explicit entitled model changes rebuild owned tool continuations without re-executing tools',async t=>{
+  const bindings=[],other={...models[0],id:'claude-sonnet-5.5',name:'Local Sonnet fixture'};
+  const f=await fixture(t,s=>{
+    if(f.sessions.length>1)return s.final('MODEL_CHANGED_OK');
+    nativeFixture([...f.gateway.turns][0],['a','b']);
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  },{models:[...models,other],requestHandler:{bind(_id,_body,selected,messages){bindings.push({model:selected.model.id,messages:structuredClone(messages)});},release(){}}});
+  const initial=request({tools}),first=await(await f.call(initial)).json();
+  const next={...initial,model:'claude-sonnet-5-5',messages:[...initial.messages,{role:'assistant',content:first.content},
+    {role:'user',content:first.content.filter(b=>b.type==='tool_use').map(b=>({type:'tool_result',tool_use_id:b.id,content:'ALREADY_EXECUTED'}))}]};
+  const response=await f.call(next),reply=await response.json();assert.equal(response.status,200,JSON.stringify(reply));
+  assert.equal(f.sessions.length,2);assert.equal(f.sessions[1].config.model,other.id);
+  assert.deepEqual(bindings.at(-1),{model:other.id,messages:next.messages});
+  assert.equal(f.sessions[0].results.length,0);assert.equal(f.sessions[1].results.length,0);
+  assert.equal(f.gateway.byTool.size,0);assert.ok(f.sessions[0].released);
+  assert.ok(f.gateway.ledger.state.recent.at(-1).continuationChanges.includes('model'));
+});
+
+test('Claude unbound inference fails closed before any transport or flattened bootstrap can spend credits',async t=>{
+  let attempts=0;const server=http.createServer((_req,res)=>{attempts++;res.end('{}');});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const handler=new ClaudeRequestHandler();
+  await assert.rejects(handler.sendRequest(new Request(`http://127.0.0.1:${server.address().port}/v1/messages`,{
+    method:'POST',body:JSON.stringify({model:'claude-opus-5.5',stream:true,messages:[{role:'user',content:'unbound SDK bootstrap'}]})}),
+    {sessionId:'never-bound',signal:new AbortController().signal}),/no native request binding/i);
+  assert.equal(attempts,0);
+});
+
+test('Claude transport retries stop after two pre-output attempts or one terminal client error',async t=>{
+  let attempts=0,status=503;const server=http.createServer((_req,res)=>{attempts++;res.writeHead(status);res.end('{}');});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const handler=new ClaudeRequestHandler(),body=request(),selected=validate(body,models);
+  const send=id=>handler.sendRequest(new Request(`http://127.0.0.1:${server.address().port}/v1/messages`,{
+    method:'POST',body:JSON.stringify({model:selected.model.id,stream:true,messages:[]})}),{sessionId:id,signal:new AbortController().signal});
+  handler.bind('bounded',body,selected,body.messages,()=>{});
+  for(let i=0;i<2;i++){const response=await send('bounded');assert.equal(response.status,503);await response.text();}
+  await assert.rejects(send('bounded'),error=>error.name==='AbortError');assert.equal(attempts,2);
+  status=400;handler.bind('terminal',body,selected,body.messages,()=>{});
+  const response=await send('terminal');assert.equal(response.status,400);await response.text();
+  await assert.rejects(send('terminal'),error=>error.name==='AbortError');assert.equal(attempts,3);
+});
+test('Claude context tier is long for large-window models only; SDK tier refusal is a prompt-too-long 400',async t=>{
+  const {contextTier}=await import('./claude-gateway/server.mjs');
+  const big={capabilities:{limits:{max_context_window_tokens:1000000}}},small={capabilities:{limits:{max_context_window_tokens:200000}}};
+  assert.equal(contextTier(150000,big),'long_context');assert.equal(contextTier(100,big),'long_context');assert.equal(contextTier(150000,small),'default');
+  const f=await fixture(t,s=>{s.emit('session.warning',{warningType:'compaction_static_context_blocked',message:'Static context is using 90%'});s.emit('session.idle',{});});
+  const response=await f.call(request());const result=await response.json();
+  assert.equal(response.status,400);assert.match(result.error.message,/prompt is too long/);assert.equal(f.gateway.turns.size,0);
 });

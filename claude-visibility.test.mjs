@@ -25,7 +25,8 @@ test('Claude connection visibility is projected metadata, not credentials, promp
   assert.equal(view.inputTokens,120);assert.equal(view.transport.attempts,4);
   assert.equal(view.recent[0].selectedModel,model.id);assert.deepEqual(view.recent[0].actualModels,[model.id]);
   assert.equal(view.lastRequestAt,new Date(now-1000).toISOString());
-  assert.doesNotMatch(JSON.stringify(view),/PRIVATE|token|session|pid|lastError/);
+  assert.doesNotMatch(JSON.stringify(view),/PRIVATE|token|pid|lastError/);
+  assert.equal(view.recent[0].session,null); // Only a validated one-way session hash is public.
   const unknown=fixture();unknown.ledger.state.usage[0].totalNanoAiu=null;unknown.ledger.state.usage[0].creditReportedCalls=0;
   assert.equal(gatewayVisibility(unknown).aiCredits,null);assert.equal(gatewayVisibility(unknown).creditReporting,'unreported');
   unknown.ledger.state.usage[0].totalNanoAiu=0;unknown.ledger.state.usage[0].creditReportedCalls=2;

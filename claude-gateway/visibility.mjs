@@ -1,6 +1,7 @@
 // Deliberate public projection for the in-process, read-only connection center.
 // Never return the gateway/SDK object, raw ledger, credentials or tool payloads.
 import {adapterVersion,catalog} from './protocol.mjs';
+import {browserTelemetry} from './browser-telemetry.mjs';
 const count=value=>Number.isFinite(value)&&value>=0?value:0;
 const model=value=>typeof value==='string'&&/^[\w.-]{1,100}$/.test(value)?value:null;
 const stamp=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toISOString():null;
@@ -9,12 +10,28 @@ const usage=value=>({sdkApiCalls:count(value.sdkApiCalls),inputTokens:count(valu
   totalNanoAiu:Number.isFinite(value.totalNanoAiu)&&value.totalNanoAiu>=0?value.totalNanoAiu:null,creditReportedCalls:count(value.creditReportedCalls)});
 function credits(value){return {...value,aiCredits:value.creditReportedCalls===0||value.totalNanoAiu===null?null:value.totalNanoAiu/1e9,
   creditReporting:value.creditReportedCalls===0?'unreported':value.creditReportedCalls<value.sdkApiCalls?'partial':'reported'};}
+function contextBudget(value){
+  if(value?.estimate!=='local-text-o200k')return null;
+  const keys=['estimatedInputTokens','outputReserve','promptLimit','contextLimit','effectiveInputLimit'];
+  if(!keys.every(key=>Number.isSafeInteger(value[key])&&value[key]>=0))return null;
+  return {estimate:value.estimate,...Object.fromEntries(keys.map(key=>[key,value[key]])),
+    reason:['prompt_limit','context_with_output','within_estimate'].includes(value.reason)?value.reason:null};
+}
 export function gatewayRequestVisibility(row){return {
   id:typeof row.id==='string'&&/^req_[a-f0-9-]{36}$/.test(row.id)?row.id:null,at:stamp(row.at),
   durationMs:Number.isFinite(row.durationMs)&&row.durationMs>=0?row.durationMs:null,
+  completedAt:stamp(row.completedAt),
+  session:typeof row.session==='string'&&/^[a-f0-9]{16}$/.test(row.session)?row.session:null,
+  effort:['none','low','medium','high','xhigh','max'].includes(row.effort)?row.effort:null,
+  requestedEffort:['none','low','medium','high','xhigh','max'].includes(row.requestedEffort)?row.requestedEffort:null,
+  requestClass:['main','subagent','workflow','compaction','auxiliary'].includes(row.requestClass)?row.requestClass:null,
+  errorType:typeof row.errorType==='string'&&/^[a-z_]{1,64}$/.test(row.errorType)?row.errorType:null,
+  errorCode:['relay_session_capacity','claude_history_prefix_mismatch','claude_context_budget'].includes(row.errorCode)?row.errorCode:null,
+  contextBudget:contextBudget(row.contextBudget),
   status:['active','completed','failed','rejected','interrupted'].includes(row.status)?row.status:'unknown',
   toolRequests:Number.isInteger(row.toolRequests)&&row.toolRequests>=0?row.toolRequests:null,
   toolResults:Number.isInteger(row.toolResults)&&row.toolResults>=0?row.toolResults:null,
+  sdkTransportAttempts:count(row.sdkTransportAttempts),sdkTransportErrors:count(row.sdkTransportErrors),
   requestedModel:model(row.requestedModel),selectedModel:model(row.selectedModel),
   actualModels:(row.actualModels??[]).slice(0,16).map(model).filter(Boolean),
   continuationMode:row.continuationMode==='rebuilt'?'rebuilt':null,
@@ -31,6 +48,7 @@ export function gatewayDashboardEvent(type,row){
     receivedAt:view.at,status:view.status,requestedModel:view.requestedModel,selectedModel:view.selectedModel,
     latencyMs:view.durationMs,httpStatus:view.httpStatus,continuationMode:view.continuationMode,
     toolRequests:view.toolRequests,toolResults:view.toolResults,
+    taskId:view.session,selectedReasoningEffort:view.effort,requestedReasoningEffort:view.requestedEffort,
     usage:{metered:view.sdkApiCalls>0,sdkApiCalls:view.sdkApiCalls,
       inputTokens:view.sdkApiCalls?view.inputTokens:null,outputTokens:view.sdkApiCalls?view.outputTokens:null,
       totalNanoAiu:view.creditReportedCalls?view.totalNanoAiu:null,creditMeteredApiCalls:view.creditReportedCalls,
@@ -52,7 +70,12 @@ export function gatewayVisibility(gateway){
     models:catalog(gateway.models).map(value=>value.id),modelCatalogSource:'SDK catalog at gateway startup',automaticFallback:false,
     received:count(state.received),completed:count(state.completed),failed:count(state.failed),
     activeRequests:Math.max(0,count(state.received)-count(state.completed)-count(state.failed)),activeTurns:gateway.turns.size,
+    sessionCapacity:{limit:count(sdk.maxSessions),available:count(sdk.availableSessionSlots),canAcceptNewSessions:sdk.canAcceptNewSessions===true},
+    turnStates:{streaming:[...gateway.turns].filter(turn=>turn.sink&&!turn.sink.closed).length,
+      waitingForTools:[...gateway.turns].filter(turn=>!turn.sink&&turn.pending?.size>0).length,
+      rebuilding:[...gateway.turns].filter(turn=>turn.rebuilding===true).length},
+    historyConflicts:rows.filter(row=>row.httpStatus===409).length,
     lastRequestAt:times.at(-1)??null,...credits(total),usage:buckets,usageSource:'SDK assistant.usage receipts; failed attempts may be unreported',
     transport:Object.fromEntries(['attempts','httpResponses','httpErrors','networkErrors'].map(key=>[key,count(state.transport?.[key])])),
-    recent:rows.slice(-20).reverse().map(gatewayRequestVisibility)};
+    browser:browserTelemetry(rows),recent:rows.slice(-20).reverse().map(gatewayRequestVisibility)};
 }

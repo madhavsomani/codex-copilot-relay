@@ -7,7 +7,10 @@ history and private backups live in the one `Codex Copilot Bridge` folder.
 The same terminal and Control Room show both clients. Codex's TOML routing is
 automatic; Claude's supported third-party form remains a one-time manual step.
 
-1. Run **Start Relay**. The first terminal screen shows readiness and setup.
+1. Run **Start Relay** (PowerShell; no relay EXE required). The first terminal
+   screen shows readiness and setup. The main dashboard's **Connect Claude Code**
+   panel also shows every step, plus the recovery/restore behavior; it never
+   displays or accepts your local key.
 2. In Claude: **Developer > Configure Third-Party Inference** (not MCP settings).
    If necessary, use **Help > Troubleshooting > Enable Developer Mode**. Do not
    override an organization policy that disables this form.
@@ -15,7 +18,9 @@ automatic; Claude's supported third-party form remains a one-time manual step.
    authentication scheme: **Bearer**. In the relay terminal type `key` and paste
    that local key into the app yourself. It is encrypted for this Windows user,
    persists across relay restarts, and is not published or shown on the dashboard.
-4. Keep **Allow Code** on and experimental **MCP tool search** off. Save active
+4. Keep **Allow Code** on and turn **Enable tool search** on (relay 1.3.84+; it
+   cuts each request by ~150k tokens when large MCP connectors are installed).
+   List one model per family. See [the complete guide](CLAUDE-CODE-GUIDE.md). Save active
    work, apply the settings and restart as requested by Claude. Choose third-party
    inference and open **Code**. Type `models` in the relay terminal for current
    entitled Claude model IDs; select one in the app. Explicit choices are honored.
@@ -30,6 +35,9 @@ patch either app or promise native voice/Remote Control support or free inferenc
 
 See [the full workflow](TWO-CONTROLS.md) and
 [Anthropic's supported desktop form](https://code.claude.com/docs/en/llm-gateway-connect#desktop-app).
+
+For browser access and source-backed research, see [the optional local browser
+integration](CLAUDE-BROWSER.md). Model routing alone does not provide browser tools.
 
 ## Historical isolated developer preview (not the desktop shortcut workflow)
 

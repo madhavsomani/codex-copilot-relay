@@ -1,4 +1,13 @@
-# One Windows executable entry point
+# Legacy optional Windows executable entry point
+
+**Current workflow (1.3.70+):** both desktop shortcuts use PowerShell scripts.
+The installer no longer selects an EXE, even when one is present. Existing
+compiled launchers are retained for manual developer use only; nothing depends
+on building one. See [the current two-control guide](TWO-CONTROLS.md).
+The remainder records the earlier EXE workflow and its historical evidence.
+With current scripts, explicit Stop (1.3.76+) and desktop Start (1.3.79+) cancel
+active relay requests. Repair/watchdog updates wait for them. The historical wait
+behavior below is not the current desktop-control contract.
 
 Contract: `Copilot-Relay.exe` is the single **launcher** used by both desktop
 controls. It delegates to the existing managed lifecycle, preserving the

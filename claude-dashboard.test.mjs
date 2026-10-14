@@ -4,8 +4,19 @@ import {mountClaudeGateway} from './unified-gateway.mjs';
 import {Ledger} from './claude-gateway/ledger.mjs';
 import {gatewayVisibility} from './claude-gateway/visibility.mjs';
 import {DASHBOARD_HTML} from './dashboard.mjs';
+import {CLAUDE_SCRIPT} from './dashboard-claude.mjs';
+import vm from 'node:vm';
 
 const selected={model:{id:'claude-opus-5.5'},effort:'high'};
+test('session UI shows capacity exhaustion and waiting detail without interpreting markup',()=>{
+  const text={};const context={setText:(id,value)=>text[id]=value,number:String,creditsText:()=>'?'};
+  vm.createContext(context);vm.runInContext(CLAUDE_SCRIPT,context);
+  context.renderClaudeGateway({listening:true,sdkState:'ready',sessionCapacity:{limit:16,canAcceptNewSessions:false},turnStates:{waitingForTools:15}});
+  assert.match(text['claude-live-status'],/capacity exhausted.*15 waiting/);
+  context.renderSessionLeases({sessions:[{client:'claude-code',model:'claude-opus-5.5',state:'waiting-for-tools',id:'lease_fixture',taskId:'fixture',ageMs:60000,waitingMs:60000,pendingTools:1,expiresAt:new Date().toISOString()}]});
+  assert.match(text['relay-session-leases'],/Claude Code.*waiting-for-tools/);
+  assert.match(text['relay-session-leases'],/waiting 1m/);assert.doesNotMatch(CLAUDE_SCRIPT,/innerHTML|fetch\(/);
+});
 function fixture(){return {ledger:new Ledger(),runtime:{snapshot:()=>({state:'ready'})},models:[],turns:new Set(),
   mountPort:4144,mountedListening:true,close:async()=>{}};}
 
@@ -41,13 +52,13 @@ test('dashboard observer failure never aborts Claude work and retained rows are 
 });
 
 test('Control Room preserves Codex history and adds a bounded Claude branch, client identity and honest usage scope',()=>{
-  for(const id of ['route-claude-journey','inspector-client','claude-gateway-activity','claude-live-status','claude-request-rows'])
+  for(const id of ['route-claude-journey','inspector-client','claude-gateway-activity','claude-live-status','history-client'])
     assert.ok(DASHBOARD_HTML.includes('id="'+id+'"'),id);
-  assert.match(DASHBOARD_HTML,/renderClaudeGateway\(data\.claude\)/);
+  assert.match(DASHBOARD_HTML,/renderClaudeGateway\(data\.claude, data\.summary\)/);
   assert.match(DASHBOARD_HTML,/call\.client === "claude-code"/);
   assert.match(DASHBOARD_HTML,/GUI identity is not attested/);
-  assert.match(DASHBOARD_HTML,/Codex metrics below/);
-  assert.match(DASHBOARD_HTML,/slice\(0, 20\)/);
+  assert.match(DASHBOARD_HTML,/Client breakdown/);
+  assert.doesNotMatch(DASHBOARD_HTML,/id="claude-request-rows"/);
   assert.doesNotMatch(DASHBOARD_HTML,/<script\s+src=/i);
   assert.match(DASHBOARD_HTML,/Claude Code App/);
   assert.match(DASHBOARD_HTML,/id="route-claude-tool-journey"/);

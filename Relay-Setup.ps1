@@ -32,6 +32,9 @@ CLAUDE CODE GATEWAY: $claude
    Readiness/model discovery is not proof of a completed app request.
 
 Both clients use this terminal and dashboard; tools execute in their own app.
+Browser/research setup: docs\CLAUDE-BROWSER.md (pinned Playwright MCP + extension).
+Run node claude-browser-setup.mjs apply once, then approve the browser connection.
+Hosted Anthropic web search is unsupported; the research skill uses browser sources.
 Setup is manual for Claude; this terminal does not edit Claude's saved profile.
 Stop & Restore drains work and restores Codex. Return Claude to normal sign-in
 yourself. Closing this event window triggers recovery, not restoration.

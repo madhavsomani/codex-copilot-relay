@@ -52,9 +52,19 @@ try {
     [IO.File]::WriteAllText((Join-Path $desktop 'unrelated-screenshot.txt'),'untouched')
     $hash=(Get-FileHash -LiteralPath $old).Hash
     $archiveRoot=Join-Path $testRoot 'relay\runtime\desktop-backups'
+    # Migrate this checkout's existing EXE shortcuts, even while the EXE exists.
+    foreach ($control in @(@('Start Relay.lnk','start --port 4144 --model gpt-6.1-sol'),@('Stop & Restore.lnk','stop'))) {
+        $link=$shell.CreateShortcut((Join-Path $desktop $control[0]))
+        $link.TargetPath=Join-Path $PSScriptRoot 'Copilot-Relay.exe';$link.Arguments=$control[1];$link.Save()
+    }
     & (Join-Path $PSScriptRoot 'Install-RelayDesktopControls.ps1') -Desktop $desktop -ArchiveDirectory $archiveRoot | Out-Null
     & (Join-Path $PSScriptRoot 'Install-RelayDesktopControls.ps1') -Desktop $desktop -ArchiveDirectory $archiveRoot | Out-Null
     Assert (@(Get-ChildItem -LiteralPath $desktop -File -Filter '*.lnk').Count -eq 2) 'Expected exactly two controls after repeated installation.'
+    foreach ($control in @(@('Start Relay.lnk','Start-Relay.ps1'),@('Stop & Restore.lnk','Stop-Relay.ps1'))) {
+        $link=$shell.CreateShortcut((Join-Path $desktop $control[0]))
+        Assert ($link.TargetPath -ieq (Get-Command powershell.exe).Source) 'Default control must use PowerShell, even if the EXE is present.'
+        Assert ($link.Arguments.Contains('"'+(Join-Path $PSScriptRoot $control[1])+'"')) 'Control targets the wrong script.'
+    }
     $archived=@(Get-ChildItem -LiteralPath $archiveRoot -File -Recurse -Filter '*.lnk')
     Assert (-not (Test-Path -LiteralPath (Join-Path $desktop 'Copilot Relay Backups'))) 'Archive clutter reappeared on the desktop.'
     Assert ($archived.Count -eq 1 -and (Get-FileHash -LiteralPath $archived[0].FullName).Hash -eq $hash) 'Old control was not archived byte-for-byte.'

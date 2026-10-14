@@ -1,4 +1,6 @@
 import {SETUP_HTML} from './setup-ui.mjs';
+import {CLAUDE_GUIDE_STYLE,renderClaudeSetupGuide} from './claude-setup-guide.mjs';
+import {BROWSER_HTML} from './dashboard-browser.mjs';
 // Reuse the existing lightweight page; never replace the production dashboard.
 export function renderUnifiedSetupPage(port,{managedDesktop=false}={}){
   if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid gateway port.');
@@ -18,6 +20,9 @@ export function renderUnifiedSetupPage(port,{managedDesktop=false}={}){
       '<article id="restore"><div class="tag">Safe exit</div><h2>Stop only this gateway</h2><p>Finish both clients’ work before entering <code>quit</code>. It stops this launcher’s service, not older gateways. This preview does not edit saved client configuration and does not silently fall back.</p><p>Each launch generates new local keys. Reconnect the clients after restarting. To revert a saved Claude Gateway profile, select the normal sign-in option in Claude. Durable keys and unattended restart are not implemented in this combined preview.</p></article>');
   if(!managedDesktop)return html;
   return html.replace('Combined gateway preview','Copilot Relay · Codex + Claude')
+    .replace('href="/dashboard/setup#claude"','href="#claude-setup-guide"')
+    .replace('</head>',`<style>${CLAUDE_GUIDE_STYLE}</style></head>`)
+    .replace('<article id="claude">',`${renderClaudeSetupGuide(base+'/claude')}${BROWSER_HTML}<p>For browser observations and model-family IDs, open the main dashboard. This setup page does not probe your browser.</p><article id="claude">`)
     .replace('Connection details ↓','Open dashboard →').replace('href="#routes"','href="/dashboard"')
     .replace('The running service does not automatically switch either app. Use the guide in <code>docs/UNIFIED-GATEWAY.md</code>. Keys stay in the terminal; never enter them on this page. Older dashboards and histories remain separate.',
       'Start Relay manages the backed-up Codex route. Claude needs its supported one-time desktop form. See <code>docs/TWO-CONTROLS.md</code>. Keys stay in the terminal, never on this page. Original dashboard and history remain at /dashboard; older preview ledgers remain separately labelled.')

@@ -147,6 +147,9 @@ export async function launch(args=process.argv.slice(2),options={}){
   const auth=options.authProbe?await options.authProbe():JSON.parse(await capture(process.execPath,[path.join(root,'probe-setup-auth.mjs'),'--model-metadata'],cleanEnvironment(environment),25000));
   if(auth?.authenticated!==true)throw fail('Copilot is not authenticated here. Sign in with the official Copilot CLI on this system; no other account/provider was used.');
   if(!Array.isArray(auth.models)||!auth.models.includes(config.model))throw fail('The requested GPT model is not advertised as enabled for this signed-in Copilot account.');
+  const advertisedEfforts=auth.modelDetails?.find(model=>model.id===config.model)?.supportedReasoningEfforts;
+  if(config.effort!==null&&Array.isArray(advertisedEfforts)&&!advertisedEfforts.includes(config.effort))
+    throw fail('The requested effort is not advertised for this model. It was not silently substituted.');
   await assertPortAvailable(config.port);
   const lease=acquireLease(path.join(root,'runtime','codex-cli','ports',String(config.port)));
   const token=randomBytes(32).toString('hex'),providerId=`copilot_cli_${randomBytes(8).toString('hex')}`;

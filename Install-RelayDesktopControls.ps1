@@ -2,6 +2,7 @@
 param([string]$Desktop=[Environment]::GetFolderPath('Desktop'),
     [ValidateRange(1024,65535)][int]$Port=4144,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')][string]$Model='gpt-6.1-sol',
+    # Retained for compatibility; both controls always use PowerShell now.
     [switch]$UsePowerShell,[string]$ArchiveDirectory)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Codex-Copilot-Config.ps1')
@@ -44,14 +45,10 @@ $stop=Join-Path $desktopPath 'Stop & Restore.lnk'
 foreach($file in @($start,$stop)){Assert-RelayLocalPath -Root $desktopPath -Path $file}
 $binary=Join-Path $PSScriptRoot 'Copilot-Relay.exe'
 Assert-RelayLocalPath -Root $PSScriptRoot -Path $binary
-$useBinary=-not $UsePowerShell -and (Test-Path -LiteralPath $binary -PathType Leaf)
-if ($useBinary -and (Get-Item -LiteralPath $binary).VersionInfo.ProductName -ne 'Codex Copilot Relay Launcher') {
-    throw 'The EXE is not a known relay launcher. Rebuild it or use -UsePowerShell; controls were not changed.'
-}
 $powerShell=(Get-Command powershell.exe -ErrorAction Stop).Source
 $plans=@(
-    @{Path=$start;Script='Start-Relay.ps1';Command='start';Extra=" -Port $Port -Model $Model";NoExit='';BinaryArgs="start --port $Port --model $Model";Description='Start or repair the shared Codex + Claude relay, visible terminal and dashboard.'}
-    @{Path=$stop;Script='Stop-Relay.ps1';Command='stop';Extra='';NoExit=' -NoExit';BinaryArgs='stop';Description='Stop owned recovery and both adapters after work drains; restore protected Codex config. Claude profile remains user-controlled.'}
+    @{Path=$start;Script='Start-Relay.ps1';Command='start';Extra=" -Port $Port -Model $Model";NoExit='';BinaryArgs="start --port $Port --model $Model";Description='Cancel existing relay sessions and start the latest local Codex + Claude relay, terminal and dashboard.'}
+    @{Path=$stop;Script='Stop-Relay.ps1';Command='stop';Extra='';NoExit=' -NoExit';BinaryArgs='stop';Description='Cancel active relay requests, stop owned recovery and both adapters; restore protected Codex config. History and keys retained.'}
 )
 # Validate BOTH destinations before rewriting either. Permit only migration
 # between this checkout's known script and binary controls, never foreign links.
@@ -67,8 +64,8 @@ foreach($plan in $plans) {
 }
 foreach($plan in $plans) {
     $link=$shell.CreateShortcut($plan.Path)
-    $link.TargetPath=if($useBinary){$binary}else{$powerShell}
-    $link.Arguments=if($useBinary){$plan.BinaryArgs}else{'-NoProfile -ExecutionPolicy Bypass'+$plan.NoExit+' -File "'+(Join-Path $PSScriptRoot $plan.Script)+'"'+$plan.Extra}
+    $link.TargetPath=$powerShell
+    $link.Arguments='-NoProfile -ExecutionPolicy Bypass'+$plan.NoExit+' -File "'+(Join-Path $PSScriptRoot $plan.Script)+'"'+$plan.Extra
     $link.WorkingDirectory=$PSScriptRoot
     $link.WindowStyle=1
     $link.Description=$plan.Description
