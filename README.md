@@ -23,7 +23,10 @@ Codex and the official GitHub Copilot SDK.
 
 ## Keep Codex. Change the inference path.
 
-**Using Claude Code?** Read the [complete Claude Code guide](docs/CLAUDE-CODE-GUIDE.md):
+**Using Claude Code?** Read the [complete Claude Code guide](docs/CLAUDE-CODE-GUIDE.md).
+To ask for images in the Code tab with native Codex (your OpenAI/ChatGPT allowance,
+not Copilot credits), see [native image generation](docs/CLAUDE-IMAGE-MCP.md).
+The guide covers
 setup, model families, on-demand tool loading, browser and research, costs and
 troubleshooting.
 

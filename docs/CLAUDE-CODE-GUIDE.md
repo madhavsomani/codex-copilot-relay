@@ -137,6 +137,7 @@ price list, and may change.
 | Tool search, context editing | Supported since 1.3.84 |
 | Adaptive/extended thinking, effort, structured outputs, strict tools | Supported where Copilot advertises them for the model |
 | WebFetch | Supported; runs locally |
+| Image generation (native Codex, gpt-image-2) | Optional MCP adapter; uses your OpenAI/ChatGPT allowance, not Copilot credits. See [CLAUDE-IMAGE-MCP.md](CLAUDE-IMAGE-MCP.md). |
 | **WebSearch (Anthropic hosted)** | **Not available.** Copilot rejects it. See §7. |
 | Exact token counting (`count_tokens`) | Returns 501; Claude Code estimates instead |
 | Server-side auto-mode classifier (`safeguards`) | Rejected once per session (HTTP 400). Claude Code then uses its built-in classifier. The relay never strips it silently. |
