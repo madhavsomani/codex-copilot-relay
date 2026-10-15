@@ -95,10 +95,12 @@ export function invalid(message, statusCode = 400, type = 'invalid_request_error
     ...(statusCode>=400&&statusCode<500&&![408,429].includes(statusCode)?{shouldRetry:'false'}:{})});
 }
 // Client names can be 128 characters. Keep SDK-owned names within a conservative
-// 64-character budget, with deterministic per-catalog ownership and no truncation
-// collisions. Only transport names change; client tools retain their exact names.
-export function sdkToolName(tool,index){
-  const prefix='client_'+index+'_';
+// 64-character budget. The transport name depends only on the client name, so
+// reordering or adding tools never renames history (which would rewrite the
+// cached prefix) and the model never sees positional numbers it could mix up.
+// Client tool names are unique per request, so names stay unique.
+export function sdkToolName(tool,_index){
+  const prefix='client_';
   return prefix+(prefix.length+tool.name.length<=64?tool.name:digest(tool.name).slice(0,32));
 }
 export const anthropicId = id => id.replace(/(\d)\.(\d)/g, '$1-$2');

@@ -3,13 +3,17 @@ import {adapterVersion, invalid, messageUsage} from './protocol.mjs';
 import {errorResponseHeaders} from './errors.mjs';
 
 export class MessageSink {
-  constructor(response, body, onClose, heartbeatMs = 15000) {
+  constructor(response, body, onClose, heartbeatMs = 15000, preStartPingMs = 45000) {
     this.response = response; this.body = body; this.streaming = Boolean(body.stream); this.blocks = [];
     this.id = 'msg_' + randomUUID().replaceAll('-',''); this.model = body.model;
     this.closed = false; this.textIndex = null;
     response.once('close', () => {clearInterval(this.heartbeat); if (!this.closed) onClose();});
     if (this.streaming) {
-      this.heartbeat = setInterval(() => this.frame('ping', {}), heartbeatMs); this.heartbeat.unref?.();
+      // Hold pings until the answer starts, so a fast upstream 400/429/529 keeps
+      // its real status and retry headers. After a grace period, ping anyway so
+      // a slow start never looks dead to the client.
+      const pingFrom = Date.now() + preStartPingMs;
+      this.heartbeat = setInterval(() => {if (this.started || Date.now() >= pingFrom) this.frame('ping', {});}, heartbeatMs); this.heartbeat.unref?.();
     }
   }
   start(){

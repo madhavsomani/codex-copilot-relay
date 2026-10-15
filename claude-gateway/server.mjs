@@ -1,5 +1,5 @@
 import http from 'node:http';
-import {timingSafeEqual} from 'node:crypto';
+import {timingSafeEqual,createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {CopilotClient} from '@github/copilot-sdk';
@@ -39,11 +39,28 @@ const toolKey = (owner,id) => owner+':'+id;
 function scope(headers,body) {
   return digest([sessionHash(headers,body) ?? 'anonymous',headers['x-claude-code-agent-id'] ?? 'main']);
 }
+// Synchronous tokenizing of a whole long chat took ~0.3 s per request. Count
+// each message once and reuse it; deferred tool schemas never reach Copilot
+// until loaded, so they are not counted.
+const tokenCache=new Map();
+function cachedTokens(text){
+  if(text.length<2048)return countModelTokens(text);
+  const key=createHash('sha1').update(text).digest('base64');
+  let count=tokenCache.get(key);
+  if(count===undefined){count=countModelTokens(text);if(tokenCache.size>=8192)tokenCache.delete(tokenCache.keys().next().value);}
+  else tokenCache.delete(key);
+  tokenCache.set(key,count);return count;
+}
+export function estimateTokens(input,selected,body){
+  const parts=input.prompt.split(/\n\n(?=\[(?:USER|ASSISTANT|SYSTEM)\]\n)/);
+  return cachedTokens(input.system)+parts.reduce((sum,part)=>sum+cachedTokens(part),0)
+    +cachedTokens(JSON.stringify(selected.tools.filter(tool=>tool.defer_loading!==true)))+countModelTokens(JSON.stringify(body.output_config??{}));
+}
 function admitContext(body,selected,input,row){
   if(input.system.length>1000000)throw invalid('System instructions exceed the Copilot upstream character limit.');
   // Local text-token estimate, not the unavailable exact Anthropic count.
   // Apply the same advertised prompt and prompt+output ceilings on every turn.
-  const tokens=countModelTokens(input.system+'\n'+input.prompt+'\n'+JSON.stringify(selected.tools)+'\n'+JSON.stringify(body.output_config??{}));
+  const tokens=estimateTokens(input,selected,body);
   const limits=selected.model.capabilities?.limits??{};
   const promptLimit=limits.max_prompt_tokens??136000,contextLimit=limits.max_context_window_tokens??200000;
   const effectiveInputLimit=Math.max(0,Math.min(promptLimit,contextLimit-body.max_tokens));
@@ -79,7 +96,7 @@ class Turn {
     this.nativeMessages=nativeMessages??body.messages;
     this.gateway.requestHandler?.bind(this.session.sessionId,body,this.selected,nativeMessages,event=>this.nativeEvent(event,row));
     this.body=body;this.events=[];this.expectedCalls=[];this.lastText='';this.chunkCount=0;this.chunkIndexes=new Set();
-    this.sink=new MessageSink(response,body,()=>void this.fail(invalid('Client disconnected; request not replayed.',499,'api_error')),this.gateway.heartbeatMs);
+    this.sink=new MessageSink(response,body,()=>void this.fail(invalid('Client disconnected; request not replayed.',499,'api_error')),this.gateway.heartbeatMs,this.gateway.preStartPingMs);
     this.arm(this.gateway.modelTimeoutMs);
   }
   arm(ms) {
@@ -89,11 +106,28 @@ class Turn {
     const settled=Boolean(this.sink&&this.nativeStopped);
     if(settled)ms=Math.min(ms,this.gateway.postStreamMs);
     this.lease.set(this.sink?'streaming':'waiting-for-tools',ms);
+    this.lastActive=Date.now();
     clearTimeout(this.deadline);
-    this.deadline=setTimeout(()=>void this.fail(settled
-      ?invalid('Copilot SDK did not finish the turn after the native stream ended; not replayed.',502,'api_error')
-      :invalid('SDK/tool continuation inactivity deadline reached.',504,'api_error')),ms);
+    this.deadline=setTimeout(()=>{
+      if(settled&&this.recoverFromNative())return;
+      void this.fail(settled
+        ?invalid('Copilot SDK did not finish the turn after the native stream ended; not replayed.',502,'api_error')
+        :invalid('SDK/tool continuation inactivity deadline reached.',504,'api_error'));
+    },ms);
     this.deadline.unref?.();
+  }
+  // The model already finished and every block reached the client with verified
+  // terminal metadata; only the SDK's own bookkeeping stalled. Deliver that
+  // answer instead of failing it (which made the client pay for a retry). A tool
+  // turn ends this SDK session; its results rebuild one from client history.
+  recoverFromNative(){
+    if(this.done||!this.sink||this.sink.closed||!this.nativeStarted||!this.nativeStopped||!this.nativeTerminal
+      ||!this.sink.blocks.length||this.sink.nativeOpen!=null)return false;
+    try{
+      if(this.row)this.row.recoveredAfterStall=true;
+      this.complete(this.nativeTerminal.reason);
+    }catch{return false;}
+    void this.dispose();return true;
   }
   nativeEvent(event,row=this.row){
     if(event.type.startsWith('relay_transport_')){
@@ -251,11 +285,26 @@ class Turn {
   }
 }
 
+// A turn waiting for tool results holds an SDK session. Abandoned ones (the user
+// interrupted, a subagent was killed) used to fill every slot. When no slot is
+// free, release the longest-idle waiting turn, but only one idle for longer than
+// the prompt-cache lifetime: active parallel workers are never evicted, and if
+// the released turn's results do arrive, the request rebuilds from the client's
+// full history at no extra cache cost.
+export function evictIdleToolTurn(gateway,keep,now=Date.now()){
+  if(gateway.runtime.snapshot?.().availableSessionSlots!==0)return null;
+  const idle=[...gateway.turns].filter(turn=>!turn.done&&!turn.sink&&!turn.rebuilding&&turn!==keep&&turn.pending.size
+    &&now-(turn.lastActive??now)>=gateway.idleEvictMs)
+    .sort((a,b)=>(a.lastActive??0)-(b.lastActive??0))[0];
+  if(!idle)return null;
+  void idle.fail(invalid('Released an idle tool continuation to free a session slot; its results will rebuild from history.',503,'api_error'));
+  return idle;
+}
 export async function createGateway({runtime,models,token,workingDirectory=process.cwd(),ledger=new Ledger(),
-  heartbeatMs=15000,modelTimeoutMs=900000,postStreamMs=60000,toolTimeoutMs=13*60*60*1000,maxBodyBytes=64*1024*1024,onRequest,onFault,requestHandler,mountPort}={}) {
+  heartbeatMs=15000,preStartPingMs=45000,idleEvictMs=5*60*1000,modelTimeoutMs=900000,postStreamMs=60000,toolTimeoutMs=60*60*1000,maxBodyBytes=64*1024*1024,onRequest,onFault,requestHandler,mountPort}={}) {
   if(typeof token!=='string'||token.length<24)throw new Error('A random local gateway token of at least 24 characters is required.');
   if(!catalog(models).length)throw new Error('No supported Claude models are exposed by the authenticated SDK.');
-  const gateway={runtime,models,ledger,heartbeatMs,modelTimeoutMs,postStreamMs,toolTimeoutMs,requestHandler,onFault,turns:new Set(),byTool:new Map()};
+  const gateway={runtime,models,ledger,heartbeatMs,preStartPingMs,idleEvictMs,modelTimeoutMs,postStreamMs,toolTimeoutMs,requestHandler,onFault,turns:new Set(),byTool:new Map()};
   if(mountPort!==undefined&&(!Number.isInteger(mountPort)||mountPort<1024||mountPort>65535))throw new Error('Invalid mounted gateway port.');
   const handle=async(request,response)=>{
     let row,turn,onAdmissionClose,rebuilding;
@@ -302,39 +351,50 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
       if(holder) {
         if(holder.sink||holder.rebuilding)throw invalid('Another request is already continuing these tools.',409);
         if(owner!==holder.owner)throw invalid('Tool continuation owner changed; start a fresh conversation.',409);
-        if(historyFingerprint(body.messages.slice(0,continuation.index),holder.selected.tools)!==historyFingerprint(holder.expectedHistory,holder.selected.tools)){
+        const prefixChanged=historyFingerprint(body.messages.slice(0,continuation.index),holder.selected.tools)!==historyFingerprint(holder.expectedHistory,holder.selected.tools);
+        if(prefixChanged){
+          // Stock Claude sometimes replays its own history slightly differently
+          // (e.g. normalized tool inputs). Rejecting kept the chat stuck on every
+          // retry. Rebuild from the client's full validated history instead,
+          // exactly like the restart path; no tool is re-executed. A changed
+          // thinking signature is never a client normalization: refuse it.
           row.historyMismatch=historyMismatch(holder.expectedHistory,body.messages.slice(0,continuation.index),holder.selected.tools);
-          throw Object.assign(invalid('Tool continuation history prefix changed. The pending tools are preserved; unchanged retries cannot repair the mismatch.',409),{code:'claude_history_prefix_mismatch'});
+          if(row.historyMismatch.reason==='signed-content')
+            throw Object.assign(invalid('Tool continuation history changed a signed thinking block; the original signature is required.',409),{code:'claude_history_prefix_mismatch'});
+          row.continuationMode='rebuilt-history';
+          holder.rebuilding=true;rebuilding=holder;
         }
-        if(new Set(results.map(item=>item.tool_use_id)).size!==holder.pending.size
-          ||results.length!==holder.pending.size||results.some(item=>!holder.pending.has(item.tool_use_id)))throw invalid('Provide every outstanding tool result exactly once.',409);
-        // Use the retained native prefix, including any legacy overview notes,
-        // not only the client prefix. Reject before attaching/consuming results
-        // so a smaller, valid retry keeps the same owned SDK tool continuation.
-        const retainedInput=sessionInput({...body,messages:[...holder.upstreamHistory,...continuation.messages]});
-        admitContext(body,selected,retainedInput,row);
-        admitNativeImages(retainedInput.attachments,selected.model,requestHandler);
-        // validate() enforces results-first ordering. The full native user
-        // message and trailing system reminders go through continue() and the SDK
-        // request hook; only tool_result blocks resolve pending client tools.
-        if(selected.signature===holder.selected.signature){
-          assertOpen();turn=holder;detachAdmission();
-          return await holder.continue(body,response,row,results,selected,continuation.messages);
+        else {
+          if(new Set(results.map(item=>item.tool_use_id)).size!==holder.pending.size
+            ||results.length!==holder.pending.size||results.some(item=>!holder.pending.has(item.tool_use_id)))throw invalid('Provide every outstanding tool result exactly once.',409);
+          // Use the retained native prefix, including any legacy overview notes,
+          // not only the client prefix. Reject before attaching/consuming results
+          // so a smaller, valid retry keeps the same owned SDK tool continuation.
+          const retainedInput=sessionInput({...body,messages:[...holder.upstreamHistory,...continuation.messages]});
+          admitContext(body,selected,retainedInput,row);
+          admitNativeImages(retainedInput.attachments,selected.model,requestHandler);
+          // validate() enforces results-first ordering. The full native user
+          // message and trailing system reminders go through continue() and the SDK
+          // request hook; only tool_result blocks resolve pending client tools.
+          if(selected.signature===holder.selected.signature){
+            assertOpen();turn=holder;detachAdmission();
+            return await holder.continue(body,response,row,results,selected,continuation.messages);
+          }
+          // A Messages client may explicitly change its entitled model,
+          // generation controls, system text or its
+          // catalog on the next request. Rebuild from its full validated history;
+          // never feed results into an SDK session with stale settings. Pending
+          // executable tool definitions remain bound until their results arrive.
+          for(const {item} of holder.pending.values()){
+            const executable=tool=>tool&&{name:tool.name,input_schema:tool.input_schema,strict:tool.strict??false};
+            if(digest(executable(selected.tools.find(tool=>tool.name===item.name))??null)!==
+              digest(executable(holder.selected.tools.find(tool=>tool.name===item.name))??null))
+              throw invalid('Pending tool executable catalog changed; finish it with its original schema.',409);
+          }
+          row.continuationMode='rebuilt';
+          row.continuationChanges=Object.keys(selected.bindingHashes).filter(key=>selected.bindingHashes[key]!==holder.selected.bindingHashes[key]);
+          holder.rebuilding=true;rebuilding=holder;
         }
-        // A Messages client may explicitly change its entitled model,
-        // generation controls, system text or its
-        // catalog on the next request. Rebuild from its full validated history;
-        // never feed results into an SDK session with stale settings. Pending
-        // executable tool definitions remain bound until their results arrive.
-        for(const {item} of holder.pending.values()){
-          const executable=tool=>tool&&{name:tool.name,input_schema:tool.input_schema,strict:tool.strict??false};
-          if(digest(executable(selected.tools.find(tool=>tool.name===item.name))??null)!==
-            digest(executable(holder.selected.tools.find(tool=>tool.name===item.name))??null))
-            throw invalid('Pending tool executable catalog changed; finish it with its original schema.',409);
-        }
-        row.continuationMode='rebuilt';
-        row.continuationChanges=Object.keys(selected.bindingHashes).filter(key=>selected.bindingHashes[key]!==holder.selected.bindingHashes[key]);
-        holder.rebuilding=true;rebuilding=holder;
       }
       // A persisted client transcript can be rebuilt after relay restart. Never
       // replay client tool execution or pretend SDK thinking survived restart.
@@ -346,6 +406,7 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
       const inputTokens=admitContext(body,selected,input,row);
       const tools=selected.tools.map((tool,index)=>({name:sdkToolName(tool,index),
         description:`Client tool ${tool.name}. ${tool.description ?? ''}`,parameters:tool.input_schema,defer:'never',skipPermission:true}));
+      evictIdleToolTurn(gateway,rebuilding);
       const {session,generation}=await runtime.createSession({clientName:'claude-code-copilot-relay-preview',model:selected.model.id,
         reasoningEffort:selected.effort,streaming:true,workingDirectory,
         contextTier:contextTier(inputTokens,selected.model),modelCapabilities:{limits:{max_output_tokens:body.max_tokens}},
@@ -361,7 +422,7 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
       if(rebuilding){await rebuilding.dispose();rebuilding=null;assertOpen();}
       detachAdmission();
       turn.attach(body,response,row,nativeMessages);
-      if(row.continuationMode==='rebuilt')for(const _ of results)ledger.toolSignal(row,'tool_resolved');
+      if(row.continuationMode?.startsWith('rebuilt'))for(const _ of results)ledger.toolSignal(row,'tool_resolved');
       // Native images/history are injected once by the session-bound hook.
       // SDK bootstrap text still establishes tool ownership and token admission.
       void session.send({prompt:input.prompt}).catch(error=>turn.fail(error));
@@ -400,7 +461,7 @@ export function claudeSessionLimit(value) {
   return Number(value);
 }
 
-export async function startSdkGateway({token,port=4246,workingDirectory=process.cwd(),onRequest,onFault,requestHandler,
+export async function startSdkGateway({token,port=4246,workingDirectory=process.cwd(),onRequest,onFault,requestHandler,idleEvictMs,
   runtimeDirectory,runtimeFactory,mountPort,maxSessions=process.env.BRIDGE_MAX_CLAUDE_SESSIONS}={}) {
   if(typeof token!=='string'||token.length<24)throw new Error('Set a random local gateway token with at least 24 characters.');
   if(!Number.isInteger(port)||port<0||port>65535||port===4144)throw new Error('Choose an isolated port other than Codex port 4144.');
@@ -417,7 +478,7 @@ export async function startSdkGateway({token,port=4246,workingDirectory=process.
       onLost(generation,error){for(const turn of gateway?.turns??[])if(turn.generation===generation)void turn.fail(error);}};
     runtime=runtimeFactory?runtimeFactory(runtimeOptions):new CopilotRuntime(runtimeOptions);
     await runtime.start();const models=await (await runtime.ready()).listModels();
-    gateway=await createGateway({runtime,models,token,workingDirectory,ledger,onRequest,onFault,requestHandler,mountPort});
+    gateway=await createGateway({runtime,models,token,workingDirectory,ledger,onRequest,onFault,requestHandler,mountPort,...(idleEvictMs!==undefined?{idleEvictMs}:{})});
     if(mountPort===undefined)await gateway.listen(port);
     const close=gateway.close;let closing;
     gateway.close=()=>closing??=(async()=>{try{await close();}finally{lease.release();}})();

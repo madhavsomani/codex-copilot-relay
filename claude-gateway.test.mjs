@@ -44,7 +44,7 @@ test('Claude native images: screenshot tool results preserve pixels and signed p
   const f=await fixture(t,s=>{
     nativeFixture([...f.gateway.turns].find(turn=>turn.session===s),['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
   const initial=request({tools,messages:[{role:'user',content:[image]}]}),first=await(await f.call(initial)).json();
   const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -57,7 +57,7 @@ test('Claude native images: malformed new screenshot rejects before consuming pe
   const f=await fixture(t,s=>{
     nativeFixture([...f.gateway.turns].find(turn=>turn.session===s),['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(){},release(){}}});
   const initial=request({tools}),first=await(await f.call(initial)).json(),image=await nativeTestImage();
   const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -73,7 +73,7 @@ test('Claude native images: changed settings rebuild signed screenshot history w
     if(f.sessions.length>1)return s.final('REBUILT_IMAGE_OK');
     nativeFixture([...f.gateway.turns].find(turn=>turn.session===s),['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
   const initial=request({tools,messages:[{role:'user',content:[image]}]}),first=await(await f.call(initial)).json();
   const next={...initial,system:'Updated client instructions',messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -110,7 +110,7 @@ test('Claude tool names support 128 characters without exceeding SDK internal na
   const {sdkToolName}=await import('./claude-gateway/protocol.mjs');
   const name='R'.repeat(128);const body=request({tools:[{name,input_schema:{type:'object'}}]});
   assert.doesNotThrow(()=>validate(body,models));assert.ok(sdkToolName({name},499).length<=64);
-  assert.equal(sdkToolName(tools[0],0),'client_0_Read');assert.notEqual(sdkToolName({name},0),sdkToolName({name:'Q'+name.slice(1)},0));
+  assert.equal(sdkToolName(tools[0],0),'client_Read');assert.notEqual(sdkToolName({name},0),sdkToolName({name:'Q'+name.slice(1)},0));
   assert.throws(()=>validate(request({tools:[{name:name+'R',input_schema:{type:'object'}}]}),models),/128/);
 });
 test('Claude native hook forwards strict schema, output format, specific tool and none catalog',async t=>{
@@ -121,7 +121,7 @@ test('Claude native hook forwards strict schema, output format, specific tool an
   const send=async value=>{handler.bind('controls',value,validate(value,olderModels));return handler.sendRequest(new Request(
     `http://127.0.0.1:${server.address().port}/v1/messages`,{method:'POST',body:JSON.stringify({model:'claude-opus-5',stream:true,messages:[]})}),
     {sessionId:'controls',signal:new AbortController().signal});};
-  await send(body);assert.deepEqual(received[0].tool_choice,{type:'tool',name:'client_0_Read',disable_parallel_tool_use:true});
+  await send(body);assert.deepEqual(received[0].tool_choice,{type:'tool',name:'client_Read',disable_parallel_tool_use:true});
   assert.deepEqual(received[0].output_config,body.output_config);assert.equal(received[0].tools[0].strict,true);
   await send({...body,tool_choice:{type:'none'}});assert.equal(received[1].tools.length,1);assert.deepEqual(received[1].tool_choice,{type:'none'});
 });
@@ -211,7 +211,7 @@ test('Claude native limit without verified terminal or SDK receipt is not fabric
     assert.equal(current.gateway.ledger.state.recent[0].failurePhase,missing==='stop'?'native-streaming':'after-native-stop');
   }
 });
-test('Claude turn stalled after native message_stop fails fast despite heartbeats and a long model deadline',async t=>{
+test('Claude turn stalled after a complete native stream delivers the finished answer instead of failing',async t=>{
   const current=await fixture(t,session=>{
     const turn=[...current.gateway.turns].find(item=>item.session===session);
     turn.nativeEvent({type:'message_start'});
@@ -222,9 +222,22 @@ test('Claude turn stalled after native message_stop fails fast despite heartbeat
     // SDK never emits assistant.message/session.idle.
   },{modelTimeoutMs:60000,postStreamMs:60,heartbeatMs:10});
   const started=Date.now();const response=await current.call(request({stream:true}));const wire=await response.text();
-  assert.ok(Date.now()-started<5000);assert.match(wire,/event: error/);assert.match(wire,/did not finish the turn/);
-  assert.doesNotMatch(wire,/event: message_stop/);
-  assert.equal(current.gateway.ledger.state.recent[0].failurePhase,'after-native-stop');assert.equal(current.gateway.turns.size,0);
+  // The model finished and the client already has every block: deliver it, so a
+  // stalled SDK no longer forces a paid retry. Fast, not after the long deadline.
+  assert.ok(Date.now()-started<5000);assert.doesNotMatch(wire,/event: error/);
+  assert.match(wire,/"stop_reason":"end_turn"/);assert.match(wire,/event: message_stop/);assert.match(wire,/partial/);
+  const row=current.gateway.ledger.state.recent[0];
+  assert.equal(row.status,'completed');assert.equal(row.recoveredAfterStall,true);assert.equal(current.gateway.turns.size,0);
+});
+test('Claude stall before the native stream terminates still fails fast with an error',async t=>{
+  const current=await fixture(t,session=>{
+    const turn=[...current.gateway.turns].find(item=>item.session===session);
+    turn.nativeEvent({type:'message_start'});
+    turn.nativeEvent({type:'content_block_start',index:0,content_block:{type:'text',text:'partial'}});
+  },{modelTimeoutMs:80,heartbeatMs:10});
+  const response=await current.call(request({stream:true}));const wire=await response.text();
+  assert.match(wire,/event: error/);assert.doesNotMatch(wire,/event: message_stop/);
+  assert.equal(current.gateway.ledger.state.recent[0].failurePhase,'native-streaming');
 });
 test('Claude native max-token response and released sessions reject SDK retries before transport',async t=>{
   let requests=0;
@@ -331,7 +344,7 @@ class Session {
 async function fixture(t,action,options={}){
   const sessions=[];const runtime={snapshot:()=>({ok:true}),release:s=>s.released=true,stop:async()=>{},
     createSession:async config=>{const session=new Session(config,action);sessions.push(session);return {session,generation:1};}};
-  const token='fixture-token-not-a-service-secret';const gateway=await createGateway({runtime,models,token,...options});
+  const token='fixture-token-not-a-service-secret';const gateway=await createGateway({runtime,models,token,preStartPingMs:0,...options});
   const address=await gateway.listen(0);t.after(()=>gateway.close());
   const headers={'content-type':'application/json','anthropic-version':'2023-06-01','authorization':'Bearer '+token,'x-claude-code-session-id':'session-1'};
   const call=async(body,custom={})=>fetch(`http://127.0.0.1:${address.port}/v1/messages`,{method:'POST',headers:{...headers,...custom},body:JSON.stringify(body)});
@@ -352,7 +365,7 @@ test('Claude shutdown fails a streaming request, aborts SDK work and never emits
 test('Claude shutdown releases retained tool ownership without replaying client tools',async t=>{
   const f=await fixture(t,s=>{
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'wait'}]});
-    s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'wait',requestId:'pending',arguments:{path:'x'}});
+    s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'wait',requestId:'pending',arguments:{path:'x'}});
   });
   await(await f.call(request({tools}))).text();assert.equal(f.gateway.byTool.size,1);
   await f.gateway.close();assert.equal(f.gateway.byTool.size,0);assert.equal(f.gateway.turns.size,0);
@@ -439,25 +452,26 @@ test('Claude concurrent admission rejections each retain their own sanitized req
   assert.ok(f.gateway.ledger.state.recent.every(row=>row.status==='rejected'&&row.requestClass===null&&row.totalNanoAiu===null));
   assert.ok(!JSON.stringify(f.gateway.ledger.state).includes('PRIVATE_UNKNOWN_CLASS'));assert.equal(f.sessions.length,0);
 });
-test('Claude continuation rejection has its own receipt without corrupting completed tool turn',async t=>{
+test('Claude changed unsigned history rebuilds from client history with its own receipt; no tool re-executes',async t=>{
   const f=await fixture(t,s=>{
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'}]});
-    s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
+    s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
   });
   const initial=request({tools});const result=await (await f.call(initial)).json();const first=structuredClone(f.gateway.ledger.state.recent[0]);
   const changed={...initial,messages:[...initial.messages,{role:'assistant',content:result.content},
     {role:'user',content:[{type:'tool_result',tool_use_id:result.content[0].id,content:'value'}]}]};
   changed.messages[0].content='tampered history';
-  const response=await f.call(changed);assert.equal(response.status,409);
-  assert.equal(response.headers.get('x-should-retry'),'false');await response.text();
-  assert.deepEqual(f.gateway.ledger.state.recent.at(-1).historyMismatch,
-    {expectedMessages:2,receivedMessages:2,messageIndex:0,blockIndex:0,reason:'content'});
-  assert.equal(f.gateway.ledger.state.recent.at(-1).errorCode,'claude_history_prefix_mismatch');
+  // Previously a 409 that every retry repeated, leaving the chat stuck.
+  const response=await f.call(changed);assert.equal(response.status,200);await response.text();
+  const row=f.gateway.ledger.state.recent.at(-1);
+  assert.deepEqual(row.historyMismatch,{expectedMessages:2,receivedMessages:2,messageIndex:0,blockIndex:0,reason:'content'});
+  assert.equal(row.continuationMode,'rebuilt-history');
   assert.doesNotMatch(JSON.stringify(f.gateway.ledger.state),/tampered history/);
-  assert.equal(f.gateway.ledger.state.received,2);assert.equal(f.gateway.ledger.state.failed,1);
-  assert.deepEqual(f.gateway.ledger.state.recent[0],first);assert.equal(f.gateway.ledger.state.recent[1].httpStatus,409);
-  await [...f.gateway.turns][0].fail(Object.assign(new Error('Expired tool fixture'),{statusCode:504}));
-  assert.deepEqual(f.gateway.ledger.state.recent[0],first);assert.equal(f.gateway.ledger.state.completed,1);
+  assert.equal(f.sessions[0].results.length,0,'the original pending tool is not resolved or re-executed');
+  assert.equal(f.sessions.length,2,'a new SDK session was built from the client history');
+  assert.match(f.sessions[1].input.prompt,/tampered history/);
+  assert.deepEqual(f.gateway.ledger.state.recent[0],first,'the completed tool turn receipt is untouched');
+  assert.equal(f.gateway.byTool.size,f.gateway.turns.size?1:0);
 });
 test('Claude legitimate setting changes rebuild complete owned continuations without replaying tools',async t=>{
   for(const change of [{max_tokens:2048},{system:'Updated client instructions'},
@@ -466,7 +480,7 @@ test('Claude legitimate setting changes rebuild complete owned continuations wit
     const f=await fixture(t,s=>{
       if(++sends>1){s.final('REBUILT_OK');return;}
       s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'}]});
-      s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
+      s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
     },{requestHandler:{bind(_id,body,_selected,messages){bound.push({body,messages});},release(){}}});
     const initial=request({tools});const first=await (await f.call(initial)).json();
     const next={...initial,...change,messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -485,7 +499,7 @@ test('Claude rebuild failure preserves pending ownership for a valid retry',asyn
   const f=await fixture(t,s=>{
     if(++sends>1){s.final('RECOVERED');return;}
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'}]});
-    s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
+    s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
   });
   const initial=request({tools}),first=await (await f.call(initial)).json(),holder=[...f.gateway.turns][0];
   const next={...initial,max_tokens:2048,messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -508,7 +522,7 @@ test('Claude usage receipt identity is deduplicated without collapsing distinct 
 test('Claude metadata session IDs isolate continuations when GUI omits custom session headers',async t=>{
   const f=await fixture(t,s=>{
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'metadata-tool'}]});
-    s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'metadata-tool',requestId:'pending',arguments:{path:'x'}});
+    s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'metadata-tool',requestId:'pending',arguments:{path:'x'}});
   });
   const meta=id=>({user_id:JSON.stringify({session_id:id})});
   const initial=request({tools,metadata:meta('00000000-0000-4000-8000-000000000001')});
@@ -524,7 +538,7 @@ test('Claude metadata session IDs isolate continuations when GUI omits custom se
 test('Claude late SDK receipt after tool continuation updates the original request and task exactly once',async t=>{
   const f=await fixture(t,s=>{
     s.emit('assistant.message',{apiCallId:'original-call',content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   });
   const initial=request({tools}),reply=await(await f.call(initial)).json();
   const first=f.gateway.ledger.state.recent[0];assert.equal(first.sdkApiCalls,0);
@@ -548,7 +562,7 @@ test('Claude late SDK receipt after tool continuation updates the original reque
 test('Claude late transport metadata remains on the request that initiated it',async t=>{
   const callbacks=[];const f=await fixture(t,s=>{
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,_selected,_messages,callback){callbacks.push(callback);},release(){}}});
   const initial=request({tools}),reply=await (await f.call(initial)).json(),first=f.gateway.ledger.state.recent[0];
   const old=callbacks.at(-1);old({type:'relay_transport_attempt'});
@@ -619,7 +633,7 @@ test('Claude two parallel client tools resume one SDK session, ownership mismatc
   const f=await fixture(t,s=>{
     s.emit('assistant.usage',{model:'claude-opus-5.5',inputTokens:20,outputTokens:10});
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   });
   const initial=request({tools});const r=await f.call(initial);const result=await r.json();assert.equal(r.status,200,JSON.stringify(result));
   assert.equal(result.stop_reason,'tool_use');assert.equal(result.content.length,2);
@@ -762,7 +776,7 @@ test('Claude native SDK hook retains roles, fixed thinking, credentials and real
     {sessionId:'session-a',signal:new AbortController().signal});
   await send(outbound);assert.deepEqual(bodies[0].body.messages,body.messages);assert.deepEqual(bodies[0].body.system,body.system);
   assert.equal(bodies[0].body.thinking.budget_tokens,2048);assert.equal(bodies[0].body.temperature,0);
-  assert.equal(bodies[0].body.tools[0].name,'client_0_Read');assert.equal(bodies[0].authorization,'Bearer fixture-auth');
+  assert.equal(bodies[0].body.tools[0].name,'client_Read');assert.equal(bodies[0].authorization,'Bearer fixture-auth');
   const continuation={...outbound,messages:[{role:'assistant',content:[{type:'thinking',thinking:'actual',signature:'actual-upstream-signature'}]}]};
   handler.bind('session-a',body,selected);await send(continuation);
   assert.deepEqual(bodies[1].body.messages,continuation.messages);
@@ -825,7 +839,7 @@ test('Claude signed and redacted input blocks remain opaque native history, not 
 test('Claude native content stream keeps exact thinking signatures, redactions, IDs and order',()=>{
   const response=new EventEmitter();let wire='';response.writeHead=()=>{};response.write=s=>wire+=s;response.end=()=>{};
   const sink=new MessageSink(response,request({stream:true}),()=>{});
-  const emit=event=>sink.native(event,new Map([['client_0_Read','Read']]));
+  const emit=event=>sink.native(event,new Map([['client_Read','Read']]));
   emit({type:'message_start'});
   emit({type:'content_block_start',index:0,content_block:{type:'thinking',thinking:'',signature:''}});
   emit({type:'content_block_delta',index:0,delta:{type:'thinking_delta',thinking:'fixture summary'}});
@@ -834,7 +848,7 @@ test('Claude native content stream keeps exact thinking signatures, redactions, 
   emit({type:'content_block_stop',index:0});
   emit({type:'content_block_start',index:1,content_block:{type:'redacted_thinking',data:'opaque-redaction'}});
   emit({type:'content_block_stop',index:1});
-  emit({type:'content_block_start',index:2,content_block:{type:'tool_use',id:'toolu_native',name:'client_0_Read',input:{}}});
+  emit({type:'content_block_start',index:2,content_block:{type:'tool_use',id:'toolu_native',name:'client_Read',input:{}}});
   emit({type:'content_block_delta',index:2,delta:{type:'input_json_delta',partial_json:'{"path":"fixture.txt"}'}});
   emit({type:'content_block_stop',index:2});emit({type:'message_stop'});
   sink.finish('tool_use',[]);
@@ -860,7 +874,7 @@ function nativeFixture(turn,calls){
   turn.nativeEvent({type:'content_block_delta',index:0,delta:{type:'signature_delta',signature:'opaque-original'}});
   turn.nativeEvent({type:'content_block_stop',index:0});
   for(const [i,id] of calls.entries()){
-    turn.nativeEvent({type:'content_block_start',index:i+1,content_block:{type:'tool_use',id,name:'client_0_Read',input:{},caller:{type:'direct'}}});
+    turn.nativeEvent({type:'content_block_start',index:i+1,content_block:{type:'tool_use',id,name:'client_Read',input:{},caller:{type:'direct'}}});
     turn.nativeEvent({type:'content_block_delta',index:i+1,delta:{type:'input_json_delta',partial_json:JSON.stringify({path:id})}});
     turn.nativeEvent({type:'content_block_stop',index:i+1});
   }
@@ -872,7 +886,7 @@ test('Claude native signed tool prefix survives continuation; modified signature
     const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
     s.emit('assistant.usage',{inputTokens:20,outputTokens:10});
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
   const initial=request({tools});const result=await (await f.call(initial)).json();
   assert.equal(result.stop_reason,'tool_use');assert.equal(result.content[0].signature,'opaque-original');
@@ -887,7 +901,7 @@ test('Claude concurrent owners may receive identical tool IDs without overwritin
   const f=await fixture(t,s=>{
     const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   });
   const initial=request({tools});
   const first=await (await f.call(initial)).json();
@@ -905,7 +919,7 @@ test('Claude client-tool continuation retains trailing user input, signed histor
     const f=await fixture(t,s=>{
       const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
       s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-      for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+      for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
     },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
     const initial=request({tools}),first=await (await f.call(initial)).json();
     const receipt=structuredClone(f.gateway.ledger.state.recent[0]);
@@ -934,7 +948,7 @@ test('Claude invalid mixed continuations never resolve tools or consume another 
   const f=await fixture(t,s=>{
     const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   });
   const initial=request({tools}),first=await (await f.call(initial)).json(),receipt=structuredClone(f.gateway.ledger.state.recent[0]);
   const content=first.content.filter(block=>block.type==='tool_use').map(block=>({type:'tool_result',tool_use_id:block.id,content:'value'}));
@@ -972,7 +986,7 @@ test('Claude native request hook preserves mixed input, images, roles and signat
   const response=await handler.sendRequest(new Request(`http://127.0.0.1:${provider.address().port}/v1/messages`,{method:'POST',
     headers:{authorization:'fixture-SDK-credential-unchanged'},body:JSON.stringify(bootstrap)}),{sessionId:'mixed-input-fixture',signal:new AbortController().signal});
   await response.text();assert.deepEqual(body,before);assert.equal(received.length,1);assert.equal(received[0].auth,'fixture-SDK-credential-unchanged');
-  const mapped=structuredClone(body.messages);mapped[1].content[1].name='client_0_Read';
+  const mapped=structuredClone(body.messages);mapped[1].content[1].name='client_Read';
   assert.deepEqual(received[0].body.messages,mapped);assert.equal(received[0].body.messages.at(-1).content[0].is_error,true);
   assert.equal(received[0].body.messages[1].content[0].signature,'fixture-original-signature');
   handler.release('mixed-input-fixture');assert.equal(handler.plans.size,0);
@@ -984,7 +998,7 @@ test('Claude mixed-input image admission keeps the new suffix outside tool resul
   const f=await fixture(t,s=>{
     const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
   const initial=request({tools}),first=await (await f.call(initial)).json();
   const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -1003,7 +1017,7 @@ test('Claude active continuations reject oversized full context before resolving
     const f=await fixture(t,s=>{
       const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
       s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-      for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+      for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
     },{models:boundedModels});
     const outputReserve=limits.max_context_window_tokens===1024;
     const initial=request({tools,max_tokens:outputReserve?512:64});const firstResponse=await f.call(initial);assert.equal(firstResponse.status,200);
@@ -1030,7 +1044,7 @@ test('Claude continuation context guard counts oversized tool output and retaine
     const f=await fixture(t,s=>{
       const turn=[...f.gateway.turns].find(turn=>turn.session===s);nativeFixture(turn,['a','b']);
       s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-      for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+      for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
     },{models:boundedModels});
     const initial=request({tools,max_tokens:64}),first=await (await f.call(initial)).json();
     const turn=[...f.gateway.turns][0],nativePrefix=structuredClone(turn.upstreamHistory),receipt=structuredClone(f.gateway.ledger.state.recent[0]);
@@ -1074,7 +1088,7 @@ test('Claude tool catalog cache markers move and clear across native continuatio
     const emitTools=(s,ids)=>{
       const turn=[...f.gateway.turns].find(item=>item.session===s);nativeFixture(turn,ids);
       s.emit('assistant.message',{content:'',toolRequests:ids.map(toolCallId=>({toolCallId}))});
-      for(const id of ids)s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+      for(const id of ids)s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
     };
     f=await fixture(t,s=>void (async()=>{
       s.rpc.tools.handlePendingToolCall=async result=>{
@@ -1106,14 +1120,14 @@ test('Claude tool catalog cache markers move and clear across native continuatio
     else assert.equal((await last.json()).content[0].text,'CACHE_MARKERS_OK');
     assert.equal(received.length,3);
     for(const [index,body] of [initial,secondBody,finalBody].entries()){
-      const expected=body.tools.map((tool,i)=>({...tool,name:'client_'+i+'_'+tool.name}));
+      const expected=body.tools.map((tool,i)=>({...tool,name:'client_'+tool.name}));
       assert.deepEqual(received[index].body.tools,expected,'Current client tool cache annotations must reach the native hook.');
       assert.equal(received[index].auth,'fixture-unchanged-SDK-credential');
       assert.deepEqual(received[index].body.system,body.system);assert.deepEqual(received[index].body.tool_choice,body.tool_choice);
       assert.deepEqual(received[index].body.output_config,body.output_config);
       const native=structuredClone(body.messages);
       for(const message of native)if(Array.isArray(message.content))for(const block of message.content)
-        if(block.type==='tool_use')block.name='client_0_Read';
+        if(block.type==='tool_use')block.name='client_Read';
       assert.deepEqual(received[index].body.messages,native);
     }
     assert.deepEqual(initial,initialCopy);assert.deepEqual(secondBody,secondCopy);assert.deepEqual(finalBody,finalCopy);
@@ -1127,7 +1141,7 @@ test('Claude tool catalog cache updates cannot change another owner or bypass re
   const f=await fixture(t,s=>{
     const turn=[...f.gateway.turns].find(item=>item.session===s);nativeFixture(turn,['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,selected){bindings.push(structuredClone(selected.tools));},release(){}}});
   const initial=request({tools:[{...tools[0],cache_control:{type:'ephemeral'}}]});
   const first=await (await f.call(initial)).json();const other=await f.call(initial,{'x-claude-code-agent-id':'other'});await other.text();
@@ -1154,7 +1168,7 @@ test('Claude continuation batch spans adjacent result messages and system remind
   const f=await fixture(t,s=>{
     nativeFixture([...f.gateway.turns][0],['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{requestHandler:{bind(_id,_body,_selected,messages){bindings.push(structuredClone(messages));},release(){}}});
   const initial=request({tools}),first=await(await f.call(initial)).json();
   const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
@@ -1172,7 +1186,7 @@ test('Claude native tools collect all SDK assistant chunks as one exact batch',a
     nativeFixture([...f.gateway.turns][0],['a','b']);
     for(const [chunkIndex,id] of ['a','b'].entries()){
       s.emit('assistant.message',{content:'',apiCallId:'batch',chunkIndex,chunkCount:2,toolRequests:[{toolCallId:id}]});
-      s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+      s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
     }
   });
   const initial=request({tools}),response=await f.call(initial),first=await response.json();
@@ -1187,7 +1201,7 @@ test('Claude tool-result ownership is claimed atomically before interleaved SDK 
   const emitBatch=(s,ids)=>{
     nativeFixture([...f.gateway.turns][0],ids);
     s.emit('assistant.message',{content:'',toolRequests:ids.map(toolCallId=>({toolCallId}))});
-    for(const id of ids)s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ids)s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   };
   const f=await fixture(t,s=>{
     s.rpc.tools.handlePendingToolCall=async result=>{
@@ -1237,7 +1251,7 @@ test('Claude explicit entitled model changes rebuild owned tool continuations wi
     if(f.sessions.length>1)return s.final('MODEL_CHANGED_OK');
     nativeFixture([...f.gateway.turns][0],['a','b']);
     s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
-    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
   },{models:[...models,other],requestHandler:{bind(_id,_body,selected,messages){bindings.push({model:selected.model.id,messages:structuredClone(messages)});},release(){}}});
   const initial=request({tools}),first=await(await f.call(initial)).json();
   const next={...initial,model:'claude-sonnet-5-5',messages:[...initial.messages,{role:'assistant',content:first.content},

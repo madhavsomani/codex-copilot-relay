@@ -24,7 +24,7 @@ async function fixture(t,overrides={}){
         async abort(){this.aborted=true;},async disconnect(){this.disconnected=true;},
         async send(){setImmediate(()=>{
           this.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'call-'+id}]});
-          this.emit('external_tool.requested',{toolName:'client_0_Read',toolCallId:'call-'+id,requestId:'request-'+id,arguments:{path:'fixture'}});
+          this.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'call-'+id,requestId:'request-'+id,arguments:{path:'fixture'}});
         });}};
       session.rpc={tools:{handlePendingToolCall:async result=>{session.results.push(result);setImmediate(()=>{
         session.emit('assistant.message_delta',{deltaContent:'DONE'});
@@ -78,4 +78,20 @@ test('repeated parallel Claude waves do not leak capacity, and the configured lo
     await Promise.all(next.map(f.finish));assert.equal(f.runtime.snapshot().activeSessions,0);
   }
   assert.equal(f.sessions.length,96);assert.equal(f.gateway.byTool.size,0);
+});
+test('at full capacity a tool turn idle past the cache lifetime is released; its results rebuild from history',async t=>{
+  const f=await fixture(t,{maxSessions:2,idleEvictMs:0});
+  const first=await f.start(),second=await f.start();
+  assert.equal(f.runtime.snapshot().availableSessionSlots,0);
+  const third=await f.call(body());assert.equal(third.status,200,'a new request is admitted by releasing the idle turn');await third.text();
+  assert.ok(f.sessions[0].aborted,'the longest-idle waiting turn was released');
+  // Its results are still accepted: with no holder the relay rebuilds a new SDK
+  // session from the client's history (this scripted model then asks for a tool again).
+  const sessionsBefore=f.sessions.length,late=await f.call(first);
+  assert.equal(late.status,200,await late.clone().text());await late.text();
+  assert.equal(f.sessions.length,sessionsBefore+1,'rebuilt from history in a new session');
+  assert.equal(f.sessions[0].results.length,0,'the released turn never re-executes the tool');
+  // With a zero idle threshold the second waiting turn was released too; it is
+  // likewise accepted and rebuilt rather than rejected.
+  const other=await f.call(second);assert.equal(other.status,200);await other.text();
 });

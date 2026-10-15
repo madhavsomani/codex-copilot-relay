@@ -114,9 +114,19 @@ export class Ledger {
   }
   save() {
     if (!this.file) return;
-    mkdirSync(path.dirname(this.file),{recursive:true});
-    const text=JSON.stringify(this.state);
-    if(Buffer.byteLength(text)>4*1024*1024)throw new Error('Metadata ledger exceeds its hard 4 MiB storage guard.');
-    writeFileSync(this.file+'.tmp',text,{mode:0o600}); renameSync(this.file+'.tmp',this.file);
+    // Telemetry must never fail inference: this runs inside the request path.
+    // Near the size guard, keep fewer recent rows (totals are unaffected).
+    try{
+      let text=JSON.stringify(this.state);
+      while(Buffer.byteLength(text)>3.5*1024*1024&&this.state.recent.length>50){
+        this.state.recent=this.state.recent.slice(-Math.floor(this.state.recent.length/2));
+        if(Array.isArray(this.state.taskDaily)&&this.state.taskDaily.length>1000)this.state.taskDaily=this.state.taskDaily.slice(-1000);
+        text=JSON.stringify(this.state);
+      }
+      if(Buffer.byteLength(text)>4*1024*1024)throw new Error('Metadata ledger exceeds its hard 4 MiB storage guard.');
+      mkdirSync(path.dirname(this.file),{recursive:true});
+      writeFileSync(this.file+'.tmp',text,{mode:0o600}); renameSync(this.file+'.tmp',this.file);
+      this.saveError=null;
+    }catch(error){this.saveError=String(error?.message??error).slice(0,200);}
   }
 }

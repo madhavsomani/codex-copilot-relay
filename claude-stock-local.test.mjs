@@ -52,14 +52,16 @@ test('Stock trailing-system continuation rejection leaves owned pending tools av
   const next={...initial,messages:[...initial.messages,{role:'assistant',content:first.content},
     {role:'user',content:[{type:'tool_result',tool_use_id:first.content[0].id,content:'alpha=17\nbeta=25'}]},
     {role:'system',content:'new suffix'}]};
-  const changed=structuredClone(next);changed.messages[1].content='tampered prefix';
-  assert.equal((await post(changed)).status,409);
   assert.equal((await post(next,{...headers,'x-claude-code-agent-id':'different'})).status,409);
   const duplicate=structuredClone(next);duplicate.messages.at(-2).content.push({...duplicate.messages.at(-2).content[0]});
   assert.equal((await post(duplicate)).status,409);
   assert.equal(f.gateway.byTool.size,1);assert.equal(f.observations.length,1);
-  const valid=await post(next);assert.equal(valid.status,200);assert.equal((await valid.json()).content[0].name,'Write');
-  assert.deepEqual(f.observations.map(row=>row.stage),[0,1]);assert.equal(f.gateway.byTool.size,1);
+  // A changed unsigned prefix no longer leaves the chat stuck on 409: the relay
+  // rebuilds from the client's history (one new upstream call, no tool re-run).
+  const changed=structuredClone(next);changed.messages[1].content='tampered prefix';
+  const rebuilt=await post(changed);assert.equal(rebuilt.status,200);assert.equal((await rebuilt.json()).stop_reason,'tool_use');
+  assert.equal(f.observations.length,2,'exactly one new upstream call');
+  assert.equal(f.gateway.ledger.state.recent.at(-1).continuationMode,'rebuilt-history');
 });
 test('Stock trailing system messages participate in context admission before any owned result is consumed',async t=>{
   const workspace=mkdtempSync(path.join(os.tmpdir(),'relay-stock-system-budget-')),f=await createLocalStockFixture(workspace);t.after(()=>f.close());
