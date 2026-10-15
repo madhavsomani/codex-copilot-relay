@@ -94,3 +94,23 @@ test('dashboard embeds both responsive charts and the same-range refresh without
   assert.match(DASHBOARD_HTML, /grid-template-columns: minmax\(270px,.72fr\) minmax\(0,1.6fr\)/);
   assert.doesNotMatch(DASHBOARD_HTML, /<script\s+src=/i);
 });
+
+test('per-model Pacific-day credit tally feeds the Models and AI credits panel and survives restart', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-model-daily-'));
+  let clock = new Date('2026-10-15T18:00:00Z');
+  const options = {filePath: path.join(directory, 'events.jsonl'), now: () => new Date(clock)};
+  try {
+    const recorder = new ProxyRecorder(options);
+    for (const [model, nano] of [['gpt-6.1-sol', 6_000_000_000], ['gpt-6.1-sol', 4_000_000_000], ['gpt-6-astra', 40_000_000_000]]) {
+      const record = recorder.start({body: {model}});
+      const usage = summarizeAssistantUsage([{model, inputTokens: 1000, outputTokens: 10, totalNanoAiu: nano}]);
+      recorder.finish(record, {status: 'completed', usage});
+    }
+    for (const current of [recorder, new ProxyRecorder(options)]) {
+      const rows = current.analytics().modelDaily;
+      const sol = rows.find(row => row.model === 'gpt-6.1-sol'), astra = rows.find(row => row.model === 'gpt-6-astra');
+      assert.equal(sol.day, '2026-10-15'); assert.equal(sol.sdkApiCalls, 2); assert.equal(sol.totalNanoAiu, 10_000_000_000);
+      assert.equal(astra.totalNanoAiu, 40_000_000_000);
+    }
+  } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});

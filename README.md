@@ -30,6 +30,10 @@ The guide covers
 setup, model families, on-demand tool loading, browser and research, costs and
 troubleshooting.
 
+**1.3.89:** a **Models and AI credits** dashboard panel (current model per client,
+credits per model today and over 7 days), Copilot SDK 1.0.21, and seven reliability
+and cost fixes from the October audit. See [efficiency guidelines](docs/CLAUDE-CODE-GUIDE.md#9-efficiency-guidelines).
+
 **1.3.81–1.3.84:**
 - On-demand MCP tool loading (tool search) and context editing pass through.
 - Native PDF documents.

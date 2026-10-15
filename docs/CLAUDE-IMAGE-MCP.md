@@ -108,16 +108,12 @@ node claude-image-mcp-setup.mjs restore
 
 `restore` removes only the entry this script added, and only if it is unchanged.
 
-## Known limitation
+## Model note
 
-**Haiku can call these tools under a wrong name.** In one test Haiku 5.5 called
-a tool name that doesn't exist. It mixed the relay's internal numbered tool name
-for `edit_image` with the name of `generate_image`. The relay correctly rejected
-it, but that request failed.
-- Opus 5.5 called the tool correctly in the same test.
-- The cause is the relay's position-numbered internal tool names; see the
-  October 2026 code audit, item 4.
-- Until that's fixed, ask for images from an Opus or Sonnet chat.
+Earlier relay versions numbered their internal tool names by position, and in
+one test Haiku 5.5 mixed up `edit_image` and `generate_image`. Since 1.3.89 the
+internal names follow the tool's own name only. The same Haiku test now calls
+`generate_image` correctly.
 
 ## Verification status
 

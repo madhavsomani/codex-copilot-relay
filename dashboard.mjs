@@ -4,6 +4,7 @@ import {CONNECTION_HTML,CONNECTION_STYLE,CONNECTION_SCRIPT} from './setup-ui.mjs
 import {TRENDS_HTML,TRENDS_STYLE,TRENDS_SCRIPT} from './dashboard-trends.mjs';
 import {TASKS_HTML,TASKS_STYLE,TASKS_SCRIPT} from './dashboard-tasks.mjs';
 import {CLAUDE_HTML,CLAUDE_STYLE,CLAUDE_SCRIPT} from './dashboard-claude.mjs';
+import {MODELS_HTML,MODELS_STYLE,MODELS_SCRIPT} from './dashboard-models.mjs';
 import {CLAUDE_GUIDE_STYLE,renderClaudeSetupGuide} from './claude-setup-guide.mjs';
 import {BROWSER_HTML,BROWSER_SCRIPT} from './dashboard-browser.mjs';
 
@@ -379,6 +380,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
     ${CONNECTION_STYLE}
     ${CLAUDE_STYLE}
+    ${MODELS_STYLE}
     ${CLAUDE_GUIDE_STYLE}
   </style>
 </head>
@@ -406,6 +408,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     ${renderClaudeSetupGuide()}
     ${BROWSER_HTML}
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
+    ${MODELS_HTML}
     <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
     <details class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
       <summary class="provider-summary"><strong>Where calls actually go</strong><span class="provider-overview">Model calls → Copilot · Native images → Codex / OpenAI · API → explicit only</span><span class="pill" id="no-fallback">Loading policy…</span></summary>
@@ -910,6 +913,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       renderBrowserSetup(data);
       renderProviders(data);
       renderClaudeGateway(data.claude, data.summary);
+      renderModelCredits(data);
       renderSessionLeases(data.sessionControl);
       const summary = data.summary || {}, storage = data.storage || {};
       state.current = { startedAt: data.startedAt, routing: data.routing };
@@ -1083,6 +1087,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     $("clear").onclick = async () => { if (!confirm("Clear Codex detailed history only? Claude history is retained. Lifetime mileage is preserved.")) return; await fetch("/dashboard/clear", { method: "POST" }); state.selected = null; state.details.clear(); await refresh(); };
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
     ${CLAUDE_SCRIPT}
+    ${MODELS_SCRIPT}
     ${BROWSER_SCRIPT}
     ${TRENDS_SCRIPT}
     ${TASKS_SCRIPT}

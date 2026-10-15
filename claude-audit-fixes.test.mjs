@@ -58,3 +58,32 @@ test('a ledger near its size guard trims old rows and never throws into the requ
   // An unwritable path is recorded, not thrown.
   const broken=new Ledger(null);broken.file=path.join(dir,'missing','\0bad');assert.doesNotThrow(()=>broken.save());assert.ok(broken.saveError);
 });
+
+test('Claude ledger keeps a per-day per-model credit tally and backfills it once from retained receipts',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'relay-model-daily-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const file=path.join(dir,'ledger.json'),now=new Date().toISOString();
+  fs.writeFileSync(file,JSON.stringify({received:1,completed:1,failed:0,usage:[],taskDaily:[],taskMeteringStartedAt:now,
+    recent:[{id:'r',at:now,completedAt:now,status:'completed',sdkApiCalls:1,inputTokens:100,outputTokens:5,cacheReadTokens:50,totalNanoAiu:2e9,actualModels:['claude-opus-5.5']}]}));
+  const ledger=new Ledger(file);
+  const row=ledger.start({model:'claude-haiku-5-5'},{},null);
+  ledger.usage(row,{model:'claude-haiku-5.5',inputTokens:10,outputTokens:1,copilotUsage:{totalNanoAiu:5e7}},{id:'u1'});
+  const daily=Object.entries(ledger.state.modelDaily);
+  const opus=daily.find(([key])=>key.endsWith('|claude-opus-5.5'))[1],haiku=daily.find(([key])=>key.endsWith('|claude-haiku-5.5'))[1];
+  assert.equal(opus.totalNanoAiu,2e9);assert.equal(opus.sdkApiCalls,1);assert.equal(haiku.totalNanoAiu,5e7);assert.equal(haiku.sdkApiCalls,1);
+  assert.ok(new Ledger(file).state.modelDaily,'persisted');
+});
+test('Models and AI credits panel shows current models and sums both clients per model',async()=>{
+  const {MODELS_SCRIPT,MODELS_HTML}=await import('./claude-gateway/../dashboard-models.mjs');
+  const {DASHBOARD_HTML}=await import('./dashboard.mjs');
+  assert.match(DASHBOARD_HTML,/id="model-credits"/);assert.match(DASHBOARD_HTML,/renderModelCredits\(data\)/);assert.match(MODELS_HTML,/not Copilot credits/);
+  const vm=await import('node:vm');const context={Intl,Date,Math,Number,String,Map,Set,Array};vm.createContext(context);
+  vm.runInContext(MODELS_SCRIPT+';this.rows=modelCreditRows;this.latest=latestModel;',context);
+  const day=context.pacificDayOf(new Date());
+  const data={claude:{modelDaily:[{day,model:'claude-opus-5.5',sdkApiCalls:4,aiCredits:40},{day:'1999-01-01',model:'claude-opus-5.5',sdkApiCalls:9,aiCredits:999}]},
+    analytics:{modelDaily:[{day,model:'gpt-6.1-sol',sdkApiCalls:2,totalNanoAiu:12e9}]},
+    records:[{client:'claude-code',receivedAt:'2026-10-15T01:00:00Z',usage:{models:[{model:'claude-haiku-5.5'}]}},
+      {client:'claude-code',receivedAt:'2026-10-15T00:00:00Z',selectedModel:'claude-opus-5.5'},{receivedAt:'2026-10-15T00:30:00Z',selectedModel:'gpt-6.1-sol'}]};
+  const rows=context.rows(data);
+  assert.equal(JSON.stringify(rows.map(row=>[row.model,row.client,row.todayCalls,row.todayCredits])),JSON.stringify([['claude-opus-5.5','Claude Code',4,40],['gpt-6.1-sol','Codex',2,12]]));
+  assert.equal(context.latest(data.records,'claude-code'),'claude-haiku-5.5');assert.equal(context.latest(data.records,'codex'),'gpt-6.1-sol');
+});

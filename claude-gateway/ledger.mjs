@@ -2,7 +2,7 @@ import {existsSync, readFileSync, mkdirSync, writeFileSync, renameSync} from 'no
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {digest} from './protocol.mjs';
-import {sessionHash,recordSessionCost} from './session-costs.mjs';
+import {sessionHash,recordSessionCost,pacificSessionDay} from './session-costs.mjs';
 import {observeBrowserCatalog,observeBrowserSignal} from './browser-telemetry.mjs';
 import {UsageReceipts} from '../usage-receipts.mjs';
 
@@ -20,6 +20,17 @@ export class Ledger {
         for(const row of this.state.recent??[])if(row.status!=='active')recordSessionCost(this.state,row,{legacy:true});
       }
       this.state.transport??={attempts:0,httpResponses:0,httpErrors:0,networkErrors:0};
+      // One-time backfill of the per-day model tally from retained receipts.
+      if(this.state.modelDaily===undefined){
+        this.state.modelDaily={};
+        for(const row of this.state.recent??[]){
+          const day=row.sdkApiCalls>0&&pacificSessionDay(row.completedAt||row.at);if(!day)continue;
+          const model=(row.actualModels??[])[0]??row.selectedModel??'unreported';
+          const daily=this.state.modelDaily[day+'|'+model]??={sdkApiCalls:0,inputTokens:0,outputTokens:0,cacheReadTokens:0,totalNanoAiu:0};
+          daily.sdkApiCalls+=row.sdkApiCalls;daily.inputTokens+=row.inputTokens||0;daily.outputTokens+=row.outputTokens||0;
+          daily.cacheReadTokens+=row.cacheReadTokens||0;daily.totalNanoAiu+=row.totalNanoAiu||0;
+        }
+      }
       for(const row of this.state.recent)if(row.status==='active')this.finish(row,'interrupted');
       // A very old unfinished row may already have left the 1000-row index.
       this.state.failed+=Math.max(0,this.state.received-this.state.completed-this.state.failed);
@@ -100,6 +111,16 @@ export class Ledger {
     if (!this.state.usage.includes(total)) this.state.usage.push(total);
     total.sdkApiCalls++; for (const key of ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens']) total[key] += number(key);
     if (Number.isFinite(credits)){total.totalNanoAiu = (total.totalNanoAiu ?? 0) + Math.max(0,credits);total.creditReportedCalls=(total.creditReportedCalls??0)+1;}
+    // Per Pacific day and model for the dashboard's "which model, how many credits" panel.
+    const day=pacificSessionDay(new Date().toISOString());
+    if(day){
+      this.state.modelDaily??={};
+      const daily=this.state.modelDaily[day+'|'+model]??={sdkApiCalls:0,inputTokens:0,outputTokens:0,cacheReadTokens:0,totalNanoAiu:0};
+      daily.sdkApiCalls++;for(const key of ['inputTokens','outputTokens','cacheReadTokens'])daily[key]+=number(key);
+      if(Number.isFinite(credits))daily.totalNanoAiu+=Math.max(0,credits);
+      const days=[...new Set(Object.keys(this.state.modelDaily).map(key=>key.split('|')[0]))].sort();
+      for(const old of days.slice(0,-31))for(const key of Object.keys(this.state.modelDaily))if(key.startsWith(old+'|'))delete this.state.modelDaily[key];
+    }
     if(previous)recordSessionCost(this.state,row,{previous});
     this.save();
     this.onChange?.('usage',row);

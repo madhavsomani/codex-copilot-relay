@@ -151,6 +151,7 @@ function createMetrics(now, baseline = {}) {
     hourly: Object.create(null),
     daily: Object.create(null),
     models: Object.create(null),
+    modelDaily: Object.create(null),
     taskDaily: Object.create(null),
     taskMeteringStartedAt: timestamp,
   };
@@ -218,6 +219,10 @@ function normalizeMetrics(value, now) {
   metrics.hourly = normalizeBucketMap(value.hourly);
   metrics.daily = normalizeBucketMap(value.daily);
   metrics.models = normalizeModelMap(value.models);
+  for (const [key, row] of Object.entries(value.modelDaily ?? {})) {
+    if (!/^d{4}-d{2}-d{2}|.{1,120}$/.test(key) || !row || typeof row !== 'object') continue;
+    metrics.modelDaily[key] = Object.fromEntries(modelDailyFields.map(field => [field, finiteNumber(row[field])]));
+  }
   metrics.taskMeteringStartedAt = typeof value.taskMeteringStartedAt === 'string' ? value.taskMeteringStartedAt : now.toISOString();
   for (const [key, row] of Object.entries(value.taskDaily ?? {})) {
     if (!/^\d{4}-\d{2}-\d{2}\|(?:[0-9a-f-]{36}|unattributed)$/.test(key)) continue;
@@ -326,14 +331,21 @@ function modelUsageCounterChanges(usage) {
   };
 }
 
-function incrementUsageModels(metrics, usage, fallbackModel) {
+// Per Pacific day and model, so the dashboard can say which model spent what
+// today without being limited to the retained call window.
+const modelDailyFields = ['sdkApiCalls', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'totalNanoAiu'];
+function incrementUsageModels(metrics, usage, fallbackModel, at) {
   const normalized = normalizedUsageSummary(usage);
   if (!normalized.metered) return;
   const rows = normalized.models.length
     ? normalized.models
     : [{ ...normalized, model: modelName(fallbackModel) }];
+  const day = pacificDay(at ?? new Date());
   for (const row of rows) {
     incrementModel(metrics, row.model, modelUsageCounterChanges(row));
+    if (!day) continue;
+    const bucket = metrics.modelDaily[day + '|' + modelName(row.model)] ??= Object.fromEntries(modelDailyFields.map(field => [field, 0]));
+    for (const field of modelDailyFields) if (Number.isFinite(row[field])) bucket[field] += row[field];
   }
 }
 
@@ -582,6 +594,7 @@ export class ProxyRecorder {
           this.metrics,
           record.usage,
           record.selectedModel ?? record.requestedModel,
+          record.completedAt ?? record.receivedAt,
         );
       }
     }
@@ -593,12 +606,14 @@ export class ProxyRecorder {
     addCounters(this.metrics.lifetime, changes);
     incrementRollup(this.metrics, at, changes, fallback);
     incrementModel(this.metrics, model, modelChanges);
-    if (usage) incrementUsageModels(this.metrics, usage, model);
+    if (usage) incrementUsageModels(this.metrics, usage, model, at);
     this.metrics.updatedAt = fallback.toISOString();
     this.persistMetrics();
   }
 
   pruneMetrics() {
+    const modelDays = [...new Set(Object.keys(this.metrics.modelDaily).map(key => key.split('|')[0]))].sort().slice(-31);
+    for (const key of Object.keys(this.metrics.modelDaily)) if (!modelDays.includes(key.split('|')[0])) delete this.metrics.modelDaily[key];
     const taskDays = [...new Set(Object.values(this.metrics.taskDaily).map(row => row.day))].sort().slice(-31);
     for (const [key, row] of Object.entries(this.metrics.taskDaily)) if (!taskDays.includes(row.day)) delete this.metrics.taskDaily[key];
     const hourlyKeys = Object.keys(this.metrics.hourly).sort();
@@ -970,7 +985,8 @@ export class ProxyRecorder {
       .sort((left, right) => ((right.received + right.replayed) - (left.received + left.replayed)));
     return { hourly: this.series("hour", 24), daily: this.series("day", 30), models,
       pacificDaily:pacificDailySeries(this.series('hour', Math.min(this.hourlyRetention, 24 * 31)), this.now()),
-      taskDaily:Object.values(this.metrics.taskDaily), taskMeteringStartedAt:this.metrics.taskMeteringStartedAt };
+      taskDaily:Object.values(this.metrics.taskDaily), taskMeteringStartedAt:this.metrics.taskMeteringStartedAt,
+      modelDaily:Object.entries(this.metrics.modelDaily).map(([key,row])=>({day:key.split('|')[0],model:key.slice(key.indexOf('|')+1),...row})) };
   }
 
   taskUsage(taskId) {

@@ -205,25 +205,65 @@ Hosted WebSearch can't run through Copilot. Use these, in order:
 - **Verify the running version** at `http://127.0.0.1:4144/health`: `version` is
   the relay, `claude.version` the adapter. Refreshing the dashboard alone
   doesn't prove an update.
-- **Usage:** the dashboard shows per-request receipts: model, tokens, cache
-  reads/writes and Copilot AI credits.
+- **Usage:** the **Models and AI credits** panel at the top of the dashboard
+  (`http://127.0.0.1:4144/dashboard`) shows which model each client is using
+  now, and per model: calls and credits today, credits over 7 days, and the
+  average credits per call. Per-request receipts (model, tokens, cache
+  reads/writes, credits) are in the call history further down.
 
-## 9. Troubleshooting
+## 9. Efficiency guidelines
+
+These come from measuring real usage through this relay (October 2026).
+
+1. **Start new chats for new work.** Every call re-sends the whole conversation,
+   so a 700k-token chat costs about 15–20 credits per step while a fresh one
+   costs about 1–2. When a chat gets long, ask for a short handoff summary,
+   then paste it into a new chat.
+2. **Brand-new chats get on-demand tool loading; resumed chats don't.** Claude
+   Code keeps a resumed chat's original tool list. New chats start around 25k
+   tokens instead of about 190k with large MCP connectors.
+3. **Avoid pauses longer than 5 minutes in long chats.** Copilot keeps the
+   prompt cache for 5 minutes only. The next call after a longer pause rewrites
+   the cache, which costs about 25× a cached read for the same tokens.
+4. **Use the cheapest model that fits.**
+
+   | Model | Relative cost per token |
+   |---|---|
+   | Haiku 5.5 | 1/40 of Opus |
+   | GPT-6.1 Sol (Codex) | 1/2 of Opus |
+   | Opus 5.5 | 1× |
+   | GPT-6 Astra (Codex) | 2.5× Opus |
+
+   - Use Haiku for searches, file lookups and quick subagents. Set
+     `CLAUDE_CODE_SUBAGENT_MODEL` if you want all subagents cheaper.
+   - Keep Opus for hard reasoning.
+   - Avoid Astra in Codex unless you need it.
+5. **Compact deliberately.** Run `/compact` at a natural break instead of
+   letting a chat grow past a few hundred thousand tokens.
+6. **Keep heavy connectors out of projects that don't use them.** With tool
+   search they cost little, but scoping them to the projects that need them
+   keeps even resumed chats lean.
+7. **Do research with WebFetch on Brave Search** (§7) rather than the browser.
+   Browser snapshots and screenshots are large.
+8. **Watch the dashboard panel.** If one model or client dominates "credits
+   today", that's where to change habits.
+
+## 10. Troubleshooting
 
 | Error in Claude | Meaning and fix |
 |---|---|
-| `Relay session capacity (N) reached` | Too many live sessions or pending tool calls. Finish or cancel idle tasks. The default limit is 64 (`BRIDGE_MAX_CLAUDE_SESSIONS`). |
+| `Relay session capacity (N) reached` | All 64 slots (`BRIDGE_MAX_CLAUDE_SESSIONS`) are in active use. Since 1.3.89 a tool call idle for more than 5 minutes is released automatically to make room, and its results later rebuild from history. Waiting tool calls expire after 1 hour. |
 | `Copilot returned an empty completion` | Before 1.3.82 this was Haiku refusing large prompts (context tier). Update the relay. |
 | `prompt is too long for the selected Copilot context tier` | Compact the conversation. |
-| `Copilot SDK did not finish the turn after the native stream ended` | The SDK stalled. The relay fails fast (60 s) so Claude retries instead of hanging for ~13 minutes. Retry. |
+| `Copilot SDK did not finish the turn after the native stream ended` | The SDK stalled before the answer was complete. Retry. Since 1.3.89, if the answer was already complete, the relay delivers it instead of failing. |
 | `Server error mid-response` / `response stopped arriving` | An upstream interruption. Claude Code retries; nothing is replayed after partial output. |
-| `Tool continuation history prefix changed` (409) | The client's history didn't match the pending tool call. Retry; if it repeats, start a new session. |
+| `Tool continuation history changed a signed thinking block` (409) | The chat's history altered a signed thinking block, which never happens normally. Start a new session. Other history differences rebuild automatically since 1.3.89. |
 | `tool_result supports …` / `Unsupported content block` (400) | Your relay is older than the feature. Update. |
 | `Anthropic hosted web search is unsupported by Copilot` | Expected; see §7. |
 | Sonnet/Haiku subagents billed as Opus | The models aren't listed in the gateway profile; see §3. |
 | Browser tool: `Playwright Extension not found` | The extension is in a different browser; run `browser msedge` or `browser chrome` (§6). |
 
-## 10. Security and privacy
+## 11. Security and privacy
 
 - **Loopback only.** The relay listens on `127.0.0.1` and rejects browser
   origins.
