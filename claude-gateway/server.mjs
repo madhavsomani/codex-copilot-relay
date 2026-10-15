@@ -409,7 +409,11 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
       evictIdleToolTurn(gateway,rebuilding);
       const {session,generation}=await runtime.createSession({clientName:'claude-code-copilot-relay-preview',model:selected.model.id,
         reasoningEffort:selected.effort,streaming:true,workingDirectory,
-        contextTier:contextTier(inputTokens,selected.model),modelCapabilities:{limits:{max_output_tokens:body.max_tokens}},
+        contextTier:contextTier(inputTokens,selected.model),
+        // The hook sends the client's exact max_tokens on the wire. Advertise the model's
+        // real ceiling here: SDK 1.0.21 rejects sessions whose advertised maximum is
+        // below its own internal default (e.g. a 64-token Claude Code side request).
+        modelCapabilities:{limits:{max_output_tokens:Math.max(body.max_tokens,selected.model.capabilities?.limits?.max_output_tokens??0)}},
         enableConfigDiscovery:false,skipCustomInstructions:true,skillDirectories:[],pluginDirectories:[],instructionDirectories:[],
         mcpServers:{},memory:{enabled:false},largeOutput:{enabled:false},infiniteSessions:{enabled:false},
         enableSessionStore:false,enableFileChangeTracking:false,customAgentsLocalOnly:true,tools,
