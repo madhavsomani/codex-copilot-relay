@@ -1,10 +1,15 @@
 import {invalid} from './protocol.mjs';
 
 // Native Messages are not the SDK's flattened attachment prompt. Keep every
-// occurrence in its original block, including signed history and tool results.
-// In particular, never deduplicate, repack, decode/re-encode or relocate pixels.
-// These are local admission bounds, not promises about provider acceptance.
-export const nativeImageLimits=Object.freeze({count:100,base64Chars:32*1024*1024});
+// image in its original block; never deduplicate, repack or re-encode pixels.
+// The one exception is fitImageHistory below: when a long chat's images would
+// exceed Copilot's request-size limit, the oldest are left out of the upstream
+// copy (never the client transcript) instead of breaking every later turn.
+//
+// Measured October 2026 on Copilot's native Claude endpoint: 150 images were
+// accepted; 31 MiB of base64 image data was accepted and 42 MiB rejected with
+// 413 request_too_large. Image count is therefore not a limit; bytes are.
+export const nativeImageLimits=Object.freeze({upstreamBase64Chars:24*1024*1024,omitGroup:16});
 const rasterTypes=new Set(['image/png','image/jpeg','image/webp','image/gif']);
 function rasterType(bytes){
   if(bytes.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex')))return 'image/png';
@@ -17,8 +22,6 @@ export function admitNativeImages(images,model,requestHandler){
   const deny=message=>{throw Object.assign(invalid(message),{code:'claude_native_image_admission'});};
   if(typeof requestHandler?.bind!=='function')deny('Native images require the session-bound Claude request handler; no text-only fallback was attempted.');
   if(model.capabilities?.supports?.vision===false)deny('The selected Copilot model does not support images. No model fallback was attempted.');
-  if(images.length>nativeImageLimits.count||images.reduce((n,image)=>n+image.data.length,0)>nativeImageLimits.base64Chars)
-    deny('Native image history exceeds the local 100-image / 32 MiB base64 safety budget. Start a new conversation with a text handoff and the required images; the original transcript was not altered.');
   const vision=model.capabilities?.limits?.vision??{};
   const maxBytes=vision.max_prompt_image_size??3*1024*1024;
   for(const image of images){
@@ -30,8 +33,35 @@ export function admitNativeImages(images,model,requestHandler){
     if(bytes.toString('base64').replace(/=+$/,'')!==image.data.replace(/=+$/,'')||rasterType(bytes)!==image.mimeType)
       deny('An embedded image has malformed raster data or a mismatched media type.');
   }
-  // Do not use max_prompt_images to collapse a complete native transcript to
-  // a flattened attachment prompt: historical images and signatures
-  // must replay unchanged. The native endpoint remains authoritative about
-  // full-history count/token limits and its errors pass through without fallback.
+  // The native endpoint remains authoritative about token limits; its errors
+  // pass through without fallback.
+}
+
+export const omittedImageNote='[Relay: an earlier image was left out here to keep this long chat within Copilot\'s request-size limit. '
+  +'Ask the user to share it again if it is still needed.]';
+// Leave out the oldest images, in fixed groups, until the rest fit the budget.
+// Groups are counted from the start of the chat, so the cut point only moves
+// when a whole new group is needed and the cached prefix stays stable.
+export function fitImageHistory(messages,{budget=nativeImageLimits.upstreamBase64Chars,group=nativeImageLimits.omitGroup}={}){
+  const sizes=[];
+  const visit=content=>{if(Array.isArray(content))for(const block of content){
+    if(block?.type==='image'&&block.source?.type==='base64')sizes.push(block.source.data.length);
+    else if(block?.type==='tool_result')visit(block.content);
+  }};
+  for(const message of messages)visit(message.content);
+  let total=sizes.reduce((sum,size)=>sum+size,0),omit=0;
+  while(total>budget&&omit<sizes.length){
+    const next=Math.min(sizes.length,omit+group);
+    for(let i=omit;i<next;i++)total-=sizes[i];
+    omit=next;
+  }
+  if(!omit)return {messages,omitted:0};
+  let index=0;
+  const rewrite=content=>Array.isArray(content)?content.map(block=>{
+    if(block?.type==='image'&&block.source?.type==='base64')return index++<omit
+      ?{type:'text',text:omittedImageNote,...(block.cache_control!==undefined?{cache_control:block.cache_control}:{})}:block;
+    if(block?.type==='tool_result'&&Array.isArray(block.content))return {...block,content:rewrite(block.content)};
+    return block;
+  }):content;
+  return {messages:messages.map(message=>({...message,content:rewrite(message.content)})),omitted:omit};
 }

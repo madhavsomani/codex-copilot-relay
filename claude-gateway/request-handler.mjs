@@ -2,6 +2,7 @@ import {CopilotRequestHandler} from '@github/copilot-sdk';
 import {invalid,sdkToolName} from './protocol.mjs';
 import {observeStream} from './upstream-stream.mjs';
 import {readProviderError} from './errors.mjs';
+import {fitImageHistory} from './native-images.mjs';
 
 // Upstream rejects every request that contains an encrypted PDF, and the PDF
 // stays in client history, so one Read would break the whole conversation.
@@ -69,6 +70,11 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
         :block.type==='tool_result'&&Array.isArray(block.content)?{...block,content:block.content.map(item=>
           item.type==='tool_reference'?{...item,tool_name:names.get(item.tool_name)??item.tool_name}
           :item.type==='document'?readableDocument(item):item)}:block)}));
+    // Long screenshot-heavy chats would otherwise exceed Copilot's request size
+    // on every later turn. The client transcript itself is never changed.
+    const fitted=fitImageHistory(wire.messages);
+    wire.messages=fitted.messages;
+    if(fitted.omitted)plan.onEvent?.({type:'relay_transport_images_omitted',count:fitted.omitted});
     wire.system=body.system??'';
     wire.max_tokens=body.max_tokens;
     for(const key of ['thinking','output_config','temperature','top_p','top_k','stop_sequences','context_management']){

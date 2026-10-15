@@ -69,6 +69,8 @@ export class Ledger {
       if(event.status>=400){row.sdkTransportErrors++;this.state.transport.httpErrors++;}
     }
     if(event.type==='relay_transport_error'){row.sdkTransportErrors++;this.state.transport.networkErrors++;}
+    // Count only; never which images or their contents.
+    if(event.type==='relay_transport_images_omitted'&&Number.isSafeInteger(event.count))row.imagesOmitted=event.count;
     this.save();
     if(event.type==='relay_transport_attempt')this.onChange?.('forwarded',row);
   }
