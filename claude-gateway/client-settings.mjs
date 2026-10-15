@@ -67,7 +67,8 @@ export function parseClientArguments(args,{cwd=process.cwd()}={}){
 export async function readWindowsPolicies(){
   const script=`$ErrorActionPreference='Stop'; $rows=@(); foreach($hive in @([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryHive]::CurrentUser)){foreach($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)){$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey($hive,$view); $key=$null; try{$key=$base.OpenSubKey('SOFTWARE\\Policies\\ClaudeCode'); if($key){$value=$key.GetValue('Settings',$null); if($null -ne $value){$rows+=@{source=('Windows '+$hive+' '+$view+' policy');json=[string]$value}}}}finally{if($key){$key.Dispose()};$base.Dispose()}}}; ConvertTo-Json -InputObject @($rows) -Compress`;
   try{
-    const {stdout}=await exec('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:5000,maxBuffer:4*maxSettingsBytes});
+    // Cold PowerShell start can exceed 5 s on busy machines and CI runners.
+    const {stdout}=await exec('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:15000,maxBuffer:4*maxSettingsBytes});
     const rows=JSON.parse(stdout.trim());
     if(!Array.isArray(rows))throw new Error();
     return rows.map(row=>({source:row.source,settings:parse(row.json,'Windows managed policy')}));
