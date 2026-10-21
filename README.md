@@ -30,6 +30,28 @@ The guide covers
 setup, model families, on-demand tool loading, browser and research, costs and
 troubleshooting.
 
+**1.3.90–1.3.95:**
+- **No more lost answers on overlapping SDK requests.** On long tool turns the
+  Copilot SDK can have two upstream attempts in flight. The first to start
+  streaming now owns the client stream; the other is dropped instead of failing
+  the turn with "Server error mid-response". An answer the client already holds
+  completely is delivered even if the SDK errors afterwards.
+- **No stuck chats from SDK-only tool calls.** If tool results answer exactly
+  the tool calls the client was shown, the relay rebuilds from history instead
+  of returning `409 Provide every outstanding tool result exactly once`
+  (which also broke `/compact`).
+- **128 Claude session slots** by default (was 64; `BRIDGE_MAX_CLAUDE_SESSIONS`
+  now accepts 2–256).
+- **Session cost totals.** The per-task table defaults to each session's total
+  across all retained days, with a per-day split and search, for both Claude
+  Code and Codex. Codex cost checkpoints count the whole session, not just
+  today. Query every session as JSON at `/dashboard/api/sessions`.
+- **Claude Code in the Models and AI credits panel** (a key filter had dropped
+  its rows).
+- **Native image tools over HTTP MCP** at `http://127.0.0.1:4144/mcp`
+  (loopback only), as an alternative to the stdio adapter. See
+  [native image generation](docs/CLAUDE-IMAGE-MCP.md).
+
 **1.3.89:** a **Models and AI credits** dashboard panel (current model per client,
 credits per model today and over 7 days), Copilot SDK 1.0.21, and seven reliability
 and cost fixes from the October audit. See [efficiency guidelines](docs/CLAUDE-CODE-GUIDE.md#9-efficiency-guidelines).
@@ -1018,10 +1040,10 @@ Since **1.3.79**, desktop **Start Relay** also cancels owned sessions before loa
 the latest local package, while retaining the managed configuration.
 See [the two-control contract](docs/TWO-CONTROLS.md).
 
-Since **1.3.77**, Claude has **64 local session slots** by default (previously
-16), independently of Codex's 64-slot default. Tool-waiting sessions count, too;
-they are never evicted just to admit unrelated work. Developers can configure
-`BRIDGE_MAX_CLAUDE_SESSIONS` (2-128) in the launching environment. This is not a
+Since **1.3.94**, Claude has **128 local session slots** by default (64 since
+1.3.77, 16 before), independently of Codex's 64-slot default. Tool-waiting sessions
+count, too; only ones idle for over 5 minutes are released when every slot is full.
+Developers can configure `BRIDGE_MAX_CLAUDE_SESSIONS` (2-256) in the launching environment. This is not a
 provider quota increase. See [capacity and verification](docs/CLAUDE-CAPACITY.md).
 
 The context guard limits each historical text tool result to 64 KiB. Image count

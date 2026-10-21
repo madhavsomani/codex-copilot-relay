@@ -102,6 +102,7 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
       headers.set('anthropic-beta',[...combined].join(','));
     }
     plan.attempts++;plan.onEvent?.({type:'relay_transport_attempt'});
+    const attempt=plan.attempts;
     let response;
     try{response=await super.sendRequest(new Request(request,{headers,body:JSON.stringify(wire)}),context);}
     catch(error){plan.onEvent?.({type:'relay_transport_error'});throw error;}
@@ -110,6 +111,14 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
     plan.onEvent?.({type:'relay_transport_response',status:response.status,...(error?{error}:{})});
     if(!plan.onEvent){if(response.ok)plan.sent=true;return response;}
     return observeStream(response,event=>{
+      // The SDK can have two attempts in flight at once (seen on long tool
+      // continuations). The first to start a native message owns the client
+      // stream; a later one is never spliced in, and never fails the turn.
+      if(event.type==='message_start')plan.streamOwner??=attempt;
+      if(plan.streamOwner!==undefined&&plan.streamOwner!==attempt){
+        if(event.type==='message_start')plan.onEvent({type:'relay_transport_superseded'});
+        return;
+      }
       if(event.type==='message_start')plan.nativeStarted=true;
       if(event.type==='message_delta')plan.nativeStopReason=event.delta?.stop_reason??plan.nativeStopReason;
       if(event.type==='message_stop'){plan.sent=true;plan.nativeLimitReached=plan.nativeStopReason==='max_tokens';}

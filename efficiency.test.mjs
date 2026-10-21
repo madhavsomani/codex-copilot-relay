@@ -108,3 +108,21 @@ test('task checkpoints persist once at completion and distinguish unknown credit
     assert.equal(checkpointPolicy({BRIDGE_CHECKPOINT_STEPS:'0'}).steps,20);
   } finally { fs.rmSync(directory,{recursive:true,force:true}); }
 });
+
+test('Codex cost checkpoints count the whole session across days, not just today', () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'relay-total-'));
+  let now=new Date('2026-09-17T06:30:00Z');
+  const options={filePath:path.join(directory,'records.jsonl'),now:()=>now};
+  try {
+    const recorder=new ProxyRecorder(options);
+    for(const at of ['2026-09-17T06:30:00Z','2026-09-18T18:00:00Z']){
+      now=new Date(at);const record=recorder.start({body:{},taskId});
+      const usage=summarizeAssistantUsage([{inputTokens:10,outputTokens:1,totalNanoAiu:300e9}]);
+      recorder.usageObserved(record,usage,usage);recorder.finish(record,{status:'completed',usage});
+    }
+    // 300 credits each day: below 500 per day, but 600 in total.
+    const total=recorder.taskUsage(taskId);assert.equal(total.totalNanoAiu,600e9);assert.equal(total.days,2);
+    assert.match(recorder.costCheckpoint(taskId,checkpointPolicy()),/in total across days: 2 model steps; 600.000/);
+    assert.equal(new ProxyRecorder(options).costCheckpoint(taskId,checkpointPolicy()),null,'marker persists');
+  } finally { fs.rmSync(directory,{recursive:true,force:true}); }
+});

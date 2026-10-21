@@ -49,7 +49,7 @@ export function checkpointState(usage = {}, policy = checkpointPolicy()) {
 
 export function checkpointMessage(usage, policy) {
   const state = checkpointState(usage, policy);
-  return '[Relay cost checkpoint, advisory; this task today in America/Los_Angeles: ' + state.steps + ' model steps; ' +
+  return '[Relay cost checkpoint, advisory; this task in total across days: ' + state.steps + ' model steps; ' +
     (state.aiCredits === null ? 'AI credits unreported' : state.aiCredits.toFixed(3) + ' SDK AI credits') +
     (state.partial ? '; partial metering' : '') + '. Give a concise cost/progress checkpoint before more optional iteration. Deliver the reviewable result; do not silently start another creative batch. Continue necessary authorized work and verification. This is not a hard spending cap.]';
 }

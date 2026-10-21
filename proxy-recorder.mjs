@@ -220,7 +220,7 @@ function normalizeMetrics(value, now) {
   metrics.daily = normalizeBucketMap(value.daily);
   metrics.models = normalizeModelMap(value.models);
   for (const [key, row] of Object.entries(value.modelDaily ?? {})) {
-    if (!/^d{4}-d{2}-d{2}|.{1,120}$/.test(key) || !row || typeof row !== 'object') continue;
+    if (!/^\d{4}-\d{2}-\d{2}\|.{1,120}$/.test(key) || !row || typeof row !== 'object') continue;
     metrics.modelDaily[key] = Object.fromEntries(modelDailyFields.map(field => [field, finiteNumber(row[field])]));
   }
   metrics.taskMeteringStartedAt = typeof value.taskMeteringStartedAt === 'string' ? value.taskMeteringStartedAt : now.toISOString();
@@ -989,17 +989,27 @@ export class ProxyRecorder {
       modelDaily:Object.entries(this.metrics.modelDaily).map(([key,row])=>({day:key.split('|')[0],model:key.slice(key.indexOf('|')+1),...row})) };
   }
 
+  // Whole-session total across every retained Pacific day, not just today.
   taskUsage(taskId) {
-    return this.metrics.taskDaily[pacificDay(this.now()) + '|' + taskId] ?? emptyCounters();
+    const rows = Object.values(this.metrics.taskDaily).filter(row => row.taskId === taskId);
+    const total = emptyCounters();
+    for (const row of rows) addCounters(total, row);
+    total.days = rows.length;
+    total.stepCheckpointSeen = Math.max(0, ...rows.map(row => row.stepCheckpointSeen || 0));
+    total.creditCheckpointSeen = Math.max(0, ...rows.map(row => row.creditCheckpointSeen || 0));
+    return total;
   }
 
   costCheckpoint(taskId, policy) {
     if (!taskId) return null;
     const usage = this.taskUsage(taskId);
     const state = checkpointState(usage, policy);
-    if (state.stepCheckpoint <= (usage.stepCheckpointSeen || 0) && state.creditCheckpoint <= (usage.creditCheckpointSeen || 0)) return null;
-    usage.stepCheckpointSeen = state.stepCheckpoint;
-    usage.creditCheckpointSeen = state.creditCheckpoint;
+    if (state.stepCheckpoint <= usage.stepCheckpointSeen && state.creditCheckpoint <= usage.creditCheckpointSeen) return null;
+    // Markers live on the task's latest day so they persist with its counters.
+    const latest = Object.values(this.metrics.taskDaily).filter(row => row.taskId === taskId).sort((a, b) => a.day.localeCompare(b.day)).at(-1);
+    if (!latest) return null;
+    latest.stepCheckpointSeen = state.stepCheckpoint;
+    latest.creditCheckpointSeen = state.creditCheckpoint;
     this.persistMetrics();
     return checkpointMessage(usage, policy);
   }

@@ -1,6 +1,6 @@
 # Claude Code through the relay: complete user guide
 
-Relay 1.3.84, Claude adapter 0.1.28. This guide covers everyday use of **stock
+Relay 1.3.95, Claude adapter 0.1.32. This guide covers everyday use of **stock
 Claude Code** (the Claude desktop app's Code tab or the CLI) with model calls
 served by your own **GitHub Copilot** entitlement through this local relay.
 
@@ -205,6 +205,9 @@ Hosted WebSearch can't run through Copilot. Use these, in order:
 - **Verify the running version** at `http://127.0.0.1:4144/health`: `version` is
   the relay, `claude.version` the adapter. Refreshing the dashboard alone
   doesn't prove an update.
+- **Session totals:** the **Per-task cost checkpoints** table defaults to each
+  session's total across all retained days with a per-day split (both clients).
+  For scripts: `curl -s http://127.0.0.1:4144/dashboard/api/sessions`.
 - **Usage:** the **Models and AI credits** panel at the top of the dashboard
   (`http://127.0.0.1:4144/dashboard`) shows which model each client is using
   now, and per model: calls and credits today, credits over 7 days, and the
@@ -252,11 +255,12 @@ These come from measuring real usage through this relay (October 2026).
 
 | Error in Claude | Meaning and fix |
 |---|---|
-| `Relay session capacity (N) reached` | All 64 slots (`BRIDGE_MAX_CLAUDE_SESSIONS`) are in active use. Since 1.3.89 a tool call idle for more than 5 minutes is released automatically to make room, and its results later rebuild from history. Waiting tool calls expire after 1 hour. |
+| `Relay session capacity (N) reached` | All 128 slots (`BRIDGE_MAX_CLAUDE_SESSIONS`, 2-256; 64 before 1.3.94) are in active use. Since 1.3.89 a tool call idle for more than 5 minutes is released automatically to make room, and its results later rebuild from history. Waiting tool calls expire after 1 hour. |
 | `Copilot returned an empty completion` | Before 1.3.82 this was Haiku refusing large prompts (context tier). Update the relay. |
 | `prompt is too long for the selected Copilot context tier` | Compact the conversation. |
 | `Copilot SDK did not finish the turn after the native stream ended` | The SDK stalled before the answer was complete. Retry. Since 1.3.89, if the answer was already complete, the relay delivers it instead of failing. |
-| `Server error mid-response` / `response stopped arriving` | An upstream interruption. Claude Code retries; nothing is replayed after partial output. |
+| `Server error mid-response` / `response stopped arriving` | An upstream interruption. Claude Code retries; nothing is replayed after partial output. Since 1.3.92 overlapping SDK attempts on long tool turns no longer cause this. |
+| `409 Provide every outstanding tool result exactly once` (also during `/compact`) | Before 1.3.95 an SDK-only tool call could block a chat. Update; results that match the tool calls you were shown now rebuild from history. |
 | `Tool continuation history changed a signed thinking block` (409) | The chat's history altered a signed thinking block, which never happens normally. Start a new session. Other history differences rebuild automatically since 1.3.89. |
 | `tool_result supports …` / `Unsupported content block` (400) | Your relay is older than the feature. Update. |
 | `Anthropic hosted web search is unsupported by Copilot` | Expected; see §7. |

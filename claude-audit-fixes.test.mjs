@@ -87,3 +87,29 @@ test('Models and AI credits panel shows current models and sums both clients per
   assert.equal(JSON.stringify(rows.map(row=>[row.model,row.client,row.todayCalls,row.todayCredits])),JSON.stringify([['claude-opus-5.5','Claude Code',4,40],['gpt-6.1-sol','Codex',2,12]]));
   assert.equal(context.latest(data.records,'claude-code'),'claude-haiku-5.5');assert.equal(context.latest(data.records,'codex'),'gpt-6.1-sol');
 });
+
+test('Claude per-model daily credits reach the dashboard (key filter keeps valid day|model keys)',async()=>{
+  const {gatewayVisibility}=await import('./claude-gateway/visibility.mjs');
+  const state={received:0,completed:0,failed:0,usage:[],recent:[],modelDaily:{'2026-10-20|claude-opus-5.5':{sdkApiCalls:2,totalNanoAiu:3e9},'bad key':{sdkApiCalls:9}}};
+  const view=gatewayVisibility({ledger:{state},runtime:{snapshot:()=>({})},models:[],turns:new Set(),server:{listening:false}});
+  assert.deepEqual(view.modelDaily.map(row=>[row.day,row.model,row.sdkApiCalls,row.aiCredits]),[['2026-10-20','claude-opus-5.5',2,3]]);
+});
+test('session totals sum every retained day per client and session, with the per-day split',async()=>{
+  const {sessionTotals}=await import('./unified-history.mjs');
+  const rows=[{client:'claude-code',taskId:'a',day:'2026-10-19',sdkApiCalls:3,totalNanoAiu:10e9,creditMeteredApiCalls:3,completed:3},
+    {client:'claude-code',taskId:'a',day:'2026-10-20',sdkApiCalls:2,totalNanoAiu:5e9,creditMeteredApiCalls:2,completed:2},
+    {client:'codex',taskId:'a',day:'2026-10-20',sdkApiCalls:1,totalNanoAiu:1e9,creditMeteredApiCalls:1,completed:1}];
+  const [claude,codex]=sessionTotals(rows);
+  assert.equal(claude.client,'claude-code');assert.equal(claude.aiCredits,15);assert.equal(claude.sdkApiCalls,5);
+  assert.deepEqual(claude.perDay.map(day=>[day.day,day.aiCredits]),[['2026-10-19',10],['2026-10-20',5]]);
+  assert.equal(claude.firstDay,'2026-10-19');assert.equal(codex.aiCredits,1);
+});
+test('task cost table defaults to whole-session totals across days',async()=>{
+  const {TASKS_SCRIPT,TASKS_HTML}=await import('./dashboard-tasks.mjs');
+  assert.match(TASKS_HTML,/Cost per day/);assert.match(TASKS_HTML,/task-cost-search/);
+  const vm=await import('node:vm');const context={Intl,Map,Set,Array,String,Number,Math,$:()=>({addEventListener(){}})};vm.createContext(context);
+  vm.runInContext(TASKS_SCRIPT+';this.totals=taskTotals;this.perDay=perDayText;',context);
+  const [row]=context.totals([{client:'codex',taskId:'t',day:'2026-10-19',sdkApiCalls:15,totalNanoAiu:300e9,creditMeteredApiCalls:15},
+    {client:'codex',taskId:'t',day:'2026-10-20',sdkApiCalls:10,totalNanoAiu:250e9,creditMeteredApiCalls:10}]);
+  assert.equal(row.sdkApiCalls,25);assert.equal(row.totalNanoAiu,550e9);assert.equal(context.perDay(row),'10-20: 250 · 10-19: 300');
+});

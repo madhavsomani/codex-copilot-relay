@@ -35,7 +35,8 @@ export function gatewayRequestVisibility(row){return {
   requestedModel:model(row.requestedModel),selectedModel:model(row.selectedModel),
   actualModels:(row.actualModels??[]).slice(0,16).map(model).filter(Boolean),
   continuationMode:['rebuilt','rebuilt-history'].includes(row.continuationMode)?row.continuationMode:null,
-  recoveredAfterStall:row.recoveredAfterStall===true,imagesOmitted:Number.isSafeInteger(row.imagesOmitted)&&row.imagesOmitted>0?row.imagesOmitted:0,
+  recoveredAfterStall:row.recoveredAfterStall===true,recoveredAfterError:row.recoveredAfterError===true,
+  supersededStreams:Number.isSafeInteger(row.supersededStreams)?row.supersededStreams:0,imagesOmitted:Number.isSafeInteger(row.imagesOmitted)&&row.imagesOmitted>0?row.imagesOmitted:0,
   continuationChanges:(row.continuationChanges??[]).filter(key=>['system','tools','effort','format','betas','choice','thinking','maxTokens','temperature','top_p','top_k','stop_sequences'].includes(key)),
   httpStatus:Number.isInteger(row.httpStatus)&&row.httpStatus>=400&&row.httpStatus<=599?row.httpStatus:null,
   ...credits(usage(row))};}
@@ -79,7 +80,7 @@ export function gatewayVisibility(gateway){
     lastRequestAt:times.at(-1)??null,...credits(total),usage:buckets,usageSource:'SDK assistant.usage receipts; failed attempts may be unreported',
     transport:Object.fromEntries(['attempts','httpResponses','httpErrors','networkErrors'].map(key=>[key,count(state.transport?.[key])])),
     browser:browserTelemetry(rows),recent:rows.slice(-20).reverse().map(gatewayRequestVisibility),
-    modelDaily:Object.entries(state.modelDaily??{}).filter(([key])=>/^d{4}-d{2}-d{2}|[w.-]{1,100}$/.test(key)).map(([key,value])=>({
+    modelDaily:Object.entries(state.modelDaily??{}).filter(([key])=>/^\d{4}-\d{2}-\d{2}\|[\w.-]{1,100}$/.test(key)).map(([key,value])=>({
       day:key.split('|')[0],model:key.slice(11),sdkApiCalls:count(value.sdkApiCalls),inputTokens:count(value.inputTokens),
       outputTokens:count(value.outputTokens),cacheReadTokens:count(value.cacheReadTokens),aiCredits:count(value.totalNanoAiu)/1e9}))};
 }

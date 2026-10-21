@@ -16,7 +16,7 @@ preallocate SDK sessions, change models, spend credits by themselves or enable
 provider fallback. Actual work may of course consume more memory and credits.
 
 For developer launchers, set `BRIDGE_MAX_CLAUDE_SESSIONS` in the environment
-inherited by the relay process. Unset/empty means 64; the accepted range is 2-128.
+inherited by the relay process. Unset/empty means 128 (since 1.3.94; 64 before); the accepted range is 2-256.
 `startSdkGateway({maxSessions: 32, ...})` also supports an explicit per-instance
 budget. The environment override applies to both the combined and isolated
 Claude adapters. Existing processes do not hot-reload it; use an intentional

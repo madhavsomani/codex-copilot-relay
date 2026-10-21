@@ -46,19 +46,19 @@ async function fixture(t,overrides={}){
   return {gateway,runtime,options,sessions,call,start,finish};
 }
 
-test('production Claude startup uses a bounded configurable 64-session default',async t=>{
-  const f=await fixture(t);assert.equal(f.options?.maxSessions,64);
-  assert.equal(gatewayVisibility(f.gateway).sessionCapacity.limit,64);
+test('production Claude startup uses a bounded configurable 128-session default',async t=>{
+  const f=await fixture(t);assert.equal(f.options?.maxSessions,128);
+  assert.equal(gatewayVisibility(f.gateway).sessionCapacity.limit,128);
 });
 test('Claude capacity validates environment values before acquiring a runtime or starting the SDK',async()=>{
-  for(const value of [undefined,'',2,'32',64,128])assert.equal(adapter.claudeSessionLimit(value),value===undefined||value===''?64:Number(value));
-  for(const value of [0,1,-1,129,'Infinity','16oops','1e2',2.5,'2.5',' ',null,[],[64],{},true])assert.throws(()=>adapter.claudeSessionLimit(value),/2.*128/);
+  for(const value of [undefined,'',2,'32',64,128,256])assert.equal(adapter.claudeSessionLimit(value),value===undefined||value===''?128:Number(value));
+  for(const value of [0,1,-1,257,'Infinity','16oops','1e2',2.5,'2.5',' ',null,[],[64],{},true])assert.throws(()=>adapter.claudeSessionLimit(value),/2.*256/);
   let started=false;
-  await assert.rejects(adapter.startSdkGateway({token,port:0,maxSessions:129,runtimeFactory:()=>{started=true;}}),/2.*128/);
+  await assert.rejects(adapter.startSdkGateway({token,port:0,maxSessions:257,runtimeFactory:()=>{started=true;}}),/2.*256/);
   assert.equal(started,false);
 });
 test('64 parallel Claude tool sessions survive capacity rejection and all release after continuation',async t=>{
-  const f=await fixture(t),next=await Promise.all(Array.from({length:64},()=>f.start()));
+  const f=await fixture(t,{maxSessions:64}),next=await Promise.all(Array.from({length:64},()=>f.start()));
   assert.equal(f.runtime.snapshot().activeSessions,64);assert.equal(f.gateway.byTool.size,64);
   const rejected=await f.call(body());assert.equal(rejected.status,503);
   assert.equal(rejected.headers.get('x-should-retry'),'false');await rejected.text();

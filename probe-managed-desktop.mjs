@@ -44,7 +44,7 @@ try{
   const original=(await import('./dashboard.mjs')).DASHBOARD_HTML.replaceAll('__CLAUDE_GATEWAY_BASE__',base+'/claude');
   if(dashboard.status!==200||dashboardHtml!==original)throw new Error('Original dashboard was not preserved.');
   report.originalDashboardPreserved=true;
-  if(health.claude.sessionCapacity.limit!==64||health.claude.sessionCapacity.available!==64)
+  if(health.claude.sessionCapacity.limit!==128||health.claude.sessionCapacity.available!==128)
     throw new Error('Combined gateway did not apply the default Claude capacity.');
   if(cancelActive){
     if(health.lifecycle?.cancelActive!==true)throw new Error('Server does not advertise intentional cancellation.');

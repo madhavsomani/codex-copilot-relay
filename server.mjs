@@ -8,7 +8,7 @@ import { CopilotRuntime, bounded } from "./copilot-runtime.mjs";
 import { requestOwner, requestTaskId, ownsExchange, ExchangeOwnership, rememberResponse } from "./exchange-ownership.mjs";
 import {sessionSignature, prepareDiscoveryContinuation, checkpointPolicy, toolOutputPolicy} from './efficiency-policy.mjs';
 import { DASHBOARD_HTML } from "./dashboard.mjs";
-import {mergeDashboardHistory,identifySession} from './unified-history.mjs';
+import {mergeDashboardHistory,identifySession,sessionTotals} from './unified-history.mjs';
 import {createSessionNames} from './session-names.mjs';
 const sessionNames=createSessionNames();
 import { SETUP_HTML } from './setup-ui.mjs';
@@ -273,6 +273,7 @@ function telemetryStorage() {
 }
 
 import {browserSetupStatus} from './claude-browser-setup.mjs';
+import {createImagesMcpRoute} from './relay-images-mcp.mjs';
 function dashboardSnapshot() {
   const snapshot = recorder.snapshot({ includeDetails: false });
   snapshot.sampledAt = new Date().toISOString();
@@ -1597,6 +1598,9 @@ const sessionControl=createSessionControl({directory:runtimeDirectory,instanceId
       cancel:()=>turn.dispose()}))],
   onResult:(status,id)=>log('session.control',{status,id})});
 const stopControlTimer=setInterval(()=>{stopControl.check();void sessionControl.check();},1000);stopControlTimer.unref();
+// Native image tools as an MCP server; loopback-guarded, so no bridge bearer token.
+const imagesMcpRoute = createImagesMcpRoute({port, token:expectedToken||undefined});
+
 const server = http.createServer(async (request, response) => {
   if(shuttingDown||stopControl.stopping)return sendJson(response,503,errorPayload('Relay is stopping. Use Start Relay to resume.','relay_stopping'));
   if(request.method!=='GET'){
@@ -1607,6 +1611,7 @@ const server = http.createServer(async (request, response) => {
   if(claudeMount?.route(request,response))return;
   nativeToolsConfig = await loadNativeToolsConfig(nativeToolsRoot);
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${host}:${port}`}`);
+  if (await imagesMcpRoute(request, response, url.pathname)) return;
 
   if (request.method === "GET" && url.pathname === "/health") {
     const sdk = await sdkRuntime.checkHealth();
@@ -1774,6 +1779,11 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, dashboardSnapshot(), {
         "cache-control": "no-store",
       });
+    }
+    if (request.method === "GET" && url.pathname === "/dashboard/api/sessions") {
+      const snapshot = dashboardSnapshot();
+      return sendJson(response, 200, {sampledAt:snapshot.sampledAt,unit:'Copilot SDK AI credits (not dollars)',window:'retained Pacific days, up to 31',
+        sessions:sessionTotals(snapshot.taskCosts?.rows)}, {"cache-control": "no-store"});
     }
     if (request.method === "GET" && url.pathname.startsWith("/dashboard/api/records/")) {
       let recordId;

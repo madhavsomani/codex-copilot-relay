@@ -229,6 +229,38 @@ test('Claude turn stalled after a complete native stream delivers the finished a
   const row=current.gateway.ledger.state.recent[0];
   assert.equal(row.status,'completed');assert.equal(row.recoveredAfterStall,true);assert.equal(current.gateway.turns.size,0);
 });
+test('Claude SDK error after a complete native stream delivers the answer the client already holds',async t=>{
+  const current=await fixture(t,session=>{
+    const turn=[...current.gateway.turns].find(item=>item.session===session);
+    turn.nativeEvent({type:'message_start'});
+    turn.nativeEvent({type:'content_block_start',index:0,content_block:{type:'text',text:'done'}});
+    turn.nativeEvent({type:'content_block_stop',index:0});
+    turn.nativeEvent({type:'message_delta',delta:{stop_reason:'end_turn'}});
+    turn.nativeEvent({type:'message_stop'});
+    session.emit('session.error',{message:'late duplicate request failed'});
+  });
+  const wire=await (await current.call(request({stream:true}))).text();
+  assert.doesNotMatch(wire,/event: error/);assert.match(wire,/"stop_reason":"end_turn"/);assert.match(wire,/done/);
+  const row=current.gateway.ledger.state.recent[0];
+  assert.equal(row.status,'completed');assert.equal(row.recoveredAfterError,true);assert.equal(current.gateway.turns.size,0);
+});
+test('Claude overlapping SDK attempts: the first native stream owns the client, a later one is dropped',async t=>{
+  const provider=http.createServer((_request,response)=>{
+    response.writeHead(200,{'content-type':'text/event-stream'});
+    response.end(['message_start','message_delta','message_stop'].map(type=>'data: '+JSON.stringify({type,
+      ...(type==='message_delta'?{delta:{stop_reason:'end_turn'}}:{})})+'\n\n').join(''));
+  });
+  await new Promise(resolve=>provider.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>provider.close(resolve)));
+  const handler=new ClaudeRequestHandler(),body=request({}),seen=[];
+  handler.bind('overlap',body,validate(body,models),body.messages,event=>seen.push(event.type));
+  const send=()=>handler.sendRequest(new Request(`http://127.0.0.1:${provider.address().port}/v1/messages`,{
+    method:'POST',body:JSON.stringify({model:'claude-opus-5.5',stream:true,messages:[]})}),
+    {sessionId:'overlap',signal:new AbortController().signal});
+  const [first,second]=await Promise.all([send(),send()]);
+  await first.text();await second.text();
+  assert.equal(seen.filter(type=>type==='message_start').length,1);assert.equal(seen.filter(type=>type==='message_stop').length,1);
+  assert.equal(seen.filter(type=>type==='relay_transport_superseded').length,1);
+});
 test('Claude stall before the native stream terminates still fails fast with an error',async t=>{
   const current=await fixture(t,session=>{
     const turn=[...current.gateway.turns].find(item=>item.session===session);
@@ -472,6 +504,30 @@ test('Claude changed unsigned history rebuilds from client history with its own 
   assert.match(f.sessions[1].input.prompt,/tampered history/);
   assert.deepEqual(f.gateway.ledger.state.recent[0],first,'the completed tool turn receipt is untouched');
   assert.equal(f.gateway.byTool.size,f.gateway.turns.size?1:0);
+});
+test('Claude SDK-only ghost tool (superseded attempt) never blocks results for the tools the client saw',async t=>{
+  const f=await fixture(t,s=>{
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'}]});
+    s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:'a',requestId:'req-a',arguments:{path:'x'}});
+  });
+  const initial=request({tools});const result=await (await f.call(initial)).json();
+  // A late registration the client never received as a tool_use block.
+  f.sessions[0].emit('external_tool.requested',{toolName:'client_Read',toolCallId:'ghost',requestId:'req-ghost',arguments:{path:'y'}});
+  const next={...initial,messages:[...initial.messages,{role:'assistant',content:result.content},
+    {role:'user',content:[{type:'tool_result',tool_use_id:result.content[0].id,content:'value'}]}]};
+  // Previously a 409 on every retry and on /compact, leaving the chat stuck.
+  const response=await f.call(next);assert.equal(response.status,200);await response.text();
+  assert.equal(f.gateway.ledger.state.recent.at(-1).continuationMode,'rebuilt-history');
+  assert.equal(f.sessions[0].results.length,0,'no tool re-executed');assert.equal(f.sessions.length,2);
+  // A result genuinely missing for a visible tool call is still refused.
+  const g=await fixture(t,s=>{
+    s.emit('assistant.message',{content:'',toolRequests:[{toolCallId:'a'},{toolCallId:'b'}]});
+    for(const id of ['a','b'])s.emit('external_tool.requested',{toolName:'client_Read',toolCallId:id,requestId:'req-'+id,arguments:{path:id}});
+  });
+  const two=await (await g.call(initial)).json();
+  const partial={...initial,messages:[...initial.messages,{role:'assistant',content:two.content},
+    {role:'user',content:[{type:'tool_result',tool_use_id:two.content[0].id,content:'value'}]}]};
+  const refused=await g.call(partial);assert.equal(refused.status,409);await refused.text();assert.equal(g.gateway.turns.size,1);
 });
 test('Claude legitimate setting changes rebuild complete owned continuations without replaying tools',async t=>{
   for(const change of [{max_tokens:2048},{system:'Updated client instructions'},

@@ -120,11 +120,11 @@ class Turn {
   // terminal metadata; only the SDK's own bookkeeping stalled. Deliver that
   // answer instead of failing it (which made the client pay for a retry). A tool
   // turn ends this SDK session; its results rebuild one from client history.
-  recoverFromNative(){
+  recoverFromNative(cause='recoveredAfterStall'){
     if(this.done||!this.sink||this.sink.closed||!this.nativeStarted||!this.nativeStopped||!this.nativeTerminal
       ||!this.sink.blocks.length||this.sink.nativeOpen!=null)return false;
     try{
-      if(this.row)this.row.recoveredAfterStall=true;
+      if(this.row)this.row[cause]=true;
       this.complete(this.nativeTerminal.reason);
     }catch{return false;}
     void this.dispose();return true;
@@ -266,6 +266,10 @@ class Turn {
   }
   async fail(error) {
     if(this.done)return;
+    // The client already holds a complete, verified native message (a late
+    // duplicate SDK request or SDK bookkeeping error can still fail the turn).
+    // Deliver it rather than discard an answer that was already paid for.
+    if(error?.statusCode!==499&&this.recoverFromNative('recoveredAfterError'))return;
     this.gateway.onFault?.(error,this);
     // Content-free diagnostic: where in the turn a failure or hang happened.
     if(this.row?.status==='active')this.row.failurePhase=!this.sink?'waiting-for-tools':!this.nativeStarted?'before-native-start'
@@ -364,9 +368,20 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
           row.continuationMode='rebuilt-history';
           holder.rebuilding=true;rebuilding=holder;
         }
+        else if(new Set(results.map(item=>item.tool_use_id)).size!==results.length)throw invalid('Provide every outstanding tool result exactly once.',409);
+        else if(results.length!==holder.pending.size||results.some(item=>!holder.pending.has(item.tool_use_id))){
+          // The SDK can register a tool the client never saw (a superseded
+          // overlapping upstream attempt). When the results answer exactly the
+          // tool calls the client was shown, the client is right: rebuild from
+          // its full history, no tool re-executed. Genuinely missing results
+          // for visible calls are still refused so a valid retry stays possible.
+          const visible=new Set((holder.expectedHistory?.at(-1)?.content??[]).filter(block=>block.type==='tool_use').map(block=>block.id));
+          if(results.length!==visible.size||results.some(item=>!visible.has(item.tool_use_id)))
+            throw invalid('Provide every outstanding tool result exactly once.',409);
+          row.continuationMode='rebuilt-history';
+          holder.rebuilding=true;rebuilding=holder;
+        }
         else {
-          if(new Set(results.map(item=>item.tool_use_id)).size!==holder.pending.size
-            ||results.length!==holder.pending.size||results.some(item=>!holder.pending.has(item.tool_use_id)))throw invalid('Provide every outstanding tool result exactly once.',409);
           // Use the retained native prefix, including any legacy overview notes,
           // not only the client prefix. Reject before attaching/consuming results
           // so a smaller, valid retry keeps the same owned SDK tool continuation.
@@ -459,9 +474,9 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
 // A local concurrency budget, not a Copilot entitlement or inference quota.
 // Retained tool sessions count too; never evict them to admit unrelated work.
 export function claudeSessionLimit(value) {
-  if(value===undefined||value==='')return 64;
-  if(!['number','string'].includes(typeof value)||!/^[0-9]+$/.test(String(value))||!Number.isSafeInteger(Number(value))||Number(value)<2||Number(value)>128)
-    throw new Error('BRIDGE_MAX_CLAUDE_SESSIONS must be an integer between 2 and 128.');
+  if(value===undefined||value==='')return 128;
+  if(!['number','string'].includes(typeof value)||!/^[0-9]+$/.test(String(value))||!Number.isSafeInteger(Number(value))||Number(value)<2||Number(value)>256)
+    throw new Error('BRIDGE_MAX_CLAUDE_SESSIONS must be an integer between 2 and 256.');
   return Number(value);
 }
 

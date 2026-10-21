@@ -80,6 +80,7 @@ export class Ledger {
       if(event.status>=400){row.sdkTransportErrors++;this.state.transport.httpErrors++;}
     }
     if(event.type==='relay_transport_error'){row.sdkTransportErrors++;this.state.transport.networkErrors++;}
+    if(event.type==='relay_transport_superseded')row.supersededStreams=(row.supersededStreams??0)+1;
     // Count only; never which images or their contents.
     if(event.type==='relay_transport_images_omitted'&&Number.isSafeInteger(event.count))row.imagesOmitted=event.count;
     this.save();

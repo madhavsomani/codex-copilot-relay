@@ -108,6 +108,21 @@ node claude-image-mcp-setup.mjs restore
 
 `restore` removes only the entry this script added, and only if it is unchanged.
 
+### Alternative: HTTP MCP served by the relay (1.3.91+)
+
+The relay also serves the same two tools as a stateless Streamable-HTTP MCP
+endpoint at `http://127.0.0.1:4144/mcp`. It is loopback-only (Host and Origin
+checked) and survives relay restarts because it keeps no session. Register it
+for Claude Code once:
+
+```
+claude mcp add --scope user --transport http relay_images http://127.0.0.1:4144/mcp
+```
+
+This entry lives in `~/.claude.json`, so the desktop app does not overwrite it.
+There is no server-to-client stream, so MCP elicitation is unavailable; Claude
+Code's own per-tool permission prompt is the approval for each image.
+
 ## Model note
 
 Earlier relay versions numbered their internal tool names by position, and in
