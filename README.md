@@ -30,6 +30,21 @@ The guide covers
 setup, model families, on-demand tool loading, browser and research, costs and
 troubleshooting.
 
+**1.3.96: optional relay features you control.** A new **Relay features**
+dashboard panel switches the relay's own additions on or off, live. You can also
+choose them when starting the relay
+(`Start-Relay.ps1 -EnableFeature cacheKeepWarm -DisableFeature …`). Two new
+opt-in features:
+- **Prompt-cache keep-warm.** Pings a quiet long chat so Copilot's 5-minute
+  cache does not expire. Cache rewrites were about 60% of measured Claude
+  credits.
+- **Haiku for Explore subagents.**
+
+Existing extras (answer recovery, image trimming, the encrypted-PDF note, idle
+slot release and Codex cost checkpoints) stay on by default and can now be
+switched off. Rejected requests now record a short reason. See
+[optional relay features](docs/RELAY-FEATURES.md).
+
 **1.3.90–1.3.95:**
 - **No more lost answers on overlapping SDK requests.** On long tool turns the
   Copilot SDK can have two upstream attempts in flight. The first to start

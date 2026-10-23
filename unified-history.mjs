@@ -14,7 +14,7 @@ export function claudeHistoryRecord(raw){
   requestedModel:row.requestedModel,selectedModel:row.selectedModel,selectedReasoningEffort:row.effort,requestedReasoningEffort:row.requestedEffort,
   reasoningSource:row.effort?'recorded_session':null,routingMode:'per-request',requestClass:row.requestClass,
   toolCalls:row.toolRequests,toolResults:row.toolResults,replayCount:null,inputBytes:null,outputBytes:null,
-  errorCode:row.errorType,httpStatus:row.httpStatus,continuationMode:row.continuationMode,continuationChanges:row.continuationChanges,
+  errorCode:row.errorType,rejectReason:row.reason,httpStatus:row.httpStatus,continuationMode:row.continuationMode,continuationChanges:row.continuationChanges,
   detailTier:'metadata',detailAvailable:false,usageNote:'Metadata only. Tokens are SDK receipt subtotals; older receipts may normalize missing token fields to zero. Dollar charge is not reported.',
   usage:{metered,sdkApiCalls:row.sdkApiCalls,inputTokens:metered?row.inputTokens:null,outputTokens:metered?row.outputTokens:null,
    cacheReadTokens:metered?row.cacheReadTokens:null,cacheWriteTokens:metered?row.cacheWriteTokens:null,totalNanoAiu:row.totalNanoAiu,

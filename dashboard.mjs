@@ -5,6 +5,7 @@ import {TRENDS_HTML,TRENDS_STYLE,TRENDS_SCRIPT} from './dashboard-trends.mjs';
 import {TASKS_HTML,TASKS_STYLE,TASKS_SCRIPT} from './dashboard-tasks.mjs';
 import {CLAUDE_HTML,CLAUDE_STYLE,CLAUDE_SCRIPT} from './dashboard-claude.mjs';
 import {MODELS_HTML,MODELS_STYLE,MODELS_SCRIPT} from './dashboard-models.mjs';
+import {FEATURES_HTML,FEATURES_STYLE,FEATURES_SCRIPT} from './dashboard-features.mjs';
 import {CLAUDE_GUIDE_STYLE,renderClaudeSetupGuide} from './claude-setup-guide.mjs';
 import {BROWSER_HTML,BROWSER_SCRIPT} from './dashboard-browser.mjs';
 
@@ -381,6 +382,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     ${CONNECTION_STYLE}
     ${CLAUDE_STYLE}
     ${MODELS_STYLE}
+    ${FEATURES_STYLE}
     ${CLAUDE_GUIDE_STYLE}
   </style>
 </head>
@@ -409,6 +411,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     ${BROWSER_HTML}
     <div class="notice" id="overview"><span class="pill"><span class="dot"></span> loopback only</span><span class="pill">provider: <strong>github-copilot-sdk</strong></span><span class="pill">compatibility: long context · Codex tools/memory preserved</span><span class="pill">context: bounded, salience-aware compaction</span><span class="pill">history: <strong id="limit">1,000</strong> entries · <strong id="detail-limit">200 detailed</strong></span><span class="pill">auto-refresh: <strong>5s</strong></span><span class="pill" id="updated">waiting for bridge…</span></div>
     ${MODELS_HTML}
+    ${FEATURES_HTML}
     <div class="routing-banner" aria-label="Current routing policy"><strong id="routing-policy">Loading routing policy…</strong><span id="routing-context">Past calls keep their original route. Select a call to compare requested and selected models.</span></div>
     <details class="panel provider-panel" id="provider-routing" aria-label="Provider routing and usage">
       <summary class="provider-summary"><strong>Where calls actually go</strong><span class="provider-overview">Model calls → Copilot · Native images → Codex / OpenAI · API → explicit only</span><span class="pill" id="no-fallback">Loading policy…</span></summary>
@@ -914,6 +917,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       renderProviders(data);
       renderClaudeGateway(data.claude, data.summary);
       renderModelCredits(data);
+      renderFeatures(data);
       renderSessionLeases(data.sessionControl);
       const summary = data.summary || {}, storage = data.storage || {};
       state.current = { startedAt: data.startedAt, routing: data.routing };
@@ -1039,7 +1043,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       detail.prepend(routeSummary(record));
       detail.appendChild(section('Intelligence / reasoning effort', callReasoning(record)));
       detail.appendChild(section('Context efficiency (local estimates)', record.contextStats || {note:'Not recorded for this call. Character savings are not billed-token or credit savings.'}));
-      detail.appendChild(section('Session and cost attribution', {client:record.clientLabel,sessionName:record.sessionName,sessionId:record.taskId ?? 'Not recorded',titleSource:record.sessionNameSource,requestClass:record.requestClass,sessionReason:record.sessionReason ?? 'Not recorded',costCheckpoint:record.costCheckpoint ?? 'No checkpoint on this response',usageNote:record.usageNote,dollarCost:null,continuationMode:record.continuationMode,continuationChanges:record.continuationChanges,httpStatus:record.httpStatus,errorCode:record.errorCode}));
+      detail.appendChild(section('Session and cost attribution', {client:record.clientLabel,sessionName:record.sessionName,sessionId:record.taskId ?? 'Not recorded',titleSource:record.sessionNameSource,requestClass:record.requestClass,sessionReason:record.sessionReason ?? 'Not recorded',costCheckpoint:record.costCheckpoint ?? 'No checkpoint on this response',usageNote:record.usageNote,dollarCost:null,continuationMode:record.continuationMode,continuationChanges:record.continuationChanges,httpStatus:record.httpStatus,errorCode:record.errorCode,rejectReason:record.rejectReason ?? null}));
       detail.appendChild(section("Token and byte breakdown", {...callTokenUsage(record.usage), requestBytes:record.inputBytes, recordedResponseBytes:record.outputBytes, requestImagesRetained:record.ingress?.retainedImages ?? null, usagePartial:record.client==='claude-code'?record.status==='active':!record.completedAt,
         note:"Bytes measure the structured Codex-to-relay payload, not new words. Requests may carry prior messages, instructions, tool declarations/results, and base64 images. SDK token counts cover model context, including context retained from earlier continuations. Cached input is already part of input; reasoning is already part of output."}));
       detail.appendChild(section("Measured SDK usage and public API benchmark", record.usage ? {...record.usage, aiCredits:sdkCredits(record.usage)} : { metered: false, note: "No SDK usage was reported for this call." }));
@@ -1088,6 +1092,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     $("refresh-quota").onclick = async () => { const button = $("refresh-quota"); button.disabled = true; button.textContent = "Refreshing…"; try { await fetch("/dashboard/quota/refresh", { method: "POST" }); await refresh(); } finally { button.disabled = false; button.textContent = "Refresh"; } };
     ${CLAUDE_SCRIPT}
     ${MODELS_SCRIPT}
+    ${FEATURES_SCRIPT}
     ${BROWSER_SCRIPT}
     ${TRENDS_SCRIPT}
     ${TASKS_SCRIPT}

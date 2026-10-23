@@ -1,6 +1,6 @@
 # Claude Code through the relay: complete user guide
 
-Relay 1.3.95, Claude adapter 0.1.32. This guide covers everyday use of **stock
+Relay 1.3.96, Claude adapter 0.1.33. This guide covers everyday use of **stock
 Claude Code** (the Claude desktop app's Code tab or the CLI) with model calls
 served by your own **GitHub Copilot** entitlement through this local relay.
 
@@ -228,6 +228,10 @@ These come from measuring real usage through this relay (October 2026).
 3. **Avoid pauses longer than 5 minutes in long chats.** Copilot keeps the
    prompt cache for 5 minutes only. The next call after a longer pause rewrites
    the cache, which costs about 25× a cached read for the same tokens.
+   Or turn on **prompt-cache keep-warm** (opt-in, uses a few credits per
+   quiet break), which keeps the cache alive for up to 20 minutes. If a loop
+   checks back on a long chat, use about 4.5 minutes (cache stays warm) or 20+
+   minutes, never 6–15. See [optional relay features](RELAY-FEATURES.md).
 4. **Use the cheapest model that fits.**
 
    | Model | Relative cost per token |
@@ -237,8 +241,10 @@ These come from measuring real usage through this relay (October 2026).
    | Opus 5.5 | 1× |
    | GPT-6 Astra (Codex) | 2.5× Opus |
 
-   - Use Haiku for searches, file lookups and quick subagents. Set
-     `CLAUDE_CODE_SUBAGENT_MODEL` if you want all subagents cheaper.
+   - Use Haiku for searches, file lookups and quick subagents. The
+     **Haiku for Explore subagents** relay feature does this for the built-in
+     Explore agent only. `CLAUDE_CODE_SUBAGENT_MODEL` is a fallback for
+     subagents that don't set their own model.
    - Keep Opus for hard reasoning.
    - Avoid Astra in Codex unless you need it.
 5. **Compact deliberately.** Run `/compact` at a natural break instead of

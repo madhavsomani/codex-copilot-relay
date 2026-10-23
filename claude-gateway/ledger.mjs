@@ -6,6 +6,15 @@ import {sessionHash,recordSessionCost,pacificSessionDay} from './session-costs.m
 import {observeBrowserCatalog,observeBrowserSignal} from './browser-telemetry.mjs';
 import {UsageReceipts} from '../usage-receipts.mjs';
 
+// Measured Copilot credit rates per million tokens (October 2026 receipts):
+// input, cache read, cache write, output. Used only to estimate keep-warm cost.
+const keepWarmRates=[[/opus/i,[400,20,500,2000]],[/haiku/i,[10,0.5,12.5,50]]];
+export function keepWarmNanoAiu({model,inputTokens=0,cacheReadTokens=0,cacheWriteTokens=0,outputTokens=0}){
+  const rates=keepWarmRates.find(([pattern])=>pattern.test(model??''))?.[1];
+  if(!rates)return null;
+  return Math.round((inputTokens*rates[0]+cacheReadTokens*rates[1]+cacheWriteTokens*rates[2]+outputTokens*rates[3])*1000);
+}
+
 // Metadata only: never persist prompts, tool arguments/results, tokens used to
 // authenticate, paths, GitHub login names, or raw SDK errors.
 export class Ledger {
@@ -70,6 +79,11 @@ export class Ledger {
     row.errorType=typeof error.type==='string'&&/^[a-z_]{1,64}$/.test(error.type)?error.type:'api_error';
     if(['relay_session_capacity','claude_history_prefix_mismatch','claude_context_budget'].includes(error.code))row.errorCode=error.code;
     row.httpStatus=Number.isInteger(error.statusCode)&&error.statusCode>=400&&error.statusCode<=599?error.statusCode:502;
+    // Request-validation reasons (relay or upstream 400/409/413/422) are fixed
+    // templates such as "messages.3.content.0: ..."; keep a short single line so
+    // rejections can be diagnosed. Never stored for 5xx/transport errors.
+    if([400,409,413,422].includes(row.httpStatus)&&typeof error.message==='string')
+      row.reason=error.message.replace(/s+/g,' ').slice(0,160);
     row.partialOutput=Boolean(partialOutput);this.finish(row,status);
   }
   transport(row,event){
@@ -85,6 +99,17 @@ export class Ledger {
     if(event.type==='relay_transport_images_omitted'&&Number.isSafeInteger(event.count))row.imagesOmitted=event.count;
     this.save();
     if(event.type==='relay_transport_attempt')this.onChange?.('forwarded',row);
+  }
+  // Keep-warm pings are the relay's own requests, not client turns: tally them
+  // separately (counts, tokens, estimated credits), never as received/failed.
+  keepWarm(result){
+    const stats=this.state.keepWarm??={pings:0,failed:0,inputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,outputTokens:0,estimatedNanoAiu:0,unpricedPings:0,lastAt:null};
+    stats.lastAt=new Date().toISOString();
+    if(!result.ok){stats.failed++;this.save();return;}
+    stats.pings++;
+    for(const key of ['inputTokens','cacheReadTokens','cacheWriteTokens','outputTokens'])stats[key]+=Number.isFinite(result[key])?result[key]:0;
+    const nano=keepWarmNanoAiu(result);if(nano===null)stats.unpricedPings++;else stats.estimatedNanoAiu+=nano;
+    this.save();
   }
   toolSignal(row, type, details={}) {
     // Counts/categories only; never persist tool names, arguments or results.

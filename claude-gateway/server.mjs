@@ -1,3 +1,4 @@
+import {featureEnabled} from '../relay-features.mjs';
 import http from 'node:http';
 import {timingSafeEqual,createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
@@ -94,7 +95,8 @@ class Turn {
     this.row=row;
     this.nativeTerminal=null;this.nativeStarted=false;this.nativeStopped=false;this.upstreamFailure=null;
     this.nativeMessages=nativeMessages??body.messages;
-    this.gateway.requestHandler?.bind(this.session.sessionId,body,this.selected,nativeMessages,event=>this.nativeEvent(event,row));
+    // Only main chats are kept warm; a finished subagent never returns.
+    this.gateway.requestHandler?.bind(this.session.sessionId,body,this.selected,nativeMessages,event=>this.nativeEvent(event,row),row?.agent?null:this.owner);
     this.body=body;this.events=[];this.expectedCalls=[];this.lastText='';this.chunkCount=0;this.chunkIndexes=new Set();
     this.sink=new MessageSink(response,body,()=>void this.fail(invalid('Client disconnected; request not replayed.',499,'api_error')),this.gateway.heartbeatMs,this.gateway.preStartPingMs);
     this.arm(this.gateway.modelTimeoutMs);
@@ -121,7 +123,7 @@ class Turn {
   // answer instead of failing it (which made the client pay for a retry). A tool
   // turn ends this SDK session; its results rebuild one from client history.
   recoverFromNative(cause='recoveredAfterStall'){
-    if(this.done||!this.sink||this.sink.closed||!this.nativeStarted||!this.nativeStopped||!this.nativeTerminal
+    if(!featureEnabled('recoverCompletedAnswers')||this.done||!this.sink||this.sink.closed||!this.nativeStarted||!this.nativeStopped||!this.nativeTerminal
       ||!this.sink.blocks.length||this.sink.nativeOpen!=null)return false;
     try{
       if(this.row)this.row[cause]=true;
@@ -296,6 +298,7 @@ class Turn {
 // the released turn's results do arrive, the request rebuilds from the client's
 // full history at no extra cache cost.
 export function evictIdleToolTurn(gateway,keep,now=Date.now()){
+  if(!featureEnabled('idleToolEviction'))return null;
   if(gateway.runtime.snapshot?.().availableSessionSlots!==0)return null;
   const idle=[...gateway.turns].filter(turn=>!turn.done&&!turn.sink&&!turn.rebuilding&&turn!==keep&&turn.pending.size
     &&now-(turn.lastActive??now)>=gateway.idleEvictMs)
@@ -305,7 +308,7 @@ export function evictIdleToolTurn(gateway,keep,now=Date.now()){
   return idle;
 }
 export async function createGateway({runtime,models,token,workingDirectory=process.cwd(),ledger=new Ledger(),
-  heartbeatMs=15000,preStartPingMs=45000,idleEvictMs=5*60*1000,modelTimeoutMs=900000,postStreamMs=60000,toolTimeoutMs=60*60*1000,maxBodyBytes=64*1024*1024,onRequest,onFault,requestHandler,mountPort}={}) {
+  heartbeatMs=15000,preStartPingMs=45000,idleEvictMs=5*60*1000,modelTimeoutMs=900000,postStreamMs=60000,toolTimeoutMs=60*60*1000,maxBodyBytes=64*1024*1024,onRequest,onFault,requestHandler,mountPort,keepWarm={}}={}) {
   if(typeof token!=='string'||token.length<24)throw new Error('A random local gateway token of at least 24 characters is required.');
   if(!catalog(models).length)throw new Error('No supported Claude models are exposed by the authenticated SDK.');
   const gateway={runtime,models,ledger,heartbeatMs,preStartPingMs,idleEvictMs,modelTimeoutMs,postStreamMs,toolTimeoutMs,requestHandler,onFault,turns:new Set(),byTool:new Map()};
@@ -460,8 +463,16 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
   server.requestTimeout=120000;server.headersTimeout=30000;server.timeout=0;
   gateway.server=server;
   gateway.handle=handle;gateway.mountPort=mountPort;
+  // Optional keep-warm (relay feature cacheKeepWarm): ping quiet main chats so
+  // their prompt cache survives. Checked every tickMs; off costs nothing.
+  const warmTimer=setInterval(()=>{
+    if(!featureEnabled('cacheKeepWarm')||!requestHandler?.warmDue)return;
+    for(const key of requestHandler.warmDue(keepWarm))
+      void requestHandler.warm(key).then(result=>{if(result)ledger.keepWarm(result);}).catch(()=>{});
+  },keepWarm.tickMs??15000);warmTimer.unref?.();
   let closing;
   gateway.close=()=>closing??=(async()=>{
+    clearInterval(warmTimer);
     await Promise.all([...gateway.turns].map(turn=>turn.fail(invalid('Isolated gateway shutting down.',503,'api_error'))));
     server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve));await runtime.stop();
   })();

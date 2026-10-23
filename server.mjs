@@ -14,6 +14,7 @@ const sessionNames=createSessionNames();
 import { SETUP_HTML } from './setup-ui.mjs';
 import { createSetupStatus, sameOriginLocal } from './setup-status.mjs';
 import {mountClaudeGateway} from './unified-gateway.mjs';
+import {featureEnabled, loadFeatures, setFeature, snapshotFeatures, onFeatureChange, applyExploreAgent} from './relay-features.mjs';
 import {createGatewayReporter} from './unified-events.mjs';
 import {renderUnifiedSetupPage} from './unified-setup.mjs';
 import {createRelayStopControl} from './relay-stop-control.mjs';
@@ -162,6 +163,11 @@ const maxRequestBodyBytes = environmentInteger(
   512 * 1024 * 1024,
 );
 const runtimeDirectory = process.env.BRIDGE_RUNTIME_DIRECTORY ?? path.join(process.cwd(), "runtime");
+// Optional relay features (docs/RELAY-FEATURES.md). The Haiku Explore switch
+// owns one user-level Claude Code agent file; keep it in step with the choice.
+onFeatureChange((id, enabled) => { if (id === 'haikuExplore') applyExploreAgent(enabled); });
+try { loadFeatures({ runtimeDirectory }); }
+catch (error) { console.error('Relay features: ' + error.message + ' Using saved/default choices.'); loadFeatures({ runtimeDirectory, env: {} }); }
 const maxRequestWireBytes = Math.max(maxRequestBodyBytes, environmentInteger(
   'BRIDGE_MAX_REQUEST_WIRE_BYTES', DEFAULT_RESPONSES_WIRE_BYTES, 1024*1024, 512*1024*1024));
 const providerTelemetry = new ProviderTelemetry({directory:runtimeDirectory});
@@ -287,6 +293,7 @@ function dashboardSnapshot() {
   snapshot.claude = claudeMount?.visibility() ?? null;
   snapshot.sessionControl = sessionControl.snapshot();
   snapshot.browserSetup = browserSetupStatus();
+  snapshot.features = snapshotFeatures();
   snapshot.copilot = {
     quota: copilotQuota,
     modelBilling: copilotModelBilling,
@@ -1803,6 +1810,23 @@ const server = http.createServer(async (request, response) => {
         record,
       }, { "cache-control": "no-store" });
     }
+    if (request.method === "GET" && url.pathname === "/dashboard/api/features") {
+      return sendJson(response, 200, { features: snapshotFeatures() }, { "cache-control": "no-store" });
+    }
+    if (request.method === "POST" && url.pathname === "/dashboard/features") {
+      if (!String(request.headers['content-type'] ?? '').startsWith('application/json'))
+        return sendJson(response, 415, errorPayload('Send JSON.', 'unsupported_media_type'));
+      try {
+        const chunks = []; let size = 0;
+        for await (const chunk of request) { size += chunk.length; if (size > 4096) throw Object.assign(new Error('Body too large.'), { statusCode: 413 }); chunks.push(chunk); }
+        const { id, enabled } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const features = setFeature(id, enabled);
+        log('relay.feature', { id, enabled });
+        return sendJson(response, 200, { ok: true, features }, { "cache-control": "no-store" });
+      } catch (error) {
+        return sendJson(response, error.statusCode ?? 400, errorPayload(error.message, 'feature_change_failed'));
+      }
+    }
     if (request.method === "POST" && url.pathname === "/dashboard/clear") {
       return sendJson(response, 200, recorder.clear());
     }
@@ -1949,7 +1973,7 @@ const server = http.createServer(async (request, response) => {
       const continuation = toolOutputs.length ? exchangesByCallId.get(toolOutputs[0].call_id) : null;
       sink = new ResponseSink(response, body, record, continuation?.model ?? requestCompatibility.model,
         continuation?.reasoningEffort ?? requestCompatibility.reasoningEffort);
-      record.costCheckpoint = recorder.costCheckpoint(record.taskId, efficiencyPolicy);
+      record.costCheckpoint = featureEnabled('codexCostCheckpoints') ? recorder.costCheckpoint(record.taskId, efficiencyPolicy) : null;
       if (toolOutputs.length) {
         await continueExchange(body, sink, toolOutputs);
       } else {

@@ -3,6 +3,7 @@ import {invalid,sdkToolName} from './protocol.mjs';
 import {observeStream} from './upstream-stream.mjs';
 import {readProviderError} from './errors.mjs';
 import {fitImageHistory} from './native-images.mjs';
+import {featureEnabled} from '../relay-features.mjs';
 
 // Upstream rejects every request that contains an encrypted PDF, and the PDF
 // stays in client history, so one Read would break the whole conversation.
@@ -24,7 +25,7 @@ export function encryptedPdf(block){
   return result;
 }
 function readableDocument(block){
-  if(!encryptedPdf(block))return block;
+  if(!featureEnabled('encryptedPdfNote')||!encryptedPdf(block))return block;
   const name=typeof block.title==='string'?' "'+block.title.slice(0,200)+'"':'';
   return {type:'text',text:'[Relay: the PDF'+name+' is encrypted or password-protected, which the model cannot read. '
     +'Ask the user for an unlocked copy, or decrypt it locally (for example: qpdf --decrypt in.pdf out.pdf) and read that file.]',
@@ -34,12 +35,14 @@ function readableDocument(block){
 // Documented SDK extension. Never changes destination, credentials, model or
 // entitlement headers. Plans are scoped to actual SDK sessions, not global turns.
 export class ClaudeRequestHandler extends CopilotRequestHandler {
-  constructor(observe){super();this.plans=new Map();this.released=new Set();this.observe=observe;}
-  bind(sessionId,body,selected,nativeMessages,onEvent){
+  constructor(observe){super();this.plans=new Map();this.released=new Set();this.observe=observe;this.warmTargets=new Map();}
+  bind(sessionId,body,selected,nativeMessages,onEvent,warmKey=null){
     const previous=this.plans.get(sessionId);
-    this.plans.set(sessionId,{body,selected,nativeMessages:nativeMessages??previous?.nativeMessages,sent:previous?.sent??false,onEvent,attempts:0});
+    this.plans.set(sessionId,{body,selected,nativeMessages:nativeMessages??previous?.nativeMessages,sent:previous?.sent??false,onEvent,attempts:0,warmKey});
   }
   release(sessionId){
+    const target=this.warmTargets.get(this.plans.get(sessionId)?.warmKey);
+    if(target?.sessionId===sessionId)target.inFlight=false;
     this.plans.delete(sessionId);this.released.add(sessionId);
     if(this.released.size>1024)this.released.delete(this.released.values().next().value);
   }
@@ -72,7 +75,7 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
           :item.type==='document'?readableDocument(item):item)}:block)}));
     // Long screenshot-heavy chats would otherwise exceed Copilot's request size
     // on every later turn. The client transcript itself is never changed.
-    const fitted=fitImageHistory(wire.messages);
+    const fitted=featureEnabled('imageHistoryTrim')?fitImageHistory(wire.messages):{messages:wire.messages,omitted:0};
     wire.messages=fitted.messages;
     if(fitted.omitted)plan.onEvent?.({type:'relay_transport_images_omitted',count:fitted.omitted});
     wire.system=body.system??'';
@@ -103,6 +106,10 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
     }
     plan.attempts++;plan.onEvent?.({type:'relay_transport_attempt'});
     const attempt=plan.attempts;
+    // Remember the main chat's latest exact request (in memory only) so the
+    // optional keep-warm feature can refresh the same cached prefix later.
+    if(plan.warmKey&&plan.onEvent)this.warmTargets.set(plan.warmKey,{url:request.url,headers,wire,sessionId:context.sessionId,
+      inFlight:true,lastActivity:Date.now(),lastPing:0,pings:0});
     let response;
     try{response=await super.sendRequest(new Request(request,{headers,body:JSON.stringify(wire)}),context);}
     catch(error){plan.onEvent?.({type:'relay_transport_error'});throw error;}
@@ -120,9 +127,55 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
         return;
       }
       if(event.type==='message_start')plan.nativeStarted=true;
+      if(event.type==='message_stop'||event.type==='error'){
+        const target=this.warmTargets.get(plan.warmKey);
+        if(target?.sessionId===context.sessionId){target.inFlight=false;target.lastActivity=Date.now();}
+      }
       if(event.type==='message_delta')plan.nativeStopReason=event.delta?.stop_reason??plan.nativeStopReason;
       if(event.type==='message_stop'){plan.sent=true;plan.nativeLimitReached=plan.nativeStopReason==='max_tokens';}
       plan.onEvent(event);
     });
   }
+  // Optional prompt-cache keep-warm (relay feature cacheKeepWarm). A quiet main
+  // chat is due once its last activity or ping is intervalMs old, until it has
+  // been quiet for maxIdleMs. Small chats are not worth a ping.
+  warmDue({now=Date.now(),intervalMs=270000,maxIdleMs=20*60*1000,minBytes=400000}={}){
+    const due=[];
+    for(const [key,target] of this.warmTargets){
+      if(now-target.lastActivity>maxIdleMs){this.warmTargets.delete(key);continue;}
+      if(target.inFlight||target.busy||now-Math.max(target.lastActivity,target.lastPing)<intervalMs)continue;
+      // Budgeted thinking needs max_tokens above its budget, so a 1-token ping
+      // would change the request; skip those rather than alter cached state.
+      if(target.wire.thinking?.type==='enabled')continue;
+      if((target.size??=JSON.stringify(target.wire).length)<minBytes)continue;
+      due.push(key);
+    }
+    return due;
+  }
+  // One identical request with max_tokens 1: reads (and so refreshes) the
+  // cached prefix, discards the output. Never retried; a failure stops warming.
+  async warm(key,{timeoutMs=120000}={}){
+    const target=this.warmTargets.get(key);if(!target||target.busy)return null;
+    target.busy=true;target.lastPing=Date.now();target.pings++;
+    const result={model:target.wire.model,ok:false,status:null,inputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,outputTokens:0};
+    try{
+      const response=await super.sendRequest(new Request(target.url,{method:'POST',headers:target.headers,
+        body:JSON.stringify({...target.wire,max_tokens:1,stream:true})}),{signal:AbortSignal.timeout(timeoutMs)});
+      result.status=response.status;
+      const text=await response.text();
+      if(!response.ok){this.warmTargets.delete(key);return result;}
+      for(const line of text.split(/\r?\n/)){
+        if(!line.startsWith('data:'))continue;
+        let event;try{event=JSON.parse(line.slice(5));}catch{continue;}
+        const usage=event.message?.usage??event.usage;if(!usage)continue;
+        if(Number.isFinite(usage.input_tokens))result.inputTokens=usage.input_tokens;
+        if(Number.isFinite(usage.cache_read_input_tokens))result.cacheReadTokens=usage.cache_read_input_tokens;
+        if(Number.isFinite(usage.cache_creation_input_tokens))result.cacheWriteTokens=usage.cache_creation_input_tokens;
+        if(Number.isFinite(usage.output_tokens))result.outputTokens=usage.output_tokens;
+      }
+      result.ok=true;return result;
+    }catch{this.warmTargets.delete(key);return result;}
+    finally{target.busy=false;}
+  }
+
 }
