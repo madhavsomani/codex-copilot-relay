@@ -25,7 +25,15 @@ export const FEATURES_SCRIPT = String.raw`
   if(!stats||!(stats.pings||stats.failed))return 'Keep-warm: no pings sent yet.';
   const credits=new Intl.NumberFormat(undefined,{maximumFractionDigits:1}).format(stats.estimatedAiCredits||0);
   return 'Keep-warm so far: '+stats.pings.toLocaleString()+' pings, about '+credits+' AI credits (estimated from measured rates)'+
-   (stats.failed?' · '+stats.failed+' failed (warming stops for that chat)':'')+' · cached tokens read: '+(stats.cacheReadTokens||0).toLocaleString()+'.';
+   (stats.failed?' · '+stats.failed+' failed (warming stops for that chat)':'')+' · cached tokens read: '+(stats.cacheReadTokens||0).toLocaleString()+'.'+
+   todayWarm(stats.daily);
+ }
+ // Did today's pings pay off? A break "returned" while warm saved a cache rewrite.
+ function todayWarm(daily){
+  const day=(daily||[]).at(-1);if(!day)return '';
+  const format=new Intl.NumberFormat(undefined,{maximumFractionDigits:0});
+  return ' Latest day ('+day.day+'): '+day.pings+' pings, about '+format.format(day.estimatedAiCredits||0)+' credits; '+
+   (day.returned||0)+' chats came back while warm, '+(day.expired||0)+' breaks expired unused ('+(day.expiredPings||0)+' pings).';
  }
  function renderFeatures(data){
   const list=document.getElementById('relay-feature-list');if(!list||featureBusy)return;

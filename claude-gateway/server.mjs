@@ -466,6 +466,7 @@ export async function createGateway({runtime,models,token,workingDirectory=proce
   // Optional keep-warm (relay feature cacheKeepWarm): ping quiet main chats so
   // their prompt cache survives. Checked every tickMs; off costs nothing.
   const warmTimer=setInterval(()=>{
+    for(const outcome of requestHandler?.warmOutcomes?.splice(0)??[])ledger.keepWarmOutcome(outcome);
     if(!featureEnabled('cacheKeepWarm')||!requestHandler?.warmDue)return;
     for(const key of requestHandler.warmDue(keepWarm))
       void requestHandler.warm(key).then(result=>{if(result)ledger.keepWarm(result);}).catch(()=>{});

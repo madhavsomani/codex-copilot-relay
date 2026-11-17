@@ -81,7 +81,8 @@ export function gatewayVisibility(gateway){
     lastRequestAt:times.at(-1)??null,...credits(total),usage:buckets,usageSource:'SDK assistant.usage receipts; failed attempts may be unreported',
     transport:Object.fromEntries(['attempts','httpResponses','httpErrors','networkErrors'].map(key=>[key,count(state.transport?.[key])])),
     browser:browserTelemetry(rows),recent:rows.slice(-20).reverse().map(gatewayRequestVisibility),
-    keepWarm:state.keepWarm?{...state.keepWarm,estimatedAiCredits:count(state.keepWarm.estimatedNanoAiu)/1e9}:null,
+    keepWarm:state.keepWarm?{...state.keepWarm,estimatedAiCredits:count(state.keepWarm.estimatedNanoAiu)/1e9,
+      daily:Object.entries(state.keepWarmDaily??{}).sort().map(([day,value])=>({day,...value,estimatedAiCredits:count(value.estimatedNanoAiu)/1e9}))}:null,
     modelDaily:Object.entries(state.modelDaily??{}).filter(([key])=>/^\d{4}-\d{2}-\d{2}\|[\w.-]{1,100}$/.test(key)).map(([key,value])=>({
       day:key.split('|')[0],model:key.slice(11),sdkApiCalls:count(value.sdkApiCalls),inputTokens:count(value.inputTokens),
       outputTokens:count(value.outputTokens),cacheReadTokens:count(value.cacheReadTokens),aiCredits:count(value.totalNanoAiu)/1e9}))};

@@ -44,8 +44,10 @@ Claude Code credits**: 31 calls cost 5,907 of 9,928 credits, between 100 and
 - If the chat stays quiet for **4.5 minutes**, the relay sends that identical
   request once more with `max_tokens: 1` and discards the 1-token answer. That
   reads the cached prefix, which refreshes the 5-minute timer.
-- It repeats every 4.5 minutes for up to **20 minutes** of quiet, then stops.
-  That's at most 4 pings per break.
+- It repeats every 4.5 minutes for up to **10 minutes** of quiet, then stops.
+  That's at most 2 pings per break. (Until 1.3.97 the window was 20 minutes and 4
+  pings. Measurements showed every return to a warmed chat came within about 10
+  minutes, so the later pings were wasted.)
 - It only warms **main chats** of roughly **100k tokens or more**. Subagents,
   which never come back once finished, and small chats are not warmed.
 - Chats using budgeted thinking (`thinking.type: enabled`) are skipped, because a
@@ -55,21 +57,29 @@ Claude Code credits**: 31 calls cost 5,907 of 9,928 credits, between 100 and
   error, stops warming for that chat.
 
 **What it costs.** A ping is billed at the cached-read rate: about 1/25 of a
-cache rewrite. For a 200k-token Opus chat that is roughly **4 credits per ping**
-instead of about **100 credits for a rewrite**. The trade-off: if you don't
-return to the chat within 20 minutes, those up to 4 pings (about 16 credits on
-that example) are spent for nothing. If you often step away for longer than 20
-minutes, keep it off.
+cache rewrite. Cost scales with the chat's size:
+
+| Chat size | Per ping | Cache rewrite it avoids |
+|---|---:|---:|
+| 200k tokens | ~4 credits | ~100 credits |
+| 560k tokens (typical measured chat) | ~16 credits | ~280 credits |
+
+The trade-off: if you don't return within 10 minutes, the up to 2 pings are
+spent for nothing. In the first weeks it averaged about 950 credits a day across
+long chats, so watch the daily line in the panel. If most breaks show **expired**
+rather than **came back while warm**, turn it off.
 
 **Where to see it.** The Relay features panel shows the number of pings, cached
-tokens read and the estimated credits. Pings are tallied separately from your
+tokens read and the estimated credits. A daily line shows how many quiet chats
+**came back while warm** (the pings paid off) and how many breaks **expired**
+unused. Pings are tallied separately from your
 requests (`claude.keepWarm` in `/dashboard/api`). The credit figure is an
 estimate from measured Copilot rates (Opus 400/20/500/2,000 and Haiku
 10/0.5/12.5/50 credits per million input, cached-read, cache-write and output
 tokens). Copilot's own usage report remains authoritative.
 
 **Privacy.** The remembered request, including the SDK's short-lived
-authorization header, stays in relay memory. It is dropped after 20 quiet
+authorization header, stays in relay memory. It is dropped after 10 quiet
 minutes, when the chat's next request replaces it, or when the relay stops. It
 is never written to disk or logs.
 

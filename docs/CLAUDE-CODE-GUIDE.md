@@ -202,6 +202,12 @@ Hosted WebSearch can't run through Copilot. Use these, in order:
   stages the new version and promotes it only when no requests are running.
   If you always have sessions busy, promotion waits; use **Start Relay** at a
   quiet moment.
+- **If the relay restarts unexpectedly** (chats show "connection refused" or
+  "Server error mid-response"), the cause is recorded since 1.3.97. Check
+  `runtime/relay-exits.jsonl` (each exit or uncaught error), `runtime/relay-vitals.json`
+  (the last hour of memory and event-loop samples) and `runtime/crash-logs/` (the
+  previous runs' console output and Node fatal-error reports). The next start
+  also logs `relay.previous_unclean_exit` with the last sample.
 - **Verify the running version** at `http://127.0.0.1:4144/health`: `version` is
   the relay, `claude.version` the adapter. Refreshing the dashboard alone
   doesn't prove an update.
@@ -229,7 +235,7 @@ These come from measuring real usage through this relay (October 2026).
    prompt cache for 5 minutes only. The next call after a longer pause rewrites
    the cache, which costs about 25× a cached read for the same tokens.
    Or turn on **prompt-cache keep-warm** (opt-in, uses a few credits per
-   quiet break), which keeps the cache alive for up to 20 minutes. If a loop
+   quiet break), which keeps the cache alive for up to 10 minutes. If a loop
    checks back on a long chat, use about 4.5 minutes (cache stays warm) or 20+
    minutes, never 6–15. See [optional relay features](RELAY-FEATURES.md).
 4. **Use the cheapest model that fits.**

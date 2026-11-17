@@ -35,7 +35,7 @@ function readableDocument(block){
 // Documented SDK extension. Never changes destination, credentials, model or
 // entitlement headers. Plans are scoped to actual SDK sessions, not global turns.
 export class ClaudeRequestHandler extends CopilotRequestHandler {
-  constructor(observe){super();this.plans=new Map();this.released=new Set();this.observe=observe;this.warmTargets=new Map();}
+  constructor(observe){super();this.plans=new Map();this.released=new Set();this.observe=observe;this.warmTargets=new Map();this.warmOutcomes=[];}
   bind(sessionId,body,selected,nativeMessages,onEvent,warmKey=null){
     const previous=this.plans.get(sessionId);
     this.plans.set(sessionId,{body,selected,nativeMessages:nativeMessages??previous?.nativeMessages,sent:previous?.sent??false,onEvent,attempts:0,warmKey});
@@ -108,6 +108,9 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
     const attempt=plan.attempts;
     // Remember the main chat's latest exact request (in memory only) so the
     // optional keep-warm feature can refresh the same cached prefix later.
+    // A chat that comes back while still warm means those pings kept its cache.
+    const warmed=plan.warmKey&&plan.onEvent?this.warmTargets.get(plan.warmKey):null;
+    if(warmed?.pings>0)this.warmOutcomes.push({outcome:'returned',pings:warmed.pings});
     if(plan.warmKey&&plan.onEvent)this.warmTargets.set(plan.warmKey,{url:request.url,headers,wire,sessionId:context.sessionId,
       inFlight:true,lastActivity:Date.now(),lastPing:0,pings:0});
     let response;
@@ -139,10 +142,14 @@ export class ClaudeRequestHandler extends CopilotRequestHandler {
   // Optional prompt-cache keep-warm (relay feature cacheKeepWarm). A quiet main
   // chat is due once its last activity or ping is intervalMs old, until it has
   // been quiet for maxIdleMs. Small chats are not worth a ping.
-  warmDue({now=Date.now(),intervalMs=270000,maxIdleMs=20*60*1000,minBytes=400000}={}){
+  // Measured returns all came within ~10 minutes, so stop after 10 (2 pings).
+  warmDue({now=Date.now(),intervalMs=270000,maxIdleMs=10*60*1000,minBytes=400000}={}){
     const due=[];
     for(const [key,target] of this.warmTargets){
-      if(now-target.lastActivity>maxIdleMs){this.warmTargets.delete(key);continue;}
+      if(now-target.lastActivity>maxIdleMs){
+        if(target.pings>0)this.warmOutcomes.push({outcome:'expired',pings:target.pings});
+        this.warmTargets.delete(key);continue;
+      }
       if(target.inFlight||target.busy||now-Math.max(target.lastActivity,target.lastPing)<intervalMs)continue;
       // Budgeted thinking needs max_tokens above its budget, so a 1-token ping
       // would change the request; skip those rather than alter cached state.

@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 
 export const FEATURES = [
   {id:'cacheKeepWarm', label:'Prompt-cache keep-warm', client:'Claude Code', default:false, spends:true,
-    description:'When a long main chat (about 100k+ tokens) goes quiet, send a tiny 1-token request with the identical history every 4.5 minutes, for up to 20 minutes, so Copilot\'s 5-minute prompt cache does not expire. Each ping costs roughly 1/20 of a cache rewrite; pings are wasted if you do not come back within 20 minutes. Subagents are never pinged.'},
+    description:'When a long main chat (about 100k+ tokens) goes quiet, send a tiny 1-token request with the identical history every 4.5 minutes, for up to 10 minutes, so Copilot\'s 5-minute prompt cache does not expire. Each ping costs roughly 1/20 of a cache rewrite; pings are wasted if you do not come back within 10 minutes. Subagents are never pinged.'},
   {id:'haikuExplore', label:'Haiku for Explore subagents', client:'Claude Code', default:false, spends:false,
     description:'Installs a relay-owned ~/.claude/agents/Explore.md that runs the read-only Explore search subagent on Haiku (about 1/40 of Opus per token). General-purpose subagents and the main chat keep their model. Never overwrites an Explore agent you wrote yourself. New Claude Code sessions pick it up.'},
   {id:'recoverCompletedAnswers', label:'Deliver completed answers after SDK errors', client:'Claude Code', default:true, spends:false,

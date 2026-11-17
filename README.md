@@ -30,6 +30,15 @@ The guide covers
 setup, model families, on-demand tool loading, browser and research, costs and
 troubleshooting.
 
+**1.3.97:**
+- **Crash diagnostics.** Unexplained relay restarts now leave a record: an exit
+  journal, minute-by-minute memory samples and preserved console logs.
+- **Keep-warm stops after 10 quiet minutes** (2 pings) instead of 20. Measured
+  returns all came within about 10 minutes.
+- **Daily keep-warm results.** The dashboard shows whether keep-warm paid off
+  each day.
+- **Rejection reasons** are logged intact.
+
 **1.3.96: optional relay features you control.** A new **Relay features**
 dashboard panel switches the relay's own additions on or off, live. You can also
 choose them when starting the relay

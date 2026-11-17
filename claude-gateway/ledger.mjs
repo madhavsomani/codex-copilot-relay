@@ -83,7 +83,7 @@ export class Ledger {
     // templates such as "messages.3.content.0: ..."; keep a short single line so
     // rejections can be diagnosed. Never stored for 5xx/transport errors.
     if([400,409,413,422].includes(row.httpStatus)&&typeof error.message==='string')
-      row.reason=error.message.replace(/s+/g,' ').slice(0,160);
+      row.reason=error.message.replace(/\s+/g,' ').slice(0,160);
     row.partialOutput=Boolean(partialOutput);this.finish(row,status);
   }
   transport(row,event){
@@ -105,11 +105,25 @@ export class Ledger {
   keepWarm(result){
     const stats=this.state.keepWarm??={pings:0,failed:0,inputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,outputTokens:0,estimatedNanoAiu:0,unpricedPings:0,lastAt:null};
     stats.lastAt=new Date().toISOString();
-    if(!result.ok){stats.failed++;this.save();return;}
-    stats.pings++;
+    const daily=this.keepWarmDay();
+    if(!result.ok){stats.failed++;daily.failed++;this.save();return;}
+    stats.pings++;daily.pings++;
     for(const key of ['inputTokens','cacheReadTokens','cacheWriteTokens','outputTokens'])stats[key]+=Number.isFinite(result[key])?result[key]:0;
-    const nano=keepWarmNanoAiu(result);if(nano===null)stats.unpricedPings++;else stats.estimatedNanoAiu+=nano;
+    const nano=keepWarmNanoAiu(result);if(nano===null)stats.unpricedPings++;else{stats.estimatedNanoAiu+=nano;daily.estimatedNanoAiu+=nano;}
     this.save();
+  }
+  // Per Pacific day: pings and their estimated cost, and per quiet break whether
+  // the chat came back while warm (pings paid off) or the warming expired.
+  keepWarmDay(){
+    const day=pacificSessionDay(new Date().toISOString());
+    const days=this.state.keepWarmDaily??={};
+    const entry=days[day]??={pings:0,failed:0,estimatedNanoAiu:0,returned:0,returnedPings:0,expired:0,expiredPings:0};
+    for(const old of Object.keys(days).sort().slice(0,-31))delete days[old];
+    return entry;
+  }
+  keepWarmOutcome({outcome,pings}){
+    if(!['returned','expired'].includes(outcome)||!Number.isSafeInteger(pings))return;
+    const daily=this.keepWarmDay();daily[outcome]++;daily[outcome+'Pings']+=pings;this.save();
   }
   toolSignal(row, type, details={}) {
     // Counts/categories only; never persist tool names, arguments or results.

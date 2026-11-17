@@ -87,12 +87,19 @@ test('keep-warm: a quiet main chat is pinged with its identical request and max_
   assert.equal(ping.max_tokens,1);assert.deepEqual(ping.messages,real.messages);assert.deepEqual(ping.system,real.system);
   assert.deepEqual(ping.tools,real.tools);assert.deepEqual(ping.thinking,real.thinking);
   assert.deepEqual(handler.warmDue({now:Date.now()+100000}),[],'interval restarts after a ping');
-  assert.deepEqual(handler.warmDue({now:Date.now()+21*60*1000}),[],'stops after 20 quiet minutes');
+  assert.deepEqual(handler.warmDue({now:Date.now()+11*60*1000}),[],'stops after 10 quiet minutes');
   assert.equal(handler.warmTargets.size,0);
+  assert.deepEqual(handler.warmOutcomes,[{outcome:'expired',pings:1}],'unused pings are recorded as expired');
+  handler.warmOutcomes.length=0;
+  // A chat that returns while warm records that its pings paid off.
+  await (await send('main-session-2','owner-main',big)).text();
+  assert.ok(handler.warmDue({now:Date.now()+280000}).includes('owner-main'));await handler.warm('owner-main');
+  await (await send('main-session-3','owner-main',big)).text();
+  assert.deepEqual(handler.warmOutcomes,[{outcome:'returned',pings:1}]);
   // Small chats and budgeted thinking are skipped.
   await (await send('small','owner-small',body())).text();
   await (await send('budget','owner-budget',body({messages:big.messages,thinking:{type:'enabled',budget_tokens:2048}}))).text();
-  assert.deepEqual(handler.warmDue({now:Date.now()+280000}),[]);
+  assert.deepEqual(handler.warmDue({now:Date.now()+280000}).filter(key=>key!=='owner-main'),[]);
 });
 
 test('keep-warm cost is tallied separately with an estimate from measured rates',t=>{
@@ -110,4 +117,28 @@ test('dashboard has the Relay features panel with live switches',async()=>{
   const {DASHBOARD_HTML}=await import('./dashboard.mjs');
   assert.match(DASHBOARD_HTML,/id="relay-features"/);assert.match(DASHBOARD_HTML,/renderFeatures\(data\)/);
   assert.match(DASHBOARD_HTML,/\/dashboard\/features/);
+});
+
+test('keep-warm daily outcomes and rejection reasons keep their text intact',t=>{
+  const dir=temp(t),ledger=new Ledger(path.join(dir,'ledger.json'));
+  ledger.keepWarm({ok:true,model:'claude-opus-5.5',cacheReadTokens:100000});
+  ledger.keepWarmOutcome({outcome:'returned',pings:2});ledger.keepWarmOutcome({outcome:'expired',pings:1});ledger.keepWarmOutcome({outcome:'bogus',pings:1});
+  const [day]=Object.values(ledger.state.keepWarmDaily);
+  assert.equal(day.pings,1);assert.equal(day.returned,1);assert.equal(day.returnedPings,2);assert.equal(day.expired,1);assert.equal(day.expiredPings,1);
+  const row=ledger.start({model:'claude-opus-5-5'},{},null);
+  ledger.failure(row,Object.assign(new Error('Anthropic hosted web search is\nunsupported by Copilot.'),{statusCode:400,type:'invalid_request_error'}),'rejected');
+  assert.equal(row.reason,'Anthropic hosted web search is unsupported by Copilot.');
+});
+
+test('crash diagnostics: minute samples and an unclean previous run are reported',async t=>{
+  const {startVitals,readPreviousRun}=await import('./relay-vitals.mjs');
+  const dir=temp(t);
+  fs.writeFileSync(path.join(dir,'relay-vitals.json'),JSON.stringify({pid:1,startedAt:'2026-11-10T18:00:00Z',cleanExit:false,samples:[{at:'x',rssMiB:900}]}));
+  const reported=[];
+  const vitals=startVitals({runtimeDirectory:dir,version:'test',activity:()=>({claudeTurns:3}),onPrevious:previous=>reported.push(previous)});
+  t.after(()=>vitals.stop());
+  assert.equal(reported.length,1);assert.equal(reported[0].lastSample.rssMiB,900);assert.equal(reported[0].cleanExit,false);
+  const now=readPreviousRun(dir);
+  assert.equal(now.pid,process.pid);assert.equal(now.lastSample.claudeTurns,3);assert.ok(now.lastSample.rssMiB>0);
+  assert.ok(Number.isFinite(now.lastSample.loopDelayMaxMs));
 });

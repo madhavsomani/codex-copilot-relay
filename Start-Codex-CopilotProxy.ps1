@@ -280,6 +280,19 @@ try {
     $env:BRIDGE_METRICS_MAX_MIB = '16'
     $env:BRIDGE_HISTORY_RECORD_MAX_KIB = '512'
 
+    # Keep the previous run's console output: Start-Process truncates these
+    # files, which erased every unexplained crash. Keep the newest 20 copies.
+    $crashLogDirectory = Join-Path $runtimeDirectory 'crash-logs'
+    New-Item -ItemType Directory -Path $crashLogDirectory -Force | Out-Null
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    foreach ($previousLog in @($stderrLog, $processStdoutLog)) {
+        if ((Test-Path -LiteralPath $previousLog -PathType Leaf) -and (Get-Item -LiteralPath $previousLog).Length -gt 0) {
+            Copy-Item -LiteralPath $previousLog -Destination (Join-Path $crashLogDirectory ("$stamp-" + (Split-Path -Leaf $previousLog)))
+        }
+    }
+    Get-ChildItem -LiteralPath $crashLogDirectory -Filter '*.log' | Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue
+
     $bridgeProcess = Start-Process `
         -FilePath $nodeCommand.Source `
         -ArgumentList @("`"$serverPath`"") `

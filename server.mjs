@@ -14,6 +14,7 @@ const sessionNames=createSessionNames();
 import { SETUP_HTML } from './setup-ui.mjs';
 import { createSetupStatus, sameOriginLocal } from './setup-status.mjs';
 import {mountClaudeGateway} from './unified-gateway.mjs';
+import {startVitals} from './relay-vitals.mjs';
 import {featureEnabled, loadFeatures, setFeature, snapshotFeatures, onFeatureChange, applyExploreAgent} from './relay-features.mjs';
 import {createGatewayReporter} from './unified-events.mjs';
 import {renderUnifiedSetupPage} from './unified-setup.mjs';
@@ -1591,6 +1592,12 @@ const readSetupStatus = createSetupStatus({root:nativeToolsRoot,port,
 let admittedRequests=0,shuttingDown=false;
 const activeResponses=new Set();
 const activeWork=()=>exchanges.size+nativeJobs.size+openaiFallback.jobs.size+(claudeMount?.gateway.turns.size??0);
+// Crash diagnostics (relay-vitals.mjs): minute samples and an exit journal that
+// survive a restart; an unclean previous run is reported once at startup.
+const vitals=startVitals({runtimeDirectory,version:relayVersion,
+  activity:()=>({codexExchanges:exchanges.size,nativeJobs:nativeJobs.size,claudeTurns:claudeMount?.gateway.turns.size??0,
+    claudeKeepWarmTargets:claudeMount?.gateway.requestHandler?.warmTargets?.size??0,admittedRequests}),
+  onPrevious:previous=>log('relay.previous_unclean_exit',previous)});
 const stopControl=createRelayStopControl({directory:runtimeDirectory,active:()=>activeWork()+admittedRequests,
   stop:mode=>void shutdown(mode==='cancel-active'?'manual-stop-cancel-active':'local-stop-after-drain')});
 const sessionControl=createSessionControl({directory:runtimeDirectory,instanceId:stopControl.instanceId,
@@ -2016,6 +2023,7 @@ async function shutdown(signal) {
   shuttingDown=true;
   clearInterval(stopControlTimer);
   log("bridge.shutdown", { signal });
+  vitals.markShutdown(signal);
   if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
   server.close();
   openaiFallback.close();
